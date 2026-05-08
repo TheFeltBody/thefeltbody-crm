@@ -1,0 +1,50 @@
+# Pings the thefeltbody-crm Supabase project twice a week so the free-tier
+# database never crosses the 7-day-no-activity threshold that triggers an
+# auto-pause. The cron hits a single-row table (_keepalive) — no writes, no
+# business data exposed.
+#
+# Repo secrets required:
+#   - SUPABASE_URL       e.g. https://abcdefghijklmnop.supabase.co
+#   - SUPABASE_ANON_KEY  the anon (public) key from Settings → API
+
+name: Supabase keep-alive
+
+on:
+  schedule:
+    - cron: '0 12 * * 1,4'  # 12:00 UTC every Monday and Thursday
+  workflow_dispatch:        # allow manual runs from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping _keepalive
+        env:
+          SUPABASE_URL:      ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_ANON_KEY:-}" ]; then
+            echo "::error::Missing SUPABASE_URL or SUPABASE_ANON_KEY repo secret"
+            exit 1
+          fi
+
+          response=$(curl -sS -w "\n%{http_code}" \
+            "${SUPABASE_URL}/rest/v1/_keepalive?select=id&limit=1" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}")
+
+          body=$(printf '%s' "$response" | sed '$d')
+          status=$(printf '%s' "$response" | tail -n1)
+
+          echo "HTTP $status"
+          echo "Body: $body"
+
+          if [ "$status" != "200" ]; then
+            echo "::error::Keep-alive ping failed (HTTP $status)"
+            exit 1
+          fi
+
+          echo "✓ Supabase project is awake."
