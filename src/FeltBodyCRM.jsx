@@ -849,6 +849,10 @@ function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOr
         ]} />
       {noCareHomes && <div style={{color:C.red,fontSize:11,marginTop:-8,marginBottom:14}}>No care homes set up yet — add one first, or pick a different role.</div>}
       <div style={{display:'flex',gap:12}}><FI label="EMAIL" value={f.email} onChange={s('email')} half /><FI label="PHONE" value={f.phone} onChange={s('phone')} half /></div>
+      <div style={{display:'flex',gap:12}}>
+        <FI label="DEFAULT SESSION RATE (£)" value={f.defaultSessionRate||''} onChange={s('defaultSessionRate')} type="number" half />
+        <FI label="RATE NOTES" value={f.rateNotes||''} onChange={s('rateNotes')} half />
+      </div>
       <FI label="STATUS" value={f.status} onChange={s('status')} opts={[{v:'active',l:'Active'},{v:'interested',l:'Interested'},{v:'inactive',l:'Inactive'}]} />
       <div style={{marginBottom:14}}>
         <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>SOURCE</div>
@@ -861,6 +865,7 @@ function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOr
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
         <Btn onClick={()=>{if(canSave){onSave({...f,roles,orgId:f.orgId||null});onClose();}}} disabled={!canSave}>{existing?'Save Changes':'Add Person'}</Btn>
+        const [f, setF] = useState(existing||{name:'',email:'',phone:'',orgId:defaultOrgId||'',status:'active',source:{channel:'manual',detail:''},notes:'',defaultSessionRate:'',rateNotes:''});
       </div>
     </Modal>
   );
@@ -944,7 +949,7 @@ function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDa
         location: '',
         orgId: defaultOrgId || '',
         recurrence: 'one_off',
-        rate: '',
+        rate: bookingFor?.defaultSessionRate ?? '',
         repeatCount: 12,
         paymentModel: defaultPaymentModel || ''
       });
@@ -954,7 +959,7 @@ function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDa
   const effectiveModel = f.paymentModel || (f.orgId ? 'org' : ((f.name||'').toLowerCase().includes('private') ? 'private' : 'per_person'));
   return (
     <Modal title={existing?'Edit Class':(bookingFor?`New session for ${bookingFor.name}`:'Add Class / Session')} onClose={onClose} wide>
-      {bookingFor && (
+      { && (
         <div style={{background:C.goldBg,border:`1px solid ${C.gold}44`,borderRadius:6,padding:'10px 14px',marginBottom:18,color:C.gold,fontSize:13}}>
           {bookingFor.name} will be added to the register automatically.
         </div>
@@ -3435,7 +3440,7 @@ export default function FeltBodyCRM() {
         if(!person) return null;
         return <AddClassForm
           orgs={orgs}
-          bookingFor={{ personId: person.id, name: person.name }}
+          bookingFor={{ personId: person.id, name: person.name, defaultSessionRate: person.defaultSessionRate }}
           defaultPaymentModel="private"
           onSave={async (f) => {
             try {
