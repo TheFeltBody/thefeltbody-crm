@@ -788,7 +788,7 @@ const FI = ({ label, value, onChange, type='text', opts, rows, half }) => (
       <input
         type={type}
         value={type==='time' ? String(value||'').slice(0,5) : value}
-        onChange={e=>onChange(e.target.value)}
+        onChange={e=>onChange(type==='time' ? e.target.value.slice(0,5) : e.target.value)}
         style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}}
       />
     )}
