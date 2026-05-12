@@ -150,6 +150,12 @@ const fmtTime = t => {
   const mm = m.toString().padStart(2,'0');
   return `${hh}:${mm}${h<12?'am':'pm'}`;
 };
+
+// For pre-filling the time input on new classes — current hour, zeroed minutes.
+const currentHourTime = () => {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2,'0')}:00`;
+};
 // Hours-and-minutes -> minutes since midnight. Used to position classes in the week grid.
 const timeToMin = t => {
   if(!t || typeof t !== 'string') return null;
@@ -943,7 +949,7 @@ function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDa
     : {
         name: bookingFor && defaultPaymentModel==='private' ? `Private Session — ${bookingFor.name}` : '',
         date: defaultDate || today(),
-        time: '',
+        time: currentHourTime(),
         duration: 60,
         location: '',
         orgId: defaultOrgId || '',
@@ -1232,13 +1238,14 @@ function CreateInvoiceForm({ onSave, onClose, orgs, classes, invoices, existing 
     });
     return set;
   },[invoices]);
-  const orgClasses = useMemo(()=>
-    classes
+  const orgClasses = useMemo(()=> {
+    const t = today();
+    return classes
       .filter(c=>c.orgId===f.orgId)
       .filter(c=>!usedClassIds.has(c.id))
-      .sort((a,b)=>b.date.localeCompare(a.date))
-      .slice(0,30),
-  [classes,f.orgId,usedClassIds]);
+      .sort((a,b)=>a.date.localeCompare(b.date)) // oldest first
+      .slice(0,30);
+  }, [classes,f.orgId,usedClassIds]);
   const handleOrgChange = (newOrgId) => {
     setF(x=>({
       ...x,
@@ -1253,21 +1260,28 @@ function CreateInvoiceForm({ onSave, onClose, orgs, classes, invoices, existing 
   const removeLI = id => setF(x=>({...x,lineItems:x.lineItems.filter(li=>li.id!==id)}));
   const total = f.lineItems.reduce((s,li)=>s+(li.qty||1)*(li.rate||0),0);
   // One line item per class, sorted chronologically — date · class name · price
-  const importClasses = (clsIds) => {
-    const cls = clsIds
-      .map(cid=>classes.find(c=>c.id===cid))
-      .filter(Boolean)
-      .sort((a,b)=>a.date.localeCompare(b.date));
-    const newItems = cls.map(c=>({
+const importClasses = (clsIds) => {
+  const cls = clsIds
+    .map(cid=>classes.find(c=>c.id===cid))
+    .filter(Boolean)
+    .sort((a,b)=>a.date.localeCompare(b.date));
+  const newItems = cls.map(c=>{
+    const d = new Date(c.date+'T12:00');
+    const dateLabel = d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+    const parts = [dateLabel];
+    if(c.time) parts.push(c.time);
+    if(c.duration) parts.push(`${c.duration}min`);
+    return {
       id: uid(),
-      description: `${fmt(c.date)} — ${c.name}`,
+      description: `${parts.join(' · ')} — ${c.name}`,
       qty: 1,
       rate: c.rate || 40,
       total: c.rate || 40,
       classIds: [c.id],
-    }));
-    setF(x=>({...x,lineItems:[...x.lineItems,...newItems]}));
-  };
+    };
+  });
+  setF(x=>({...x,lineItems:[...x.lineItems,...newItems]}));
+};
   const [importing, setImporting] = useState(false);
   const [toImport, setToImport] = useState([]);
   return (
@@ -1310,7 +1324,7 @@ function CreateInvoiceForm({ onSave, onClose, orgs, classes, invoices, existing 
               {['Description','Qty','Rate','Total',''].map((h,i)=><div key={i} style={{color:C.muted,fontSize:10,letterSpacing:'0.5px'}}>{h}</div>)}
             </div>
             {f.lineItems.map(li=>(
-              <div key={li.id} style={{display:'grid',gridTemplateColumns:'1fr 60px 70px 70px 32px',gap:0,padding:'6px 10px',borderBottom:`1px solid ${C.border}`,alignItems:'center'}}>
+              <div key={li.id} style={{display:'grid',gridTemplateColumns:'1fr 60px 70px 70px 32px',gap:0,padding:'2px 10px',borderBottom:`1px solid ${C.border}`,alignItems:'center'}}>
                 <input value={li.description} onChange={e=>updateLI(li.id,'description',e.target.value)} style={{background:'none',border:'none',color:C.text,fontSize:13,fontFamily:"'Jost',sans-serif",width:'100%'}} />
                 <input type="number" value={li.qty} onChange={e=>updateLI(li.id,'qty',parseFloat(e.target.value)||0)} style={{background:'none',border:'none',color:C.text,fontSize:13,fontFamily:"'Jost',sans-serif",width:'100%'}} />
                 <input type="number" value={li.rate} onChange={e=>updateLI(li.id,'rate',parseFloat(e.target.value)||0)} style={{background:'none',border:'none',color:C.text,fontSize:13,fontFamily:"'Jost',sans-serif",width:'100%'}} />
