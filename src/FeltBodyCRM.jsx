@@ -315,7 +315,7 @@ const PRINT_INVOICE_STYLES = `
   .invoice-print-page table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
   .invoice-print-page th { background: #f5f3ee; padding: 10px 12px; text-align: left; font-size: 10px; letter-spacing: 1.2px; color: #698a78; font-weight: 600; text-transform: uppercase; }
   .invoice-print-page th.num, .invoice-print-page td.num { text-align: right; }
-  .invoice-print-page td { padding: 11px 12px; border-bottom: 1px solid #ece8de; font-size: 13px; color: #1f2a22; }
+  .invoice-print-page td { padding: 4px 12px; border-bottom: 1px solid #ece8de; font-size: 13px; color: #1f2a22; }
   .invoice-print-page td.bold { color: #1a3a25; font-weight: 600; }
   .invoice-print-page .total-row { display: flex; justify-content: flex-end; padding: 16px 12px 0; }
   .invoice-print-page .total-row .total { font-family: 'Cormorant Garamond', serif; font-size: 26px; color: #1a3a25; font-weight: 600; }
@@ -785,7 +785,12 @@ const FI = ({ label, value, onChange, type='text', opts, rows, half }) => (
     ) : rows ? (
       <textarea value={value} onChange={e=>onChange(e.target.value)} rows={rows} style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif",resize:'vertical'}} />
     ) : (
-      <input type={type} value={value} onChange={e=>onChange(e.target.value)} style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}} />
+      <input
+        type={type}
+        value={type==='time' ? String(value||'').slice(0,5) : value}
+        onChange={e=>onChange(e.target.value)}
+        style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}}
+      />
     )}
   </div>
 );
@@ -1324,7 +1329,7 @@ const importClasses = (clsIds) => {
               {['Description','Qty','Rate','Total',''].map((h,i)=><div key={i} style={{color:C.muted,fontSize:10,letterSpacing:'0.5px'}}>{h}</div>)}
             </div>
             {f.lineItems.map(li=>(
-              <div key={li.id} style={{display:'grid',gridTemplateColumns:'1fr 60px 70px 70px 32px',gap:0,padding:'2px 10px',borderBottom:`1px solid ${C.border}`,alignItems:'center'}}>
+              <div key={li.id} style={{display:'grid',gridTemplateColumns:'1fr 60px 70px 70px 32px',gap:0,padding:'6px 10px',borderBottom:`1px solid ${C.border}`,alignItems:'center'}}>
                 <input value={li.description} onChange={e=>updateLI(li.id,'description',e.target.value)} style={{background:'none',border:'none',color:C.text,fontSize:13,fontFamily:"'Jost',sans-serif",width:'100%'}} />
                 <input type="number" value={li.qty} onChange={e=>updateLI(li.id,'qty',parseFloat(e.target.value)||0)} style={{background:'none',border:'none',color:C.text,fontSize:13,fontFamily:"'Jost',sans-serif",width:'100%'}} />
                 <input type="number" value={li.rate} onChange={e=>updateLI(li.id,'rate',parseFloat(e.target.value)||0)} style={{background:'none',border:'none',color:C.text,fontSize:13,fontFamily:"'Jost',sans-serif",width:'100%'}} />
