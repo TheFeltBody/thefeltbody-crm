@@ -261,7 +261,7 @@ export const lineItemToDb = (li, invoiceId, position) => ({
   session_ids: Array.isArray(li.classIds) ? li.classIds : [],
   qty: parseFloat(li.qty) || 1,
   rate: parseFloat(li.rate) || 0,
-  total: parseFloat(li.total) || 0,
+  // total is GENERATED ALWAYS in the schema — Postgres rejects any write to it
   position: position ?? 0,
 });
 
