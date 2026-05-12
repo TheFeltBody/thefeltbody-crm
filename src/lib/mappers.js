@@ -112,7 +112,7 @@ export const classFromDb = (row) => ({
   id: row.id,
   name: row.name,
   date: row.date,
-  time: row.start_time || '',
+  time: row.start_time ? String(row.start_time).slice(0,5) : '',
   duration: row.duration_minutes ?? 60,
   location: row.location || '',
   orgId: row.organisation_id || null,
@@ -125,7 +125,7 @@ export const classFromDb = (row) => ({
 export const classToDb = (c) => ({
   name: c.name,
   date: c.date,
-  start_time: c.time || null,
+  start_time: c.time ? String(c.time).slice(0,5) : null,
   duration_minutes: parseInt(c.duration) || 60,
   location: c.location || null,
   organisation_id: c.orgId || null,
