@@ -808,7 +808,7 @@ function AddOrgForm({ existing, onSave, onClose, defaultType }) {
 function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOrgId }) {
   const { personRoles } = useTypes();
   const initRoles = existing?.roles || (defaultType?[defaultType]:['private_client']);
-  const [f, setF] = useState(existing||{name:'',email:'',phone:'',orgId:defaultOrgId||'',status:'active',source:{channel:'manual',detail:''},notes:''});
+  const [f, setF] = useState(existing||{name:'',email:'',phone:'',orgId:defaultOrgId||'',status:'active',source:{channel:'manual',detail:''},notes:'',defaultSessionRate:'',rateNotes:''});
   const [roles, setRoles] = useState(initRoles);
   const s = k => v => setF(x=>({...x,[k]:v}));
   const ss = k => v => setF(x=>({...x,source:{...x.source,[k]:v}}));
@@ -865,7 +865,6 @@ function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOr
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
         <Btn onClick={()=>{if(canSave){onSave({...f,roles,orgId:f.orgId||null});onClose();}}} disabled={!canSave}>{existing?'Save Changes':'Add Person'}</Btn>
-        const [f, setF] = useState(existing||{name:'',email:'',phone:'',orgId:defaultOrgId||'',status:'active',source:{channel:'manual',detail:''},notes:'',defaultSessionRate:'',rateNotes:''});
       </div>
     </Modal>
   );
