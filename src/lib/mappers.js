@@ -56,6 +56,8 @@ export const personFromDb = (row, roles = []) => ({
   roles: roles.length ? roles : ['private_client'],  // safety default
   doNotEmail: row.do_not_email ?? false,
   isActiveStudent: row.is_active_student ?? false,
+  defaultSessionRate: row.default_session_rate,
+  rateNotes: row.rate_notes,
 });
 
 export const personToDb = (p) => ({
@@ -69,6 +71,8 @@ export const personToDb = (p) => ({
   notes: p.notes || null,
   do_not_email: p.doNotEmail ?? false,
   is_active_student: p.isActiveStudent ?? false,
+  default_session_rate: p.defaultSessionRate ?? null,
+  rate_notes: p.rateNotes ?? null, 
 });
 
 // ─── Series ──────────────────────────────────────────────────────────────────
