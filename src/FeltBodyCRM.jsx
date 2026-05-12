@@ -958,7 +958,7 @@ function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDa
   const effectiveModel = f.paymentModel || (f.orgId ? 'org' : ((f.name||'').toLowerCase().includes('private') ? 'private' : 'per_person'));
   return (
     <Modal title={existing?'Edit Class':(bookingFor?`New session for ${bookingFor.name}`:'Add Class / Session')} onClose={onClose} wide>
-      { && (
+      {bookingFor && (
         <div style={{background:C.goldBg,border:`1px solid ${C.gold}44`,borderRadius:6,padding:'10px 14px',marginBottom:18,color:C.gold,fontSize:13}}>
           {bookingFor.name} will be added to the register automatically.
         </div>
