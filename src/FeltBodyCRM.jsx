@@ -3069,6 +3069,55 @@ export default function FeltBodyCRM() {
     });
   };
   const goBack = () => setHistory(h => h.length > 1 ? h.slice(0, -1) : h);
+// Compute a smart back label from the previous entry in the history stack
+  const backInfo = useMemo(() => {
+    if (history.length < 2) return null;
+    const prev = history[history.length - 2];
+    let label = 'Back';
+    switch (prev.name) {
+      case 'dashboard': label = 'Dashboard'; break;
+      case 'classes': label = 'All Classes'; break;
+      case 'week_view': label = 'Week View'; break;
+      case 'forms_list': label = 'Forms'; break;
+      case 'invoices': label = 'Invoices'; break;
+      case 'people':
+        if (prev.personType === 'all') label = 'All Contacts';
+        else {
+          const role = personRoles[prev.personType] || PERSON_ROLES[prev.personType];
+          label = role ? role.label + 's' : 'People';
+        }
+        break;
+      case 'org_list':
+        if (prev.orgType === 'all') label = 'All Organisations';
+        else {
+          const ot = orgTypes[prev.orgType] || ORG_META[prev.orgType];
+          label = (ot?.label || 'Organisation') + 's';
+        }
+        break;
+      case 'org_detail': {
+        const o = orgs.find(o => o.id === prev.orgId);
+        label = o ? o.name : 'Organisation';
+        break;
+      }
+      case 'person_detail': {
+        const p = people.find(p => p.id === prev.personId);
+        label = p ? p.name : 'Person';
+        break;
+      }
+      case 'class_detail': {
+        const c = classes.find(c => c.id === prev.classId);
+        label = c ? `${c.name} · ${fmt(c.date)}` : 'Class';
+        break;
+      }
+      case 'invoice_detail': {
+        const i = invoices.find(i => i.id === prev.invoiceId);
+        label = i ? i.invoiceNumber : 'Invoice';
+        break;
+      }
+      default: label = 'Back';
+    }
+    return { label, onBack: goBack };
+  }, [history, orgs, people, classes, invoices, orgTypes, personRoles]);
   const close = () => setModal(null);
 
   // ─── Mutation handlers ─────────────────────────────────────────────────────
@@ -3414,55 +3463,6 @@ export default function FeltBodyCRM() {
     }
   };
 
-  // Compute a smart back label from the previous entry in the history stack
-  const backInfo = useMemo(() => {
-    if (history.length < 2) return null;
-    const prev = history[history.length - 2];
-    let label = 'Back';
-    switch (prev.name) {
-      case 'dashboard': label = 'Dashboard'; break;
-      case 'classes': label = 'All Classes'; break;
-      case 'week_view': label = 'Week View'; break;
-      case 'forms_list': label = 'Forms'; break;
-      case 'invoices': label = 'Invoices'; break;
-      case 'people':
-        if (prev.personType === 'all') label = 'All Contacts';
-        else {
-          const role = personRoles[prev.personType] || PERSON_ROLES[prev.personType];
-          label = role ? role.label + 's' : 'People';
-        }
-        break;
-      case 'org_list':
-        if (prev.orgType === 'all') label = 'All Organisations';
-        else {
-          const ot = orgTypes[prev.orgType] || ORG_META[prev.orgType];
-          label = (ot?.label || 'Organisation') + 's';
-        }
-        break;
-      case 'org_detail': {
-        const o = orgs.find(o => o.id === prev.orgId);
-        label = o ? o.name : 'Organisation';
-        break;
-      }
-      case 'person_detail': {
-        const p = people.find(p => p.id === prev.personId);
-        label = p ? p.name : 'Person';
-        break;
-      }
-      case 'class_detail': {
-        const c = classes.find(c => c.id === prev.classId);
-        label = c ? `${c.name} · ${fmt(c.date)}` : 'Class';
-        break;
-      }
-      case 'invoice_detail': {
-        const i = invoices.find(i => i.id === prev.invoiceId);
-        label = i ? i.invoiceNumber : 'Invoice';
-        break;
-      }
-      default: label = 'Back';
-    }
-    return { label, onBack: goBack };
-  }, [history, orgs, people, classes, invoices, orgTypes, personRoles]);
 
   const renderView = () => {
     const { name, orgId, orgType, personType, personId, classId, invoiceId, highlightNoteId } = view;
