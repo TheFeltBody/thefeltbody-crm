@@ -194,9 +194,19 @@ export const classes = {
       .eq('id', id).select().single().then(ok);
     return classFromDb(row);
   },
-  // Bulk update for "edit this and future in series"
+  // Bulk update for "edit this and future in series".
+  // Date is per-class — must NOT propagate. Whitelist the fields that do.
   async updateFutureInSeries(seriesId, fromDate, patch) {
-    const rows = await supabase.from('sessions').update(classToDb(patch))
+    const propagatePatch = {
+      name: patch.name,
+      start_time: patch.time ? String(patch.time).slice(0,5) : null,
+      duration_minutes: parseInt(patch.duration) || 60,
+      location: patch.location || null,
+      organisation_id: patch.orgId || null,
+      rate: parseFloat(patch.rate) || 0,
+      payment_model: patch.paymentModel || 'per_person',
+    };
+    const rows = await supabase.from('sessions').update(propagatePatch)
       .eq('series_id', seriesId).gte('date', fromDate)
       .select().then(ok);
     return rows.map(classFromDb);
