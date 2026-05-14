@@ -3194,13 +3194,13 @@ export default function FeltBodyCRM() {
     setNotes(p => p.map(n => n.id === id ? { ...n, actionDate: newDate || null } : n));
     data.notes.patch(id, { action_date: newDate || null }).catch(onError('Update action date'));
   };
-
-  // ── Classes (sessions). Field updates from the class detail page (notes, etc.)
+  
+  // ── Classes (sessions). Field updates from the class detail page (reflection, formsWorked, etc.)
   const updateClassFields = (classId, fields) => {
     setClasses(p => p.map(c => c.id === classId ? { ...c, ...fields } : c));
-    data.classes.update(classId, fields).catch(onError('Update class'));
+    data.classes.patch(classId, fields).catch(onError('Update class'));
   };
-
+  
   // ── Forms (yoga_forms)
   const addForm = (name) => data.forms.create({ name, position: forms.length })
     .then(saved => setForms(p => [...p, saved]))
