@@ -107,12 +107,14 @@ export const seriesToDb = (s) => ({
 // ─── Sessions (UI: "classes") ────────────────────────────────────────────────
 // Note: sessions table uses `organisation_id` (long form), unlike most other tables.
 // Note: sessions has `start_time`/`duration_minutes`, not `time_of_day`/`duration_mins`.
+// `forms_worked` is a jsonb array of form IDs the class worked on; `reflection` is
+// free-text written by Jesse after the class. Both are nullable.
 
 export const classFromDb = (row) => ({
   id: row.id,
   name: row.name,
   date: row.date,
-  time: row.start_time ? String(row.start_time).slice(0,5) : '',
+  time: row.start_time || '',
   duration: row.duration_minutes ?? 60,
   location: row.location || '',
   orgId: row.organisation_id || null,
@@ -120,12 +122,14 @@ export const classFromDb = (row) => ({
   rate: Number(row.rate) || 0,
   paymentModel: row.payment_model || 'per_person',
   notes: row.notes || '',
+  reflection: row.reflection || '',
+  formsWorked: Array.isArray(row.forms_worked) ? row.forms_worked : [],
 });
 
 export const classToDb = (c) => ({
   name: c.name,
   date: c.date,
-  start_time: c.time ? String(c.time).slice(0,5) : null,
+  start_time: c.time || null,
   duration_minutes: parseInt(c.duration) || 60,
   location: c.location || null,
   organisation_id: c.orgId || null,
@@ -133,7 +137,33 @@ export const classToDb = (c) => ({
   rate: parseFloat(c.rate) || 0,
   payment_model: c.paymentModel || 'per_person',
   notes: c.notes || null,
+  reflection: c.reflection || null,
+  forms_worked: Array.isArray(c.formsWorked) ? c.formsWorked : [],
 });
+
+// Partial-patch mapper: only translates keys that are actually present in `patch`.
+// Used by data.classes.patch() so untouched columns aren't overwritten.
+// Mirrors the shape of classToDb but every field is conditional on its UI key
+// being defined in the patch object (so passing { reflection: 'foo' } produces
+// { reflection: 'foo' } and nothing else — not a row full of nulls).
+export const classPatchToDb = (patch) => {
+  const out = {};
+  if (patch.name !== undefined) out.name = patch.name;
+  if (patch.date !== undefined) out.date = patch.date;
+  if (patch.time !== undefined) out.start_time = patch.time || null;
+  if (patch.duration !== undefined) out.duration_minutes = parseInt(patch.duration) || 60;
+  if (patch.location !== undefined) out.location = patch.location || null;
+  if (patch.orgId !== undefined) out.organisation_id = patch.orgId || null;
+  if (patch.seriesId !== undefined) out.series_id = patch.seriesId || null;
+  if (patch.rate !== undefined) out.rate = parseFloat(patch.rate) || 0;
+  if (patch.paymentModel !== undefined) out.payment_model = patch.paymentModel || 'per_person';
+  if (patch.notes !== undefined) out.notes = patch.notes || null;
+  if (patch.reflection !== undefined) out.reflection = patch.reflection || null;
+  if (patch.formsWorked !== undefined) {
+    out.forms_worked = Array.isArray(patch.formsWorked) ? patch.formsWorked : [];
+  }
+  return out;
+};
 
 // ─── Attendance ──────────────────────────────────────────────────────────────
 // DB column `session_id`; UI calls it `classId`.
