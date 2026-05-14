@@ -19,7 +19,7 @@ import {
   orgFromDb, orgToDb,
   personFromDb, personToDb,
   seriesFromDb, seriesToDb,
-  classFromDb, classToDb,
+  classFromDb, classToDb, classPatchToDb,
   attendanceFromDb, attendanceToDb,
   noteFromDb, noteToDb,
   packageFromDb, packageToDb,
@@ -27,7 +27,7 @@ import {
   formFromDb, formToDb,
   customOrgTypeFromDb, customOrgTypeToDb,
   customPersonRoleFromDb, customPersonRoleToDb,
-} from './mappers.js';
+} from './mappers.js';;
 
 // Throw on any Supabase error so callers (and React error boundaries) see
 // failures clearly instead of silently getting empty results.
@@ -194,18 +194,33 @@ export const classes = {
       .eq('id', id).select().single().then(ok);
     return classFromDb(row);
   },
+  // Targeted partial-field update (reflection, forms_worked, etc.) without
+  // round-tripping the whole row through classToDb. Mirrors notes.patch.
+  // Caller passes UI-shaped keys (reflection, formsWorked, ...); the mapper
+  // translates only the keys that are present.
+  async patch(id, patch) {
+    const row = await supabase.from('sessions').update(classPatchToDb(patch))
+      .eq('id', id).select().single().then(ok);
+    return classFromDb(row);
+  },
   // Bulk update for "edit this and future in series".
-  // Date is per-class — must NOT propagate. Whitelist the fields that do.
+  // Conditional keys: only fields actually present in `patch` are propagated.
+  // `date`, `notes`, `reflection`, `forms_worked`, `series_id` are deliberately
+  // NOT in the whitelist — they're per-instance and must never propagate.
   async updateFutureInSeries(seriesId, fromDate, patch) {
-    const propagatePatch = {
-      name: patch.name,
-      start_time: patch.time ? String(patch.time).slice(0,5) : null,
-      duration_minutes: parseInt(patch.duration) || 60,
-      location: patch.location || null,
-      organisation_id: patch.orgId || null,
-      rate: parseFloat(patch.rate) || 0,
-      payment_model: patch.paymentModel || 'per_person',
-    };
+    const propagatePatch = {};
+    if (patch.name !== undefined) propagatePatch.name = patch.name;
+    if (patch.time !== undefined) propagatePatch.start_time = patch.time || null;
+    if (patch.duration !== undefined) propagatePatch.duration_minutes = parseInt(patch.duration) || 60;
+    if (patch.location !== undefined) propagatePatch.location = patch.location || null;
+    if (patch.orgId !== undefined) propagatePatch.organisation_id = patch.orgId || null;
+    if (patch.rate !== undefined) propagatePatch.rate = parseFloat(patch.rate) || 0;
+    if (patch.paymentModel !== undefined) propagatePatch.payment_model = patch.paymentModel || 'per_person';
+
+    // Guard: if a caller passes an empty or fully-undefined patch, Supabase would
+    // run a no-op update across every future row in the series. Bail early.
+    if (Object.keys(propagatePatch).length === 0) return [];
+
     const rows = await supabase.from('sessions').update(propagatePatch)
       .eq('series_id', seriesId).gte('date', fromDate)
       .select().then(ok);
