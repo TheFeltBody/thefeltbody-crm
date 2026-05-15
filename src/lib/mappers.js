@@ -56,8 +56,10 @@ export const personFromDb = (row, roles = []) => ({
   roles: roles.length ? roles : ['private_client'],  // safety default
   doNotEmail: row.do_not_email ?? false,
   isActiveStudent: row.is_active_student ?? false,
-  defaultSessionRate: row.default_session_rate,
-  rateNotes: row.rate_notes,
+  defaultSessionRate: row.default_session_rate !== null && row.default_session_rate !== undefined
+    ? Number(row.default_session_rate)
+    : '',
+  rateNotes: row.rate_notes || '',
 });
 
 export const personToDb = (p) => ({
@@ -71,9 +73,22 @@ export const personToDb = (p) => ({
   notes: p.notes || null,
   do_not_email: p.doNotEmail ?? false,
   is_active_student: p.isActiveStudent ?? false,
-  default_session_rate: p.defaultSessionRate ?? null,
-  rate_notes: p.rateNotes ?? null, 
+  default_session_rate: numOrNull(p.defaultSessionRate),
+  rate_notes: p.rateNotes ? String(p.rateNotes).trim() || null : null,
 });
+
+// Coerce a value to a number or null. Used for nullable numeric columns where
+// the form may hand us '' (empty input), null, undefined, or an actual number.
+// Postgres rejects '' for numeric, so we must convert to null. Whitespace-only
+// strings are also treated as null. parseFloat handles strings like '40' or '40.5'.
+const numOrNull = (v) => {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return isNaN(v) ? null : v;
+  const trimmed = String(v).trim();
+  if (trimmed === '') return null;
+  const n = parseFloat(trimmed);
+  return isNaN(n) ? null : n;
+};
 
 // ─── Series ──────────────────────────────────────────────────────────────────
 

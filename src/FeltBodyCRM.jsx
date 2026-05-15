@@ -1033,7 +1033,7 @@ function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onClose, orgs }) {
   );
 }
 
-function AddToRegisterForm({ onSave, onClose, people, classId, existing, attendance, classes, cls }) {
+function AddToRegisterForm({ onSave, onClose, people, classId, existing, attendance, classes, cls, onAddNew }) {
   const [selected, setSelected] = useState(null);
   const available = people.filter(p=>p.status!=='inactive');
   return (
@@ -1044,6 +1044,12 @@ function AddToRegisterForm({ onSave, onClose, people, classId, existing, attenda
           <Avatar name={selected.name} size={28} role={primaryRole(selected)} />
           <span style={{color:C.text,fontSize:14,flex:1}}>{selected.name}</span>
           <Btn small onClick={()=>{onSave(classId,selected.id);onClose();}}>Add to register</Btn>
+        </div>
+      )}
+      {onAddNew && !selected && (
+        <div style={{marginTop:18,paddingTop:16,borderTop:`1px solid ${C.border}`,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
+          <div style={{color:C.muted,fontSize:12}}>Can't find them?</div>
+          <Btn variant="ghost" small onClick={onAddNew}>+ Add new contact</Btn>
         </div>
       )}
     </Modal>
@@ -2266,7 +2272,10 @@ function ClassDetail({ cls, org, people, attendance, notes, series, forms, packa
   const kindKey = classKindKey(cls, org);
   const isOrgBilled = cls.paymentModel === 'org';
   const tracksPayment = cls.paymentModel === 'per_person' || cls.paymentModel === 'private';
-  const canDelete = reg.length === 0; // No register = safe to remove without losing history
+  const canDelete = reg.length === 0 || cls.paymentModel === 'private';
+  // Private sessions are 1:1 by definition — if they need deleting, the attendance
+  // row goes with them. Other class types still require an empty register so we
+  // don't accidentally drop the attendance history of multiple people.
 
   // Payment summary for non-org classes — counts paid/package regardless of attendance
   // (no-shows still owe / still consumed credit)
@@ -2390,7 +2399,11 @@ function ClassDetail({ cls, org, people, attendance, notes, series, forms, packa
 
       {canDelete && onDeleteClass && (
         <div style={{marginTop:32,paddingTop:18,borderTop:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
-          <div style={{color:C.muted,fontSize:12,flex:1,minWidth:200}}>This class has no register entries — safe to remove if it was created in error.</div>
+          <div style={{color:C.muted,fontSize:12,flex:1,minWidth:200}}>
+            {reg.length === 0
+              ? 'This class has no register entries — safe to remove if it was created in error.'
+              : `Deleting this private session will also remove the booking${reg.length>1?'s':''} and any linked payment record.`}
+          </div>
           <ConfirmBtn idleLabel="Delete class" armedLabel="Yes, delete"
             onConfirm={()=>onDeleteClass(cls.id)} />
         </div>
@@ -2785,7 +2798,7 @@ function ClassLog({ cls, forms, onUpdateClass, nav }) {
   return (
     <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'18px 22px',marginBottom:24}}>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
-        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,color:C.gold,fontWeight:600}}>Class log</div>
+        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,color:C.gold,fontWeight:600}}>Session log</div>
         {savedFlash && <div style={{color:C.green,fontSize:11,letterSpacing:'1px'}}>✓ SAVED</div>}
       </div>
 
@@ -3315,14 +3328,37 @@ export default function FeltBodyCRM() {
     }
   };
 
-  // Delete a class only if it has no register entries. Notes pointing at it
-  // get their classId nulled by the DB (FK ON DELETE SET NULL on interactions).
+  // Delete a class. Normal classes require an empty register (so we don't lose
+  // attendance history for multiple people). Private sessions can be deleted
+  // even with a register entry — the attendance row gets cascade-deleted.
+  // Notes pointing at the class get their classId nulled by the DB
+  // (FK ON DELETE SET NULL on interactions).
   const handleDeleteClass = (classId) => {
-    const hasRegister = attendance.some(a => a.classId === classId);
-    if (hasRegister) return false;
+    const cls = classes.find(c => c.id === classId);
+    if (!cls) return false;
+    const attRows = attendance.filter(a => a.classId === classId);
+    const hasRegister = attRows.length > 0;
+    const isPrivate = cls.paymentModel === 'private';
+    if (hasRegister && !isPrivate) return false;
+
+    // Optimistic local removal so the UI updates instantly
+    setAttendance(p => p.filter(a => a.classId !== classId));
     setClasses(p => p.filter(c => c.id !== classId));
     setNotes(p => p.map(n => n.classId === classId ? { ...n, classId: null } : n));
-    data.classes.delete(classId).catch(onError('Delete class'));
+
+    // Cascade-delete attendance rows first (in case the FK lacks ON DELETE CASCADE),
+    // then delete the session itself. Fire-and-forget — the next loadAll() reconciles
+    // any partial failures.
+    (async () => {
+      try {
+        if (hasRegister) {
+          await Promise.all(attRows.map(a => data.attendance.delete(a.id)));
+        }
+        await data.classes.delete(classId);
+      } catch (e) {
+        onError('Delete class')(e);
+      }
+    })();
     return true;
   };
 
@@ -3429,6 +3465,25 @@ export default function FeltBodyCRM() {
         return <AddToRegisterForm people={people} classId={modal.classId} existing={attendance.filter(a=>a.classId===modal.classId).map(a=>a.personId)} attendance={attendance} classes={classes} cls={cls}
           onSave={(cid,pid)=>data.attendance.create({classId:cid,personId:pid,attended:false})
             .then(saved=>setAttendance(p=>[...p,saved])).catch(onError('Add to register'))}
+          onAddNew={()=>setModal({type:'add_person_to_register', classId: modal.classId})}
+          onClose={close} />;
+      }
+      case 'add_person_to_register': {
+        // Chained flow from AddToRegisterForm: create the person, then immediately
+        // create an attendance row for them on this class. Modal closes synchronously
+        // when AddPersonForm calls onClose(); the async work continues in the background
+        // and updates state when it resolves.
+        return <AddPersonForm orgs={orgs}
+          onSave={async (p) => {
+            try {
+              const savedPerson = await data.people.create(p);
+              setPeople(prev => [...prev, savedPerson]);
+              const savedAtt = await data.attendance.create({
+                classId: modal.classId, personId: savedPerson.id, attended: false,
+              });
+              setAttendance(prev => [...prev, savedAtt]);
+            } catch (e) { onError('Add new contact to register')(e); }
+          }}
           onClose={close} />;
       }
       case 'add_package': return <AddPackageForm personId={modal.personId} onSave={addPackage} onClose={close} />;
