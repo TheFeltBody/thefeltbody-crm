@@ -2019,10 +2019,15 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
           </div>
           <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'16px 20px'}}>
             <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:12}}>CLASS HISTORY</div>
-            {pClasses.length?pClasses.map(c=>{
-              const att=attendance.find(a=>a.classId===c.id&&a.personId===person.id);
-              return (<div key={c.id} onClick={()=>nav('class_detail',{classId:c.id})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:`1px solid ${C.border}`,cursor:'pointer'}}><div><div style={{color:C.text,fontSize:13}}>{c.name}</div><div style={{color:C.muted,fontSize:11}}>{fmt(c.date)}</div></div><div style={{width:8,height:8,borderRadius:'50%',background:att?.attended?C.green:C.red}} /></div>);
-            }):<div style={{color:C.muted,fontSize:13}}>No classes yet</div>}
+            {pClasses.length?(
+              // Cap at ~8 rows visible (~38px each); scroll for the rest.
+              <div style={{maxHeight:304,overflowY:'auto',paddingRight:4}}>
+                {pClasses.map(c=>{
+                  const att=attendance.find(a=>a.classId===c.id&&a.personId===person.id);
+                  return (<div key={c.id} onClick={()=>nav('class_detail',{classId:c.id})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:`1px solid ${C.border}`,cursor:'pointer'}}><div><div style={{color:C.text,fontSize:13}}>{c.name}</div><div style={{color:C.muted,fontSize:11}}>{fmt(c.date)}</div></div><div style={{width:8,height:8,borderRadius:'50%',background:att?.attended?C.green:C.red}} /></div>);
+                })}
+              </div>
+            ):<div style={{color:C.muted,fontSize:13}}>No classes yet</div>}
           </div>
         </div>
         <div>
@@ -2262,8 +2267,7 @@ function ClassList({ classes, orgs, series, attendance, nav, onAdd }) {
   );
 }
 
-function ClassDetail({ cls, org, people, attendance, notes, series, forms, packages, nav, backInfo, onToggle, onAddNote, onAddToRegister, onEdit, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onUpdateClass, onSetPayment, onDeleteClass }) {
-  const [expanded, setExpanded] = useState(null); // { type:'note'|'payment', personId }
+function ClassDetail({ cls, org, people, attendance, notes, series, forms, packages, nav, backInfo, onToggle, onAddNote, onAddToRegister, onEdit, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onUpdateClass, onSetPayment, onDeleteClass, onRemoveFromRegister }) {  const [expanded, setExpanded] = useState(null); // { type:'note'|'payment', personId }
   // Privacy mode for in-class teaching: by default we hide rates and payment amounts so
   // a client glancing at the screen doesn't see what we charge. Toggle in the header.
   const [showMoney, setShowMoney] = useState(false);
@@ -2380,6 +2384,11 @@ function ClassDetail({ cls, org, people, attendance, notes, series, forms, packa
                   )}
                   <button onClick={()=>setExpanded(noteOpen?null:{type:'note',personId})} style={{background:'none',border:`1px solid ${noteOpen||pn.length?C.gold:C.border}`,color:noteOpen||pn.length?C.gold:C.muted,cursor:'pointer',fontSize:12,padding:'4px 10px',borderRadius:4,fontFamily:"'Jost',sans-serif"}}>{pn.length?`${pn.length} note${pn.length>1?'s':''}`:'+ note'}</button>
                   <button onClick={()=>onToggle(cls.id,personId)} style={{background:attended?'#122412':'#2a1313',border:`1px solid ${attended?C.green:C.red}55`,color:attended?C.green:C.red,cursor:'pointer',borderRadius:4,fontSize:12,padding:'4px 12px',fontFamily:"'Jost',sans-serif",fontWeight:500}}>{attended?'✓ Attended':'✗ Absent'}</button>
+                  {onRemoveFromRegister && (
+                    <ConfirmBtn idleLabel="Remove" armedLabel="Yes, remove"
+                      title="Remove from register — clears this class from their history. The class itself is kept."
+                      onConfirm={()=>{ setExpanded(null); onRemoveFromRegister(attId); }} />
+                  )}
                 </div>
               </Row>
               {noteOpen&&(<div style={{background:C.surf,borderTop:`1px solid ${C.border}`,padding:'16px 20px 16px 68px'}}>{pn.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} />)}<NoteForm personId={personId} classId={cls.id} onSave={n=>{onAddNote(n);}} onCancel={()=>setExpanded(null)} /></div>)}
@@ -3261,6 +3270,12 @@ export default function FeltBodyCRM() {
     }));
     data.attendance.setPayment(attId, patch).catch(onError('Set payment'));
   };
+  // Remove a person from a class register. Hard delete on the attendance row;
+  // the class itself is untouched. Optimistic + fire-and-forget, matches toggleAtt.
+  const removeFromRegister = (attId) => {
+    setAttendance(prev => prev.filter(a => a.id !== attId));
+    data.attendance.delete(attId).catch(onError('Remove from register'));
+  };
 
   // ── Classes + series
   const handleAddClass = async (f) => {
@@ -3598,6 +3613,7 @@ export default function FeltBodyCRM() {
           onUpdateActionDate={updateNoteAction}
           onUpdateClass={updateClassFields}
           onSetPayment={setAttendancePayment}
+          onRemoveFromRegister={removeFromRegister}
           onAddToRegister={()=>setModal({type:'add_to_register',classId})}
           onDeleteClass={(cid)=>{
             const ok = handleDeleteClass(cid);
