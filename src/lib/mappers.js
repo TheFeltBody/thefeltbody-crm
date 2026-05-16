@@ -206,8 +206,14 @@ export const attendanceToDb = (a) => {
   return out;
 };
 
-// ─── Notes (UI: "notes") / Interactions (DB) ─────────────────────────────────
+// ─── Interactions (DB) / "Notes" (UI) ────────────────────────────────────────
+// The interactions table holds notes plus other communication kinds (email,
+// call, meeting). The UI still uses "note" everywhere because note is the
+// dominant kind and was the only kind originally. Other kinds are surfaced
+// via the `kind` discriminator + optional direction/subject/duration_mins.
 // DB column `session_id`; UI calls it `classId`.
+// `subject` returns '' for form-binding convenience; externalId/threadId
+// return null (not user-edited). durationMins normalised to number-or-null.
 
 export const noteFromDb = (row) => ({
   id: row.id,
@@ -219,6 +225,13 @@ export const noteFromDb = (row) => ({
   actionDate: row.action_date || null,
   completed: row.completed,
   completedAt: row.completed_at || null,
+  // Batch A additions: kind discriminator + future-proofing
+  kind: row.kind || 'note',
+  direction: row.direction || null,
+  subject: row.subject || '',
+  durationMins: row.duration_mins != null ? Number(row.duration_mins) : null,
+  externalId: row.external_id || null,
+  threadId: row.thread_id || null,
 });
 
 export const noteToDb = (n) => ({
@@ -230,6 +243,14 @@ export const noteToDb = (n) => ({
   action_date: n.actionDate || null,
   completed: n.completed ?? false,
   completed_at: n.completedAt || null,
+  // Batch A additions
+  kind: n.kind || 'note',           // DB default is 'note'; belt-and-braces
+  direction: n.direction || null,   // null for notes/meetings
+  subject: n.subject || null,       // empty string → null on write
+  duration_mins: n.durationMins !== undefined && n.durationMins !== null && n.durationMins !== ''
+    ? parseInt(n.durationMins) : null,
+  external_id: n.externalId || null,
+  thread_id: n.threadId || null,
 });
 
 // ─── Packages ────────────────────────────────────────────────────────────────
