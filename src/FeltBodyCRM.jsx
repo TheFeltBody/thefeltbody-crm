@@ -1382,20 +1382,93 @@ const importClasses = (clsIds) => {
   );
 }
 
-function NoteForm({ personId, classId, onSave, onCancel }) {
+// Inline form for logging a note, call, email, or meeting.
+// `kind` controls which conditional fields show:
+//   - call/email: direction picker (outbound default — "I called/emailed them")
+//   - email:      subject line
+//   - call/meeting: duration in minutes
+// Default kind='note' keeps the ClassDetail per-person usage backward-compatible.
+function NoteForm({ personId, classId, kind='note', onSave, onCancel }) {
   const [text, setText] = useState('');
   const [imp, setImp] = useState(false);
   const [actionDate, setActionDate] = useState('');
+  const [direction, setDirection] = useState('outbound');
+  const [subject, setSubject] = useState('');
+  const [durationMins, setDurationMins] = useState('');
+
+  const meta = INTERACTION_KINDS[kind] || INTERACTION_KINDS.note;
+  const needsDirection = kind === 'call' || kind === 'email';
+  const needsSubject = kind === 'email';
+  const needsDuration = kind === 'call' || kind === 'meeting';
+  const placeholder = {
+    note:    'Add a note...',
+    call:    'What did you discuss?',
+    email:   'Email summary or body...',
+    meeting: 'Meeting notes — what came up?',
+  }[kind] || 'Add a note...';
+  const saveLabel = `Save ${meta.label.toLowerCase()}`;
+
   const save = () => {
     if(!text.trim()) return;
-    const note = { personId, classId, text:text.trim(), important:imp, date:today() };
+    const note = { personId, classId, text:text.trim(), important:imp, date:today(), kind };
     if(actionDate) note.actionDate = actionDate;
+    if(needsDirection) note.direction = direction;
+    if(needsSubject && subject.trim()) note.subject = subject.trim();
+    if(needsDuration && durationMins !== '' && !isNaN(parseInt(durationMins,10))) {
+      note.durationMins = parseInt(durationMins, 10);
+    }
     onSave(note);
     setText(''); setImp(false); setActionDate('');
+    setDirection('outbound'); setSubject(''); setDurationMins('');
   };
+
   return (
-    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:16,marginBottom:12}}>
-      <textarea value={text} onChange={e=>setText(e.target.value)} rows={3} placeholder="Add a note..." style={{width:'100%',background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:14,padding:'10px 12px',fontFamily:"'Jost',sans-serif",resize:'vertical',outline:'none',lineHeight:1.6}} />
+    <div style={{background:C.card,border:`1px solid ${C.border}`,borderLeft:`3px solid ${meta.color}88`,borderRadius:8,padding:16,marginBottom:12}}>
+      {/* Header: kind icon + label, so you always know which mode you're in */}
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+        <span style={{fontSize:14,lineHeight:1}}>{meta.icon}</span>
+        <span style={{color:meta.color,fontSize:11,fontWeight:600,letterSpacing:'0.6px',textTransform:'uppercase'}}>{meta.label}</span>
+      </div>
+
+      {/* Email subject */}
+      {needsSubject && (
+        <input type="text" value={subject} onChange={e=>setSubject(e.target.value)}
+          placeholder="Subject"
+          style={{width:'100%',background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:14,padding:'8px 12px',fontFamily:"'Jost',sans-serif",outline:'none',marginBottom:8}} />
+      )}
+
+      {/* Direction picker (call/email) + duration (call/meeting), one compact row */}
+      {(needsDirection || needsDuration) && (
+        <div style={{display:'flex',gap:14,alignItems:'center',flexWrap:'wrap',marginBottom:10}}>
+          {needsDirection && (
+            <div style={{display:'flex',gap:4}}>
+              {['outbound','inbound'].map(d => (
+                <button key={d} onClick={()=>setDirection(d)}
+                  style={{
+                    background: direction===d ? meta.bg : 'transparent',
+                    color: direction===d ? meta.color : C.muted,
+                    border: `1px solid ${direction===d ? meta.color+'88' : C.border}`,
+                    borderRadius:4, fontSize:11, fontWeight:500, letterSpacing:'0.3px',
+                    padding:'3px 10px', cursor:'pointer', fontFamily:"'Jost',sans-serif",
+                  }}>
+                  {d==='outbound' ? '→ Outbound' : '← Inbound'}
+                </button>
+              ))}
+            </div>
+          )}
+          {needsDuration && (
+            <label style={{display:'flex',alignItems:'center',gap:6,color:C.muted,fontSize:13}}>
+              Duration
+              <input type="number" min="0" value={durationMins} onChange={e=>setDurationMins(e.target.value)}
+                placeholder="—"
+                style={{width:60,background:C.surf,border:`1px solid ${C.border}`,borderRadius:4,color:C.text,fontSize:12,padding:'4px 8px',fontFamily:"'Jost',sans-serif",outline:'none'}} />
+              <span style={{color:C.muted,fontSize:11}}>min</span>
+            </label>
+          )}
+        </div>
+      )}
+
+      <textarea value={text} onChange={e=>setText(e.target.value)} rows={3} placeholder={placeholder} style={{width:'100%',background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:14,padding:'10px 12px',fontFamily:"'Jost',sans-serif",resize:'vertical',outline:'none',lineHeight:1.6}} />
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginTop:10,gap:14,flexWrap:'wrap'}}>
         <div style={{display:'flex',alignItems:'center',gap:18,flexWrap:'wrap'}}>
           <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',color:imp?C.gold:C.muted,fontSize:13}}>
@@ -1410,7 +1483,7 @@ function NoteForm({ personId, classId, onSave, onCancel }) {
         </div>
         <div style={{display:'flex',gap:8}}>
           <Btn variant="ghost" small onClick={onCancel}>Cancel</Btn>
-          <Btn small onClick={save}>Save note</Btn>
+          <Btn small onClick={save}>{saveLabel}</Btn>
         </div>
       </div>
     </div>
@@ -2003,7 +2076,9 @@ function PeopleList({ people, orgs, personType, nav, onAdd }) {
 }
 
 function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, orgs, nav, backInfo, highlightNoteId, onAddNote, onEdit, onAddPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onBook }) {
-  const [addNote, setAddNote] = useState(false);
+  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
+  const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
+  const menuRef = useRef(null);
   const [tab, setTab] = useState('notes');
   const [flashId, setFlashId] = useState(null);
   const [filterKind, setFilterKind] = useState('all');
@@ -2023,6 +2098,21 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
     const t2 = setTimeout(()=>setFlashId(null), 1800);
     return ()=>{ clearTimeout(t1); clearTimeout(t2); };
   }, [highlightNoteId]);
+
+  // Close the "+ Log" dropdown when the user clicks outside it or hits Escape.
+  useEffect(()=>{
+    if(!menuOpen) return;
+    const onDoc = (e) => {
+      if(menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
+    };
+    const onKey = (e) => { if(e.key==='Escape') setMenuOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
 
   return (
     <div style={{padding:'32px 36px',maxWidth:940}}>
@@ -2083,12 +2173,53 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
                   );
                 })}
               </div>
-              <Btn small onClick={()=>setAddNote(!addNote)}>{addNote?'Cancel':'+ Add Note'}</Btn>
+              {/* "+ Log ▾" dropdown — click to open menu, click an item to open
+                  the form for that kind. Closes on outside-click or Escape (see
+                  useEffect above). Hidden while the form itself is open. */}
+              {addKind === null && (
+                <div ref={menuRef} style={{position:'relative'}}>
+                  <Btn small onClick={()=>setMenuOpen(v=>!v)}>
+                    + Log <span style={{opacity:0.6,marginLeft:3,display:'inline-block',transition:'transform 0.15s',transform:menuOpen?'rotate(180deg)':'rotate(0deg)'}}>▾</span>
+                  </Btn>
+                  {menuOpen && (
+                    <div style={{
+                      position:'absolute', top:'calc(100% + 4px)', right:0,
+                      background:C.card, border:`1px solid ${C.border}`,
+                      borderRadius:6, padding:4, minWidth:150, zIndex:10,
+                      display:'flex', flexDirection:'column', gap:2,
+                      boxShadow:'0 4px 12px rgba(0,0,0,0.35)',
+                    }}>
+                      {Object.entries(INTERACTION_KINDS).map(([k, meta]) => (
+                        <button key={k} onClick={()=>{ setAddKind(k); setMenuOpen(false); }}
+                          style={{
+                            background:'transparent', border:'none', color:C.text,
+                            padding:'8px 12px', borderRadius:4, cursor:'pointer',
+                            fontSize:13, fontFamily:"'Jost',sans-serif",
+                            display:'flex', alignItems:'center', gap:10,
+                            textAlign:'left',
+                            transition:'background 0.12s, color 0.12s',
+                          }}
+                          onMouseEnter={e=>{
+                            e.currentTarget.style.background = meta.bg;
+                            e.currentTarget.style.color = meta.color;
+                          }}
+                          onMouseLeave={e=>{
+                            e.currentTarget.style.background = 'transparent';
+                            e.currentTarget.style.color = C.text;
+                          }}>
+                          <span style={{fontSize:14,lineHeight:1}}>{meta.icon}</span>
+                          <span style={{flex:1}}>{meta.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-            {addNote&&<NoteForm personId={person.id} classId={null} onSave={n=>{onAddNote(n);setAddNote(false);}} onCancel={()=>setAddNote(false)} />}
+            {addKind&&<NoteForm personId={person.id} classId={null} kind={addKind} onSave={n=>{onAddNote(n);setAddKind(null);}} onCancel={()=>setAddKind(null)} />}
             {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
             {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} highlight={flashId===n.id} />)}
-            {visibleNotes.length===0&&!addNote&&<Empty text={filterKind==='all' ? 'No notes yet' : `No ${INTERACTION_KINDS[filterKind].label.toLowerCase()}s logged yet`} />}
+            {visibleNotes.length===0&&!addKind&&<Empty text={filterKind==='all' ? 'No notes yet' : `No ${INTERACTION_KINDS[filterKind].label.toLowerCase()}s logged yet`} />}
           </>}
           {tab==='packages'&&<>
             <div style={{display:'flex',justifyContent:'flex-end',marginBottom:16}}><Btn small onClick={onAddPackage}>+ Add Package</Btn></div>
