@@ -97,6 +97,16 @@ const BANK_DETAILS = {
   accountNumber: '15360781',
   bank: 'Mettle',
 };
+// Interaction kinds: notes plus other communication types logged on a person.
+// 'note' is the default and dominant kind; others are added via the multi-kind
+// buttons on PersonDetail. Used for the kind badge on cards and the filter chips.
+// Note: separate from the KIND_META constant above, which is for class/session kinds.
+const INTERACTION_KINDS = {
+  note:    { label:'Note',    icon:'📝', color:'#8a9aa3', bg:'#1a2226' },
+  call:    { label:'Call',    icon:'📞', color:'#4db879', bg:'#132413' },
+  email:   { label:'Email',   icon:'✉️',  color:'#6ba3d4', bg:'#131d2a' },
+  meeting: { label:'Meeting', icon:'💬', color:'#a07fd4', bg:'#1a1428' },
+};
 
 // ─── CUSTOM TYPES INFRASTRUCTURE ──────────────────────────────────────────────
 // Built-in org types and person roles can be extended at runtime by the user.
@@ -572,8 +582,22 @@ const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote, onUpda
         cursor: onClick?'pointer':'default',
         boxShadow: highlight?`0 0 0 2px ${C.gold}`:'none',
         transition: 'box-shadow 0.4s ease, background 0.2s, color 0.2s',
-      }}>
-      {note.important && !completed && <div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:5}}>⚑ IMPORTANT</div>}
+      }
+      }>
+        <div style={{display:'flex',alignItems:'centre',gap:10,marginBottom:6,flexWrap:'wrap'}}>
+        {(() => {
+          const k = INTERACTION_KINDS[note.kind] || INTERACTION_KINDS.note;
+          return (
+            <span title={k.label} style={{fontSize:13,lineHeight:1,opacity:0.85}}>
+              {k.icon}
+            </span>
+          );
+        })()}
+        {note.important && !completed && (
+          <span style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px'}}>⚑ IMPORTANT</span>
+        )}
+      </div>
+      
       <div style={{color:textColor,fontSize:14,lineHeight:1.7,opacity:completed?0.75:1}}>{note.text}</div>
       {note.actionDate && (
         <div style={{display:'flex',alignItems:'center',gap:8,marginTop:9,flexWrap:'wrap'}} onClick={e=>e.stopPropagation()}>
@@ -1982,7 +2006,9 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
   const [addNote, setAddNote] = useState(false);
   const [tab, setTab] = useState('notes');
   const [flashId, setFlashId] = useState(null);
-  const impNotes=pNotes.filter(n=>n.important), regNotes=pNotes.filter(n=>!n.important);
+  const [filterKind, setFilterKind] = useState('all');
+  const visibleNotes = filterKind==='all' ? pNotes : pNotes.filter(n => (n.kind||'note')===filterKind);
+  const impNotes = visibleNotes.filter(n=>n.important), regNotes = visibleNotes.filter(n=>!n.important);
   const pPkgs=packages.filter(pk=>pk.personId===person.id);
 
   // When arriving with a highlightNoteId, switch to notes tab, scroll to the note, flash for ~1.6s
@@ -2033,11 +2059,36 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
         <div>
           <Tabs tabs={[{id:'notes',label:`Notes (${pNotes.length})`},{id:'packages',label:`Packages (${pPkgs.length})`}]} active={tab} onChange={setTab} />
           {tab==='notes'&&<>
-            <div style={{display:'flex',justifyContent:'flex-end',marginBottom:16}}><Btn small onClick={()=>setAddNote(!addNote)}>{addNote?'Cancel':'+ Add Note'}</Btn></div>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16,gap:12,flexWrap:'wrap'}}>
+              <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                {['all', ...Object.keys(INTERACTION_KINDS)].map(k => {
+                  const active = filterKind === k;
+                  const meta = k==='all' ? null : INTERACTION_KINDS[k];
+                  const label = k==='all' ? 'All' : meta.label + 's';
+                  const count = k==='all' ? pNotes.length : pNotes.filter(n=>(n.kind||'note')===k).length;
+                  return (
+                    <button key={k} onClick={()=>setFilterKind(k)} style={{
+                      background: active ? (meta?meta.bg:C.surf) : 'transparent',
+                      color: active ? (meta?meta.color:C.text) : C.muted,
+                      border: `1px solid ${active ? (meta?meta.color+'88':C.border) : C.border}`,
+                      borderRadius:4, fontSize:11, fontWeight:500, letterSpacing:'0.3px',
+                      padding:'4px 10px', cursor:'pointer',
+                      fontFamily:"'Jost',sans-serif",
+                      display:'inline-flex', alignItems:'center', gap:5,
+                    }}>
+                      {meta && <span style={{fontSize:11,lineHeight:1}}>{meta.icon}</span>}
+                      {label}
+                      <span style={{opacity:0.55,fontSize:10}}>{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <Btn small onClick={()=>setAddNote(!addNote)}>{addNote?'Cancel':'+ Add Note'}</Btn>
+            </div>
             {addNote&&<NoteForm personId={person.id} classId={null} onSave={n=>{onAddNote(n);setAddNote(false);}} onCancel={()=>setAddNote(false)} />}
             {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
             {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} highlight={flashId===n.id} />)}
-            {pNotes.length===0&&!addNote&&<Empty text="No notes yet" />}
+            {visibleNotes.length===0&&!addNote&&<Empty text={filterKind==='all' ? 'No notes yet' : `No ${INTERACTION_KINDS[filterKind].label.toLowerCase()}s logged yet`} />}
           </>}
           {tab==='packages'&&<>
             <div style={{display:'flex',justifyContent:'flex-end',marginBottom:16}}><Btn small onClick={onAddPackage}>+ Add Package</Btn></div>
