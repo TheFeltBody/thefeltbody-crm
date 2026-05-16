@@ -1388,47 +1388,119 @@ const importClasses = (clsIds) => {
 //   - email:      subject line
 //   - call/meeting: duration in minutes
 // Default kind='note' keeps the ClassDetail per-person usage backward-compatible.
-function NoteForm({ personId, classId, kind='note', onSave, onCancel }) {
-  const [text, setText] = useState('');
-  const [imp, setImp] = useState(false);
-  const [actionDate, setActionDate] = useState('');
-  const [direction, setDirection] = useState('outbound');
-  const [subject, setSubject] = useState('');
-  const [durationMins, setDurationMins] = useState('');
+//
+// Edit mode: pass `existing` (a UI-shape note) to pre-fill all state. In edit
+// mode the kind is editable via an inline kind-picker row at the top so the
+// user can fix a typo'd kind (e.g. "this was actually a call, not a note").
+function NoteForm({ personId, classId, kind='note', existing, onSave, onCancel }) {
+  const isEdit = !!existing;
+  const [text, setText] = useState(existing?.text || '');
+  const [imp, setImp] = useState(existing?.important ?? false);
+  const [actionDate, setActionDate] = useState(existing?.actionDate || '');
+  const [direction, setDirection] = useState(
+    existing ? (existing.direction || null) : 'outbound'
+  );
+  const [subject, setSubject] = useState(existing?.subject || '');
+  const [durationMins, setDurationMins] = useState(
+    existing?.durationMins != null ? String(existing.durationMins) : ''
+  );
+  // In edit mode, kind is internal state (editable). In add mode it's driven
+  // by the `kind` prop and locked for the lifetime of the form.
+  const [editKind, setEditKind] = useState(existing?.kind || kind || 'note');
+  const activeKind = isEdit ? editKind : kind;
 
-  const meta = INTERACTION_KINDS[kind] || INTERACTION_KINDS.note;
-  const needsDirection = kind === 'call' || kind === 'email';
-  const needsSubject = kind === 'email';
-  const needsDuration = kind === 'call' || kind === 'meeting';
+  const meta = INTERACTION_KINDS[activeKind] || INTERACTION_KINDS.note;
+  const needsDirection = activeKind === 'call' || activeKind === 'email';
+  const needsSubject = activeKind === 'email';
+  const needsDuration = activeKind === 'call' || activeKind === 'meeting';
   const placeholder = {
     note:    'Add a note...',
     call:    'What did you discuss?',
     email:   'Email summary or body...',
     meeting: 'Meeting notes — what came up?',
-  }[kind] || 'Add a note...';
-  const saveLabel = `Save ${meta.label.toLowerCase()}`;
+  }[activeKind] || 'Add a note...';
+  const saveLabel = isEdit ? 'Save changes' : `Save ${meta.label.toLowerCase()}`;
 
   const save = () => {
     if(!text.trim()) return;
-    const note = { personId, classId, text:text.trim(), important:imp, date:today(), kind };
-    if(actionDate) note.actionDate = actionDate;
-    if(needsDirection) note.direction = direction;
-    if(needsSubject && subject.trim()) note.subject = subject.trim();
-    if(needsDuration && durationMins !== '' && !isNaN(parseInt(durationMins,10))) {
-      note.durationMins = parseInt(durationMins, 10);
+    const note = {
+      personId,
+      classId,
+      text: text.trim(),
+      important: imp,
+      kind: activeKind,
+    };
+    // Add mode sets today; edit mode preserves the original date so the timeline
+    // ordering doesn't shift when a note is touched up.
+    if(!isEdit) note.date = today();
+    note.actionDate = actionDate || null;
+
+    if(isEdit) {
+      // EDIT MODE: write every kind-specific field from current form state,
+      // regardless of whether the active kind "needs" it. This means toggling
+      // the kind chip doesn't destroy data — if you accidentally change a
+      // call to a note and save, the duration/direction are preserved. To
+      // actually clear a field, edit the input itself (clear the duration
+      // number, blank the subject). Direction has no "clear" UI, but since
+      // we init to null when existing.direction was null, it only writes a
+      // value if the user explicitly clicked outbound/inbound.
+      note.direction = direction || null;
+      note.subject = subject.trim();  // '' is fine; the mapper converts to null
+      note.durationMins = (durationMins !== '' && !isNaN(parseInt(durationMins,10)))
+        ? parseInt(durationMins, 10)
+        : null;
+    } else {
+      // ADD MODE: only write fields relevant to the chosen kind, so creating
+      // a note doesn't pollute the row with a default 'outbound' direction.
+      if(needsDirection) note.direction = direction;
+      if(needsSubject && subject.trim()) note.subject = subject.trim();
+      if(needsDuration && durationMins !== '' && !isNaN(parseInt(durationMins,10))) {
+        note.durationMins = parseInt(durationMins, 10);
+      }
     }
+
     onSave(note);
-    setText(''); setImp(false); setActionDate('');
-    setDirection('outbound'); setSubject(''); setDurationMins('');
+    // Only reset in add mode — edit mode closes the modal externally and a
+    // stale-reset would just flash empty fields between save and unmount.
+    if(!isEdit) {
+      setText(''); setImp(false); setActionDate('');
+      setDirection('outbound'); setSubject(''); setDurationMins('');
+    }
   };
 
   return (
     <div style={{background:C.card,border:`1px solid ${C.border}`,borderLeft:`3px solid ${meta.color}88`,borderRadius:8,padding:16,marginBottom:12}}>
-      {/* Header: kind icon + label, so you always know which mode you're in */}
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
-        <span style={{fontSize:14,lineHeight:1}}>{meta.icon}</span>
-        <span style={{color:meta.color,fontSize:11,fontWeight:600,letterSpacing:'0.6px',textTransform:'uppercase'}}>{meta.label}</span>
-      </div>
+      {/* Header. Add mode: static icon + label. Edit mode: kind picker so a
+          mis-tagged note (e.g. recorded as note but was actually a call) can
+          be corrected. The picker uses the same chip pattern as the filter row
+          to feel consistent. */}
+      {isEdit ? (
+        <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:12,flexWrap:'wrap'}}>
+          <span style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginRight:4}}>KIND</span>
+          {Object.entries(INTERACTION_KINDS).map(([k, km]) => {
+            const active = editKind === k;
+            return (
+              <button key={k} onClick={()=>setEditKind(k)} style={{
+                background: active ? km.bg : 'transparent',
+                color: active ? km.color : C.muted,
+                border: `1px solid ${active ? km.color+'88' : C.border}`,
+                borderRadius:4, fontSize:11, fontWeight:500, letterSpacing:'0.3px',
+                padding:'3px 9px', cursor:'pointer',
+                fontFamily:"'Jost',sans-serif",
+                display:'inline-flex', alignItems:'center', gap:5,
+              }}>
+                <span style={{fontSize:11,lineHeight:1}}>{km.icon}</span>
+                {km.label}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+          <span style={{fontSize:14,lineHeight:1}}>{meta.icon}</span>
+          <span style={{color:meta.color,fontSize:11,fontWeight:600,letterSpacing:'0.6px',textTransform:'uppercase'}}>{meta.label}</span>
+        </div>
+      )}
 
       {/* Email subject */}
       {needsSubject && (
@@ -1487,6 +1559,22 @@ function NoteForm({ personId, classId, kind='note', onSave, onCancel }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// Edit-mode wrapper: drops NoteForm into a Modal with its `existing` prefill.
+// Save calls onSave with the full UI-shape note (caller translates to DB patch).
+function EditNoteForm({ note, onSave, onClose }) {
+  return (
+    <Modal title="Edit note" onClose={onClose} wide>
+      <NoteForm
+        personId={note.personId}
+        classId={note.classId}
+        existing={note}
+        onSave={n=>{ onSave(n); onClose(); }}
+        onCancel={onClose}
+      />
+    </Modal>
   );
 }
 
@@ -2075,7 +2163,7 @@ function PeopleList({ people, orgs, personType, nav, onAdd }) {
   );
 }
 
-function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, orgs, nav, backInfo, highlightNoteId, onAddNote, onEdit, onAddPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onBook }) {
+function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, orgs, nav, backInfo, highlightNoteId, onAddNote, onEdit, onAddPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {
   const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
@@ -2217,8 +2305,8 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
               )}
             </div>
             {addKind&&<NoteForm personId={person.id} classId={null} kind={addKind} onSave={n=>{onAddNote(n);setAddKind(null);}} onCancel={()=>setAddKind(null)} />}
-            {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
-            {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} highlight={flashId===n.id} />)}
+            {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onClick={onEditNote?()=>onEditNote(n):undefined} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
+            {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onClick={onEditNote?()=>onEditNote(n):undefined} highlight={flashId===n.id} />)}
             {visibleNotes.length===0&&!addKind&&<Empty text={filterKind==='all' ? 'No notes yet' : `No ${INTERACTION_KINDS[filterKind].label.toLowerCase()}s logged yet`} />}
           </>}
           {tab==='packages'&&<>
@@ -3398,6 +3486,33 @@ export default function FeltBodyCRM() {
     setNotes(p => p.map(n => n.id === id ? { ...n, actionDate: newDate || null } : n));
     data.notes.patch(id, { action_date: newDate || null }).catch(onError('Update action date'));
   };
+  // Full-form edit from EditNoteForm. The form returns a UI-shape note; we
+  // translate the editable fields to DB-shape keys here. Pattern matches
+  // the other note handlers: optimistic-local + fire-and-forget.
+  // Excluded from the patch: id, date, completed, completedAt (managed by
+  // create/complete/reopen paths, not edit), personId, classId (immutable).
+  const updateNote = (id, edited) => {
+    setNotes(p => p.map(n => n.id === id ? {
+      ...n,
+      text: edited.text,
+      important: edited.important,
+      actionDate: edited.actionDate || null,
+      kind: edited.kind || 'note',
+      direction: edited.direction || null,
+      subject: edited.subject || '',
+      durationMins: edited.durationMins ?? null,
+    } : n));
+    const dbPatch = {
+      text: edited.text,
+      important: edited.important,
+      action_date: edited.actionDate || null,
+      kind: edited.kind || 'note',
+      direction: edited.direction || null,
+      subject: edited.subject ? edited.subject : null,  // '' → null in DB
+      duration_mins: edited.durationMins ?? null,
+    };
+    data.notes.patch(id, dbPatch).catch(onError('Update note'));
+  };
   
   // ── Classes (sessions). Field updates from the class detail page (reflection, formsWorked, etc.)
   const updateClassFields = (classId, fields) => {
@@ -3643,6 +3758,7 @@ export default function FeltBodyCRM() {
       case 'edit_org': return <AddOrgForm existing={modal.org} onSave={o=>updateOrg(modal.org.id, o)} onClose={close} />;
       case 'add_person': return <AddPersonForm orgs={orgs} defaultType={modal.personType} defaultOrgId={modal.orgId} onSave={addPerson} onClose={close} />;
       case 'edit_person': return <AddPersonForm existing={modal.person} orgs={orgs} onSave={p=>updatePerson(modal.person.id, p)} onClose={close} />;
+      case 'edit_note': return <EditNoteForm note={modal.note} onSave={n=>updateNote(modal.note.id, n)} onClose={close} />;
       case 'add_org_type': return <AddTypeForm kind="org"
         existingKeys={[...Object.keys(ORG_META), ...customOrgTypes.map(t=>t.key)]}
         onSave={addOrgType}
@@ -3770,6 +3886,7 @@ export default function FeltBodyCRM() {
           onReopenNote={reopenNote}
           onDeleteNote={deleteNote}
           onUpdateActionDate={updateNoteAction}
+          onEditNote={(note)=>setModal({type:'edit_note', note})}
           onEdit={()=>setModal({type:'edit_person',person})}
           onAddPackage={()=>setModal({type:'add_package',personId})}
           onBook={()=>setModal({type:'book',personId})}
