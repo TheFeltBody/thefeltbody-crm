@@ -23,6 +23,7 @@ export const orgFromDb = (row) => ({
   address: row.address || '',
   phone: row.phone || '',
   email: row.email || '',
+  website: row.website || '',
   contactName: row.contact_name || '',
   notes: row.notes || '',
   invoiceCounter: row.invoice_counter ?? 0,
@@ -34,6 +35,7 @@ export const orgToDb = (o) => ({
   address: o.address || null,
   phone: o.phone || null,
   email: o.email || null,
+  website: o.website || null,
   contact_name: o.contactName || null,
   notes: o.notes || null,
 });
@@ -46,6 +48,7 @@ export const personFromDb = (row, roles = []) => ({
   name: row.name,
   email: row.email || '',
   phone: row.phone || '',
+  website: row.website || '',
   orgId: row.org_id || null,
   status: row.status || 'active',
   source: {
@@ -66,6 +69,7 @@ export const personToDb = (p) => ({
   name: p.name,
   email: p.email || null,
   phone: p.phone || null,
+  website: p.website || null,
   org_id: p.orgId || null,
   status: p.status || 'active',
   source_channel: p.source?.channel || 'manual',
@@ -381,4 +385,25 @@ export const customPersonRoleToDb = (t) => ({
   color: t.color,
   bg: t.bg,
   is_builtin: false,
+});
+
+// ─── Org contacts (people <-> orgs working-relationships junction) ───────────
+// Models WORKING roles a person plays for an organisation (primary/billing/
+// admin/other contact). Distinct from people.org_id, which models residency /
+// membership. A single person can have multiple rows for the same org with
+// different roles. Keys stay snake_case-equivalent and roles are constrained
+// at the DB level by a CHECK constraint — see migration.
+
+export const orgContactFromDb = (row) => ({
+  id: row.id,
+  orgId: row.org_id,
+  personId: row.person_id,
+  role: row.role || 'other',
+  createdAt: row.created_at,
+});
+
+export const orgContactToDb = (oc) => ({
+  org_id: oc.orgId,
+  person_id: oc.personId,
+  role: oc.role || 'other',
 });

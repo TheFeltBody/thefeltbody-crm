@@ -27,6 +27,7 @@ import {
   formFromDb, formToDb,
   customOrgTypeFromDb, customOrgTypeToDb,
   customPersonRoleFromDb, customPersonRoleToDb,
+  orgContactFromDb, orgContactToDb,
 } from './mappers.js';;
 
 // Throw on any Supabase error so callers (and React error boundaries) see
@@ -61,6 +62,7 @@ export async function loadAll() {
     formRows,
     orgTypeMetaRows,
     personRoleMetaRows,
+    orgContactRows,
   ] = await Promise.all([
     supabase.from('active_organisations').select('*').order('name').then(ok),
     supabase.from('active_people').select('*').order('name').then(ok),
@@ -80,6 +82,7 @@ export async function loadAll() {
       .order('created_at').then(ok),
     supabase.from('person_role_meta').select('*').eq('is_builtin', false)
       .order('created_at').then(ok),
+    supabase.from('org_contacts').select('*').order('created_at').then(ok),
   ]);
 
   // Group person_roles by person_id -> array of role keys
@@ -106,6 +109,7 @@ export async function loadAll() {
     forms: formRows.map(formFromDb),
     customOrgTypes: orgTypeMetaRows.map(customOrgTypeFromDb),
     customPersonRoles: personRoleMetaRows.map(customPersonRoleFromDb),
+    orgContacts: orgContactRows.map(orgContactFromDb),
   };
 }
 
@@ -414,5 +418,27 @@ export const customPersonRoles = {
   async delete(key) {
     await supabase.from('person_role_meta').delete()
       .eq('key', key).eq('is_builtin', false).then(ok);
+  },
+};
+
+// ─── Org contacts (people <-> orgs working-relationships junction) ───────────
+// Hard-delete (no soft-delete needed; junction rows are cheap to recreate).
+// DB has a unique (org_id, person_id, role) index, so adding a duplicate
+// role for the same person+org will throw — caller should ensure uniqueness
+// in the UI or handle the error.
+
+export const orgContacts = {
+  async create(oc) {
+    const row = await supabase.from('org_contacts').insert(orgContactToDb(oc))
+      .select().single().then(ok);
+    return orgContactFromDb(row);
+  },
+  async updateRole(id, role) {
+    const row = await supabase.from('org_contacts').update({ role })
+      .eq('id', id).select().single().then(ok);
+    return orgContactFromDb(row);
+  },
+  async delete(id) {
+    await supabase.from('org_contacts').delete().eq('id', id).then(ok);
   },
 };

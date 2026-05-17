@@ -822,7 +822,7 @@ const FI = ({ label, value, onChange, type='text', opts, rows, half }) => (
 // ─── FORMS ────────────────────────────────────────────────────────────────────
 function AddOrgForm({ existing, onSave, onClose, defaultType }) {
   const { orgTypes } = useTypes();
-  const [f, setF] = useState(existing || {name:'',type:defaultType||'care_home',address:'',phone:'',email:'',contactName:'',notes:''});
+  const [f, setF] = useState(existing || {name:'',type:defaultType||'care_home',address:'',phone:'',email:'',website:'',contactName:'',notes:''});
   const s = k => v => setF(x=>({...x,[k]:v}));
   return (
     <Modal title={existing?`Edit: ${existing.name}`:"Add Organisation"} onClose={onClose}>
@@ -830,6 +830,7 @@ function AddOrgForm({ existing, onSave, onClose, defaultType }) {
       <FI label="TYPE" value={f.type} onChange={s('type')} opts={Object.entries(orgTypes).map(([v,m])=>({v,l:m.label}))} />
       <FI label="ADDRESS" value={f.address} onChange={s('address')} />
       <div style={{display:'flex',gap:12}}><FI label="PHONE" value={f.phone} onChange={s('phone')} half /><FI label="EMAIL" value={f.email} onChange={s('email')} half /></div>
+      <FI label="WEBSITE" value={f.website||''} onChange={s('website')} />
       <FI label="CONTACT NAME" value={f.contactName} onChange={s('contactName')} />
       <FI label="NOTES" value={f.notes} onChange={s('notes')} rows={3} />
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
@@ -843,7 +844,7 @@ function AddOrgForm({ existing, onSave, onClose, defaultType }) {
 function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOrgId }) {
   const { personRoles } = useTypes();
   const initRoles = existing?.roles || (defaultType?[defaultType]:['private_client']);
-  const [f, setF] = useState(existing||{name:'',email:'',phone:'',orgId:defaultOrgId||'',status:'active',source:{channel:'manual',detail:''},notes:'',defaultSessionRate:'',rateNotes:''});
+  const [f, setF] = useState(existing||{name:'',email:'',phone:'',website:'',orgId:defaultOrgId||'',status:'active',source:{channel:'manual',detail:''},notes:'',defaultSessionRate:'',rateNotes:''});
   const [roles, setRoles] = useState(initRoles);
   const s = k => v => setF(x=>({...x,[k]:v}));
   const ss = k => v => setF(x=>({...x,source:{...x.source,[k]:v}}));
@@ -884,6 +885,7 @@ function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOr
         ]} />
       {noCareHomes && <div style={{color:C.red,fontSize:11,marginTop:-8,marginBottom:14}}>No care homes set up yet — add one first, or pick a different role.</div>}
       <div style={{display:'flex',gap:12}}><FI label="EMAIL" value={f.email} onChange={s('email')} half /><FI label="PHONE" value={f.phone} onChange={s('phone')} half /></div>
+      <FI label="WEBSITE" value={f.website||''} onChange={s('website')} />
       <div style={{display:'flex',gap:12}}>
         <FI label="DEFAULT SESSION RATE (£)" value={f.defaultSessionRate||''} onChange={s('defaultSessionRate')} type="number" half />
         <FI label="RATE NOTES" value={f.rateNotes||''} onChange={s('rateNotes')} half />
@@ -2078,6 +2080,7 @@ function OrgDetail({ org, people, classes, invoices, nav, backInfo, onEdit, onAd
             {org.address&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>ADDRESS</div><div style={{color:C.text,fontSize:13}}>{org.address}</div></div>}
             {org.phone&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>PHONE</div><div style={{color:C.text,fontSize:13}}>{org.phone}</div></div>}
             {org.email&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>EMAIL</div><div style={{color:C.gold,fontSize:13}}>{org.email}</div></div>}
+            {org.website&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>WEBSITE</div><a href={/^https?:\/\//i.test(org.website)?org.website:`https://${org.website}`} target="_blank" rel="noopener noreferrer" style={{color:C.blue,fontSize:13,textDecoration:'none',wordBreak:'break-all'}}>{org.website}</a></div>}
           </div>
           {org.notes&&<div style={{borderTop:`1px solid ${C.border}`,marginTop:16,paddingTop:14,color:C.muted,fontSize:13,lineHeight:1.6}}>{org.notes}</div>}
         </div>
@@ -2215,6 +2218,7 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
             <div style={{display:'flex',flexDirection:'column',gap:10}}>
               {person.email&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>EMAIL</div><div style={{color:C.gold,fontSize:13}}>{person.email}</div></div>}
               {person.phone&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>PHONE</div><div style={{color:C.text,fontSize:13}}>{person.phone}</div></div>}
+              {person.website&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>WEBSITE</div><a href={/^https?:\/\//i.test(person.website)?person.website:`https://${person.website}`} target="_blank" rel="noopener noreferrer" style={{color:C.blue,fontSize:13,textDecoration:'none',wordBreak:'break-all'}}>{person.website}</a></div>}
               {org&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>ORGANISATION</div><div style={{color:C.blue,fontSize:13,cursor:'pointer'}} onClick={()=>nav('org_detail',{orgId:org.id})}>{org.name}</div></div>}
               <div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>STATUS</div><div style={{color:person.status==='active'?C.green:person.status==='interested'?C.gold:C.muted,fontSize:13,fontWeight:500}}>{person.status}</div></div>
               <div><div style={{color:C.muted,fontSize:10,marginBottom:3}}>SOURCE</div><SourceTag source={person.source} /></div>
@@ -3329,6 +3333,12 @@ export default function FeltBodyCRM() {
   // User-defined org categories (Insurance, Banks, etc.) and contact roles, persisted alongside data.
   const [customOrgTypes, setCustomOrgTypes] = useState([]);
   const [customPersonRoles, setCustomPersonRoles] = useState([]);
+  // Junction rows linking people to organisations in working/staff roles
+  // (primary contact, billing contact, etc.). Distinct from people.orgId which
+  // models residency. Loaded eagerly, surfaced via OrgDetail in Batch 2.
+  const [orgContacts, setOrgContacts] = useState([]);
+  // Mobile nav state (Phase 1: basic hamburger button + modal nav for small screens)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [modal, setModal] = useState(null);
   // Loading + error state for the initial bulk fetch
   const [loadStatus, setLoadStatus] = useState('loading');  // 'loading' | 'ready' | 'error'
@@ -3358,6 +3368,7 @@ export default function FeltBodyCRM() {
         setForms(all.forms);
         setCustomOrgTypes(all.customOrgTypes);
         setCustomPersonRoles(all.customPersonRoles);
+        setOrgContacts(all.orgContacts);
         setLoadStatus('ready');
       } catch (e) {
         if (cancelled) return;
@@ -3934,18 +3945,54 @@ export default function FeltBodyCRM() {
 
   return (
     <TypesContext.Provider value={typesValue}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Jost:wght@300;400;500;600&display=swap');*{box-sizing:border-box}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#2a4a37;border-radius:2px}input,select,textarea{outline:none}input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.5)}`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Jost:wght@300;400;500;600&display=swap');*{box-sizing:border-box}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#2a4a37;border-radius:2px}input,select,textarea{outline:none}input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.5)}@media(max-width:767px){[data-desktop-sidebar]{display:none !important}}@media(min-width:768px){[data-hamburger]{display:none !important}}`}</style>
       <div style={{display:'flex',height:'100vh',overflow:'hidden',background:C.bg,fontFamily:"'Jost',sans-serif",color:C.text,position:'relative'}}>
-        <Sidebar view={view} nav={nav} invoices={invoices}
-          customOrgTypes={customOrgTypes}
-          customPersonRoles={customPersonRoles}
-          orgs={orgs} people={people}
-          onAddOrgType={()=>setModal({type:'add_org_type'})}
-          onAddPersonRole={()=>setModal({type:'add_person_role'})}
-          onRemoveOrgType={handleRemoveOrgType}
-          onRemovePersonRole={handleRemovePersonRole}
-          onSignOut={signOut} />
-        <main style={{flex:1,overflowY:'auto',overflowX:'hidden'}}>{renderView()}</main>
+        {/* Desktop sidebar: hidden on mobile via CSS media query */}
+        <div data-desktop-sidebar>
+          <Sidebar view={view} nav={nav} invoices={invoices}
+            customOrgTypes={customOrgTypes}
+            customPersonRoles={customPersonRoles}
+            orgs={orgs} people={people}
+            onAddOrgType={()=>setModal({type:'add_org_type'})}
+            onAddPersonRole={()=>setModal({type:'add_person_role'})}
+            onRemoveOrgType={handleRemoveOrgType}
+            onRemovePersonRole={handleRemovePersonRole}
+            onSignOut={signOut} />
+        </div>
+
+        {/* Main content area with mobile hamburger button */}
+        <main style={{flex:1,display:'flex',flexDirection:'column',position:'relative',overflow:'hidden'}}>
+          {/* Hamburger button: hidden on desktop via CSS media query */}
+          <button data-hamburger onClick={()=>setMobileNavOpen(true)}
+            style={{background:'none',border:'none',color:C.text,cursor:'pointer',fontSize:20,padding:'16px 20px',position:'absolute',top:0,left:0,zIndex:10,height:52}}
+            aria-label="Open navigation menu"
+            title="Open navigation menu">
+            ☰
+          </button>
+          {/* Render the current view */}
+          <div style={{flex:1,overflowY:'auto',overflowX:'hidden'}}>{renderView()}</div>
+        </main>
+
+        {/* Mobile nav modal (lightbox): shows nav in modal on small screens */}
+        {mobileNavOpen && (
+          <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.7)',zIndex:100,display:'flex',alignItems:'flex-start'}}>
+            {/* Sidebar component in the modal */}
+            <div style={{width:'min(80vw, 280px)',height:'100%',overflowY:'auto',background:C.sbg,boxShadow:'-2px 0 12px rgba(0,0,0,0.5)'}}>
+              <Sidebar view={view} nav={nav} invoices={invoices}
+                customOrgTypes={customOrgTypes}
+                customPersonRoles={customPersonRoles}
+                orgs={orgs} people={people}
+                onAddOrgType={()=>{ setMobileNavOpen(false); setModal({type:'add_org_type'}); }}
+                onAddPersonRole={()=>{ setMobileNavOpen(false); setModal({type:'add_person_role'}); }}
+                onRemoveOrgType={handleRemoveOrgType}
+                onRemovePersonRole={handleRemovePersonRole}
+                onSignOut={signOut} />
+            </div>
+            {/* Backdrop click closes the modal */}
+            <div onClick={()=>setMobileNavOpen(false)} style={{flex:1,height:'100%'}} />
+          </div>
+        )}
+
         {modal&&renderModal()}
       </div>
     </TypesContext.Provider>
