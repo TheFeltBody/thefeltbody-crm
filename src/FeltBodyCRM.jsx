@@ -974,7 +974,7 @@ function AddTypeForm({ kind, onSave, onClose, existingKeys=[] }) {
   );
 }
 
-function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDate, bookingFor, defaultPaymentModel }) {
+function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDate, bookingFor, defaultPaymentModel, packages, allAttendance }) {
   const [f, setF] = useState(existing
     ? { ...existing, time: existing.time || '', duration: existing.duration || 60, recurrence: existing.seriesId ? 'linked' : 'one_off' }
     : {
@@ -993,6 +993,47 @@ function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDa
   const isNew = !existing;
   // Smart default for paymentModel based on selected org
   const effectiveModel = f.paymentModel || (f.orgId ? 'org' : ((f.name||'').toLowerCase().includes('private') ? 'private' : 'per_person'));
+
+  // ── Inline payment picker for private sessions ────────────────────────────
+  // Only shown when creating a private session for a known person (bookingFor set).
+  // Lets staff write the attendance row's payment status in the same save as the
+  // session creation — saves a trip to ClassDetail PaymentEditor afterwards.
+  const showPaymentPicker = isNew && bookingFor && effectiveModel === 'private';
+  const personPkgs = useMemo(() => {
+    if(!showPaymentPicker || !packages) return [];
+    return packages
+      .filter(pk => pk.personId === bookingFor.personId && (PKG_COMPATIBILITY[pk.type] || []).includes('private'))
+      .map(pk => ({ pk, remaining: packageRemaining(pk, allAttendance || []) }))
+      .filter(({remaining}) => remaining > 0);
+  }, [showPaymentPicker, packages, allAttendance, bookingFor]);
+
+  // Default: Package if any eligible, else Unpaid. Mirrors PaymentEditor pattern.
+  const [payMode, setPayMode] = useState(() => personPkgs.length > 0 ? 'package' : 'unpaid');
+  const [payAmount, setPayAmount] = useState(f.rate ?? '');
+  const [payPackageId, setPayPackageId] = useState(personPkgs[0]?.pk.id || '');
+
+  // Keep amount in sync if user edits the session rate before saving
+  useEffect(() => { if(payMode === 'paid') setPayAmount(f.rate ?? ''); }, [f.rate, payMode]);
+
+  const buildPaymentChoice = () => {
+    if(!showPaymentPicker) return undefined;
+    if(payMode === 'paid') {
+      const amt = parseFloat(payAmount);
+      return { paymentStatus: 'paid', paidAmount: isNaN(amt) ? 0 : amt };
+    }
+    if(payMode === 'package' && payPackageId) {
+      return { paymentStatus: 'package', packageId: payPackageId };
+    }
+    return { paymentStatus: 'unpaid' };
+  };
+
+  const payRadio = (val, label) => (
+    <label style={{display:'flex',alignItems:'center',gap:7,cursor:'pointer',color:payMode===val?C.gold:C.text,fontSize:13}}>
+      <input type="radio" checked={payMode===val} onChange={()=>setPayMode(val)} style={{accentColor:C.gold}} />
+      {label}
+    </label>
+  );
+
   return (
     <Modal title={existing?'Edit Class':(bookingFor?`New session for ${bookingFor.name}`:'Add Class / Session')} onClose={onClose} wide>
       {bookingFor && (
@@ -1014,6 +1055,39 @@ function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDa
         <FI label="RATE PER SESSION (£)" value={f.rate} onChange={s('rate')} type="number" half />
       </div>
       <FI label="PAYMENT MODEL" value={effectiveModel} onChange={s('paymentModel')} opts={Object.entries(PAYMENT_MODELS).map(([v,m])=>({v,l:m.label}))} />
+      {showPaymentPicker && (
+        <div style={{marginBottom:14}}>
+          <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:8}}>HOW IS THIS SESSION PAID?</div>
+          <div style={{display:'flex',flexDirection:'column',gap:9}}>
+            <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+              {payRadio('paid','Drop-in')}
+              {payMode==='paid' && (
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <span style={{color:C.muted,fontSize:13}}>£</span>
+                  <input type="number" value={payAmount} onChange={e=>setPayAmount(e.target.value)} placeholder="0"
+                    style={{width:80,background:C.card,border:`1px solid ${C.border}`,borderRadius:4,color:C.text,fontSize:13,padding:'4px 8px',fontFamily:"'Jost',sans-serif",outline:'none'}} />
+                </div>
+              )}
+            </div>
+            {personPkgs.length > 0 && (
+              <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+                {payRadio('package','Use package')}
+                {payMode==='package' && (
+                  <select value={payPackageId} onChange={e=>setPayPackageId(e.target.value)}
+                    style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:4,color:C.text,fontSize:13,padding:'4px 8px',fontFamily:"'Jost',sans-serif",outline:'none',minWidth:240}}>
+                    {personPkgs.map(({pk,remaining}) => (
+                      <option key={pk.id} value={pk.id}>
+                        {pk.name} — {remaining===Infinity ? 'unlimited' : `${remaining} of ${pk.totalSessions} left`}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
+            {payRadio('unpaid','Unpaid (still owes)')}
+          </div>
+        </div>
+      )}
       {isNew && !bookingFor && (
         <FI label="RECURRENCE" value={f.recurrence} onChange={s('recurrence')} opts={Object.entries(RECURRENCE).map(([v,l])=>({v,l}))} />
       )}
@@ -1022,7 +1096,7 @@ function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDa
       )}
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn onClick={()=>{if(f.name.trim()){onSave({...f,paymentModel:effectiveModel,recurrence:bookingFor?'one_off':f.recurrence});onClose();}}}>{existing?'Save':(bookingFor?'Create & Book':'Add Class')}</Btn>
+        <Btn onClick={()=>{if(f.name.trim()){onSave({...f,paymentModel:effectiveModel,recurrence:bookingFor?'one_off':f.recurrence,paymentChoice:buildPaymentChoice()});onClose();}}}>{existing?'Save':(bookingFor?'Create & Book':'Add Class')}</Btn>
       </div>
     </Modal>
   );
@@ -3837,6 +3911,8 @@ export default function FeltBodyCRM() {
         if(!person) return null;
         return <AddClassForm
           orgs={orgs}
+          packages={packages}
+          allAttendance={attendance}
           bookingFor={{ personId: person.id, name: person.name, defaultSessionRate: person.defaultSessionRate }}
           defaultPaymentModel="private"
           onSave={async (f) => {
@@ -3849,8 +3925,11 @@ export default function FeltBodyCRM() {
                 paymentModel: f.paymentModel || 'private',
               });
               setClasses(p => [...p, created]);
+              // paymentChoice (if present) carries { paymentStatus, paidAmount?, packageId? }
+              // from the inline private-session payment picker in AddClassForm.
               const att = await data.attendance.create({
                 classId: created.id, personId: person.id, attended: false,
+                ...(f.paymentChoice || {}),
               });
               setAttendance(p => [...p, att]);
               close();
