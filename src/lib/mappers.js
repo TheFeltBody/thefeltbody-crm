@@ -43,31 +43,43 @@ export const orgToDb = (o) => ({
 // ─── People ──────────────────────────────────────────────────────────────────
 
 // Roles come from a separate query against person_roles; caller passes them in.
-export const personFromDb = (row, roles = []) => ({
-  id: row.id,
-  name: row.name,
-  email: row.email || '',
-  phone: row.phone || '',
-  website: row.website || '',
-  orgId: row.org_id || null,
-  status: row.status || 'active',
-  source: {
-    channel: row.source_channel || 'manual',
-    detail: row.source_detail || '',
-  },
-  notes: row.notes || '',
-  roles: roles.length ? roles : ['private_client'],  // safety default
-  doNotEmail: row.do_not_email ?? false,
-  isActiveStudent: row.is_active_student ?? false,
-  defaultSessionRate: row.default_session_rate !== null && row.default_session_rate !== undefined
-    ? Number(row.default_session_rate)
-    : '',
-  rateNotes: row.rate_notes || '',
-});
+// Emails come from people_emails (junction table); caller passes them in.
+//   - `emails`: array of {id, email, isPrimary, source, createdAt}
+//   - `email`: convenience derived field — the primary email (or first email,
+//     or '') so existing read sites that look at person.email keep working.
+//     For writes, use the data.peopleEmails module directly.
+export const personFromDb = (row, roles = [], emails = []) => {
+  const mappedEmails = emails.map(emailFromDb);
+  const primary = mappedEmails.find(e => e.isPrimary) || mappedEmails[0];
+  return {
+    id: row.id,
+    name: row.name,
+    email: primary?.email || row.primary_email || '',
+    emails: mappedEmails,
+    phone: row.phone || '',
+    website: row.website || '',
+    orgId: row.org_id || null,
+    status: row.status || 'active',
+    source: {
+      channel: row.source_channel || 'manual',
+      detail: row.source_detail || '',
+    },
+    notes: row.notes || '',
+    roles: roles.length ? roles : ['private_client'],  // safety default
+    doNotEmail: row.do_not_email ?? false,
+    isActiveStudent: row.is_active_student ?? false,
+    defaultSessionRate: row.default_session_rate !== null && row.default_session_rate !== undefined
+      ? Number(row.default_session_rate)
+      : '',
+    rateNotes: row.rate_notes || '',
+  };
+};
 
+// people.email no longer exists as a column. Emails are managed separately via
+// the people_emails table (see data.peopleEmails). personToDb writes only the
+// person row's own fields.
 export const personToDb = (p) => ({
   name: p.name,
-  email: p.email || null,
   phone: p.phone || null,
   website: p.website || null,
   org_id: p.orgId || null,
@@ -79,6 +91,26 @@ export const personToDb = (p) => ({
   is_active_student: p.isActiveStudent ?? false,
   default_session_rate: numOrNull(p.defaultSessionRate),
   rate_notes: p.rateNotes ? String(p.rateNotes).trim() || null : null,
+});
+
+// ─── People emails ───────────────────────────────────────────────────────────
+// Junction table: N emails per person, one marked primary. Used directly by
+// data.peopleEmails CRUD and joined into personFromDb at load time.
+
+export const emailFromDb = (row) => ({
+  id: row.id,
+  personId: row.person_id,
+  email: row.email,
+  isPrimary: row.is_primary ?? false,
+  source: row.source || '',
+  createdAt: row.created_at,
+});
+
+export const emailToDb = (e) => ({
+  person_id: e.personId,
+  email: (e.email || '').trim(),
+  is_primary: e.isPrimary ?? false,
+  source: e.source || null,
 });
 
 // Coerce a value to a number or null. Used for nullable numeric columns where

@@ -28,6 +28,7 @@ import {
   customOrgTypeFromDb, customOrgTypeToDb,
   customPersonRoleFromDb, customPersonRoleToDb,
   orgContactFromDb, orgContactToDb,
+  emailFromDb, emailToDb,
 } from './mappers.js';;
 
 // Throw on any Supabase error so callers (and React error boundaries) see
@@ -52,6 +53,7 @@ export async function loadAll() {
     orgRows,
     personRows,
     personRoleRows,
+    personEmailRows,
     seriesRows,
     sessionRows,
     attendanceRows,
@@ -67,6 +69,7 @@ export async function loadAll() {
     supabase.from('active_organisations').select('*').order('name').then(ok),
     supabase.from('active_people').select('*').order('name').then(ok),
     supabase.from('person_roles').select('person_id, role_key').then(ok),
+    supabase.from('people_emails').select('*').order('created_at').then(ok),
     supabase.from('series').select('*').order('start_date', { ascending: false }).then(ok),
     supabase.from('sessions').select('*').order('date', { ascending: false }).then(ok),
     supabase.from('attendance').select('*').then(ok),
@@ -91,6 +94,12 @@ export async function loadAll() {
     return acc;
   }, {});
 
+  // Group people_emails by person_id -> array of email rows (raw, mapper handles shape)
+  const emailsByPerson = personEmailRows.reduce((acc, r) => {
+    (acc[r.person_id] ||= []).push(r);
+    return acc;
+  }, {});
+
   // Group line items by invoice_id
   const linesByInvoice = lineItemRows.reduce((acc, r) => {
     (acc[r.invoice_id] ||= []).push(r);
@@ -99,7 +108,8 @@ export async function loadAll() {
 
   return {
     orgs: orgRows.map(orgFromDb),
-    people: personRows.map((r) => personFromDb(r, rolesByPerson[r.id] || [])),
+    people: personRows.map((r) =>
+      personFromDb(r, rolesByPerson[r.id] || [], emailsByPerson[r.id] || [])),
     series: seriesRows.map(seriesFromDb),
     classes: sessionRows.map(classFromDb),
     attendance: attendanceRows.map(attendanceFromDb),
@@ -137,10 +147,20 @@ export const orgs = {
   delete: (id) => softDelete('organisations', id),
 };
 
-// ─── People (with role junction handling) ────────────────────────────────────
+// ─── People (with role + email junction handling) ────────────────────────────
 // Roles are managed atomically with the person row: on create/update we
-// insert/delete person_roles entries to match the array. Two queries instead
-// of one, but keeps the UI's roles-as-array model intact.
+// insert/delete person_roles entries to match the array. Same approach for
+// emails (people_emails): on create we seed initial emails if provided.
+// Subsequent email edits go through the data.peopleEmails module so the UI
+// can add/remove/star without round-tripping the whole person.
+
+// Internal helper — fetch all emails for a person and return as raw rows
+// (the personFromDb mapper handles the shape conversion).
+async function _fetchEmailsForPerson(personId) {
+  const rows = await supabase.from('people_emails')
+    .select('*').eq('person_id', personId).order('created_at').then(ok);
+  return rows;
+}
 
 export const people = {
   async create(p) {
@@ -151,7 +171,24 @@ export const people = {
         p.roles.map((role_key) => ({ person_id: row.id, role_key }))
       ).then(ok);
     }
-    return personFromDb(row, p.roles || []);
+    // Seed emails. Accepts either p.emails (preferred — array of {email, isPrimary, source})
+    // or a legacy single p.email string (backfill convenience).
+    let seedEmails = [];
+    if (Array.isArray(p.emails) && p.emails.length) {
+      seedEmails = p.emails
+        .map(e => ({ ...e, personId: row.id }))
+        .filter(e => (e.email || '').trim());
+    } else if (typeof p.email === 'string' && p.email.trim()) {
+      seedEmails = [{ personId: row.id, email: p.email.trim(), isPrimary: true, source: 'manual' }];
+    }
+    // Force exactly one primary if we have any emails (first one wins if no flag set)
+    if (seedEmails.length) {
+      const hasPrimary = seedEmails.some(e => e.isPrimary);
+      if (!hasPrimary) seedEmails[0].isPrimary = true;
+      await supabase.from('people_emails').insert(seedEmails.map(emailToDb)).then(ok);
+    }
+    const emailRows = seedEmails.length ? await _fetchEmailsForPerson(row.id) : [];
+    return personFromDb(row, p.roles || [], emailRows);
   },
   async update(id, p) {
     const row = await supabase.from('people').update(personToDb(p))
@@ -163,9 +200,102 @@ export const people = {
         p.roles.map((role_key) => ({ person_id: id, role_key }))
       ).then(ok);
     }
-    return personFromDb(row, p.roles || []);
+    // Emails are managed separately via data.peopleEmails — we just re-read
+    // the current set so the caller gets a fully-shaped person back.
+    const emailRows = await _fetchEmailsForPerson(id);
+    return personFromDb(row, p.roles || [], emailRows);
   },
   delete: (id) => softDelete('people', id),
+
+  // Merge two contacts. Calls the merge_people() Postgres function which runs
+  // the whole thing in a single transaction: reassigns FKs from loser to
+  // master across attendance/interactions/packages/org_contacts/people_emails,
+  // applies the masterPatch to the master row, writes a merge_audit row, and
+  // hard-deletes the loser. person_roles are NOT combined — master keeps its
+  // own roles (loser's roles cascade-delete with the loser row).
+  //
+  // masterPatch keys must match DB column names (snake_case). The function
+  // whitelists the allowed columns server-side; extra keys are ignored.
+  //
+  // Returns the updated master row in JSX shape (roles + emails preserved
+  // post-merge — the merged email list now includes the union of both
+  // contacts' addresses, with primary deferred to the user via the UI).
+  async merge(masterId, loserId, masterPatch = {}) {
+    const row = await supabase.rpc('merge_people', {
+      p_master_id: masterId,
+      p_loser_id: loserId,
+      p_master_patch: masterPatch,
+    }).then(ok);
+    if (!row) throw new Error('merge_people returned no row');
+    const [roleRows, emailRows] = await Promise.all([
+      supabase.from('person_roles').select('role_key').eq('person_id', masterId).then(ok),
+      _fetchEmailsForPerson(masterId),
+    ]);
+    return personFromDb(row, roleRows.map(r => r.role_key), emailRows);
+  },
+};
+
+// ─── People emails (junction CRUD) ───────────────────────────────────────────
+// One row per (person, address). Up to one row per person can be is_primary=true
+// (enforced by a partial unique index). Adds/removes/star changes via this
+// module; subsequent updates to the person row don't touch emails.
+
+export const peopleEmails = {
+  // Add a new email. If isPrimary is true (or this is the person's first
+  // email), set is_primary=true and clear it on any existing siblings.
+  async add(personId, { email, isPrimary = false, source = 'manual' } = {}) {
+    const trimmed = (email || '').trim();
+    if (!trimmed) throw new Error('peopleEmails.add: empty email');
+    // Find existing emails to decide whether this is the first (auto-primary).
+    const existing = await _fetchEmailsForPerson(personId);
+    const wantPrimary = isPrimary || existing.length === 0;
+    if (wantPrimary && existing.some(r => r.is_primary)) {
+      await supabase.from('people_emails')
+        .update({ is_primary: false })
+        .eq('person_id', personId).eq('is_primary', true).then(ok);
+    }
+    const row = await supabase.from('people_emails')
+      .insert(emailToDb({ personId, email: trimmed, isPrimary: wantPrimary, source }))
+      .select().single().then(ok);
+    return emailFromDb(row);
+  },
+
+  // Mark a specific email as the primary one for this person. Clears the flag
+  // on any other email belonging to the same person first.
+  async setPrimary(emailId, personId) {
+    await supabase.from('people_emails')
+      .update({ is_primary: false })
+      .eq('person_id', personId).then(ok);
+    const row = await supabase.from('people_emails')
+      .update({ is_primary: true })
+      .eq('id', emailId).select().single().then(ok);
+    return emailFromDb(row);
+  },
+
+  // Delete an email row. If it was primary and other emails exist, promote
+  // the oldest remaining one to primary so the person never ends up with
+  // emails but no primary.
+  async delete(emailId, personId) {
+    const target = await supabase.from('people_emails')
+      .select('*').eq('id', emailId).single().then(ok);
+    await supabase.from('people_emails').delete().eq('id', emailId).then(ok);
+    if (target?.is_primary) {
+      const remaining = await supabase.from('people_emails')
+        .select('id').eq('person_id', personId)
+        .order('created_at').limit(1).then(ok);
+      if (remaining.length) {
+        await supabase.from('people_emails')
+          .update({ is_primary: true })
+          .eq('id', remaining[0].id).then(ok);
+      }
+    }
+  },
+
+  // Refetch the full list for a person — useful after a multi-step UI flow.
+  async list(personId) {
+    const rows = await _fetchEmailsForPerson(personId);
+    return rows.map(emailFromDb);
+  },
 };
 
 // ─── Series ──────────────────────────────────────────────────────────────────
@@ -321,6 +451,13 @@ export const packages = {
     return packageFromDb(row);
   },
   delete: (id) => softDelete('packages', id),
+  // Hard-delete: used for "created in error" cleanup. UI gates this on
+  // totalUsed===0 (no manual offset, no linked attendance). Skips the
+  // packages_with_usage view + soft-delete; row is gone for good.
+  async hardDelete(id) {
+    await supabase.from('packages').delete().eq('id', id).then(ok);
+    return id;
+  },
 };
 
 // ─── Invoices + Line Items ───────────────────────────────────────────────────
