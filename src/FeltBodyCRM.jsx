@@ -3329,7 +3329,7 @@ function ClassDetail({ cls, org, people, attendance, notes, series, forms, packa
                   )}
                   <button onClick={()=>setExpanded(noteOpen?null:{type:'note',personId})} style={{background:'none',border:`1px solid ${noteOpen||pn.length?C.gold:C.border}`,color:noteOpen||pn.length?C.gold:C.muted,cursor:'pointer',fontSize:12,padding:'4px 10px',borderRadius:4,fontFamily:"'Jost',sans-serif"}}>{pn.length?`${pn.length} note${pn.length>1?'s':''}`:'+ note'}</button>
                   <button onClick={()=>onToggle(cls.id,personId)} style={{background:attended?'#122412':'#2a1313',border:`1px solid ${attended?C.green:C.red}55`,color:attended?C.green:C.red,cursor:'pointer',borderRadius:4,fontSize:12,padding:'4px 12px',fontFamily:"'Jost',sans-serif",fontWeight:500}}>{attended?'✓ Attended':'✗ Absent'}</button>
-                  {onRemoveFromRegister && (
+                  {showMoney && onRemoveFromRegister && (
                     <ConfirmBtn idleLabel="Remove" armedLabel="Yes, remove"
                       title="Remove from register — clears this class from their history. The class itself is kept."
                       onConfirm={()=>{ setExpanded(null); onRemoveFromRegister(attId); }} />
@@ -3351,14 +3351,14 @@ function ClassDetail({ cls, org, people, attendance, notes, series, forms, packa
         })}
       </div>:<Empty text="Nobody on the register yet." action="Add people →" onAction={onAddToRegister} />}
 
-      {canDelete && onDeleteClass && (
+      {showMoney && canDelete && onDeleteClass && (
         <div style={{marginTop:32,paddingTop:18,borderTop:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
           <div style={{color:C.muted,fontSize:12,flex:1,minWidth:200}}>
             {reg.length === 0
-              ? 'This class has no register entries — safe to remove if it was created in error.'
+              ? 'This session has no register entries — safe to remove if it was created in error.'
               : `Deleting this private session will also remove the booking${reg.length>1?'s':''} and any linked payment record.`}
           </div>
-          <ConfirmBtn idleLabel="Delete class" armedLabel="Yes, delete"
+          <ConfirmBtn idleLabel="Delete session" armedLabel="Yes, delete"
             onConfirm={()=>onDeleteClass(cls.id)} />
         </div>
       )}
