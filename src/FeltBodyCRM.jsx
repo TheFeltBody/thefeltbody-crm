@@ -2912,9 +2912,10 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
                   const active = filterKind === k;
                   const meta = k==='all' ? null : INTERACTION_KINDS[k];
                   const label = k==='all' ? 'All' : meta.label + 's';
+                  const icon = k==='all' ? '◯' : meta.icon;
                   const count = k==='all' ? pNotes.length : pNotes.filter(n=>(n.kind||'note')===k).length;
                   return (
-                    <button key={k} onClick={()=>setFilterKind(k)} style={{
+                    <button key={k} onClick={()=>setFilterKind(k)} title={label} style={{
                       background: active ? (meta?meta.bg:C.surf) : 'transparent',
                       color: active ? (meta?meta.color:C.text) : C.muted,
                       border: `1px solid ${active ? (meta?meta.color+'88':C.border) : C.border}`,
@@ -2923,8 +2924,8 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
                       fontFamily:"'Jost',sans-serif",
                       display:'inline-flex', alignItems:'center', gap:5,
                     }}>
-                      {meta && <span style={{fontSize:11,lineHeight:1}}>{meta.icon}</span>}
-                      {label}
+                      <span style={{fontSize:11,lineHeight:1}}>{icon}</span>
+                      <span data-chip-label>{label}</span>
                       <span style={{opacity:0.55,fontSize:10}}>{count}</span>
                     </button>
                   );
@@ -4719,7 +4720,7 @@ export default function FeltBodyCRM() {
 
   return (
     <TypesContext.Provider value={typesValue}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Jost:wght@300;400;500;600&display=swap');*{box-sizing:border-box}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#2a4a37;border-radius:2px}input,select,textarea{outline:none}input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.5)}@media(max-width:767px){[data-desktop-sidebar]{display:none !important}}@media(min-width:768px){[data-hamburger]{display:none !important}}`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Jost:wght@300;400;500;600&display=swap');*{box-sizing:border-box}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#2a4a37;border-radius:2px}input,select,textarea{outline:none}input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.5)}@media(max-width:767px){[data-desktop-sidebar]{display:none !important}[data-chip-label]{display:none !important}}@media(min-width:768px){[data-hamburger]{display:none !important}}`}</style>
       <div style={{display:'flex',height:'100vh',overflow:'hidden',background:C.bg,fontFamily:"'Jost',sans-serif",color:C.text,position:'relative'}}>
         {/* Desktop sidebar: hidden on mobile via CSS media query */}
         <div data-desktop-sidebar>
