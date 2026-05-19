@@ -106,6 +106,7 @@ const INTERACTION_KINDS = {
   call:    { label:'Call',    icon:'📞', color:'#4db879', bg:'#132413' },
   email:   { label:'Email',   icon:'✉️',  color:'#6ba3d4', bg:'#131d2a' },
   meeting: { label:'Meeting', icon:'💬', color:'#a07fd4', bg:'#1a1428' },
+  form:    { label:'Form',    icon:'📋', color:'#d49966', bg:'#2a1d10' },
 };
 
 // ─── CUSTOM TYPES INFRASTRUCTURE ──────────────────────────────────────────────
@@ -2252,8 +2253,9 @@ function SidebarCustomTypeItem({ active, indent, label, icon, count, onNav, onDe
 }
 
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────────
-function Sidebar({ view, nav, invoices, customOrgTypes, customPersonRoles, onAddOrgType, onAddPersonRole, orgs, people, onRemoveOrgType, onRemovePersonRole, onSignOut }) {
+function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles, onAddOrgType, onAddPersonRole, orgs, people, onRemoveOrgType, onRemovePersonRole, onSignOut }) {
   const unpaidInvoices = invoices.filter(i=>i.status!=='paid').length;
+  const inboxCount = notes.filter(n => !n.personId).length;
 
   // Auto-expand each section if the current view falls inside it. The user can also
   // toggle manually via the chevron — manual state takes precedence once they touch it.
@@ -2317,6 +2319,7 @@ function Sidebar({ view, nav, invoices, customOrgTypes, customPersonRoles, onAdd
         <div style={{color:C.muted,fontSize:9,letterSpacing:'3px',marginTop:2,opacity:0.6}}>CLIENT RECORD SYSTEM</div>
       </div>
       <Item name="dashboard" label="Dashboard" icon="◈" />
+      <Item name="inbox" label="Inbox" icon="✉" badge={inboxCount} />
 
       <SecHead>Organisations</SecHead>
       <ParentItem name="org_list" params={{orgType:'all'}} label="All Organisations" icon="⛁"
@@ -2607,6 +2610,178 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
         </div>
       )}
     </div>
+  );
+}
+
+// ─── INBOX ────────────────────────────────────────────────────────────────────
+// Surfaces interactions with person_id IS NULL (Phase 8 Half A). Rows arrive
+// here when the inbound Worker, form submissions, or future Brevo webhooks
+// ingest a communication whose sender/recipient doesn't match any existing
+// contact. Each row gets an "Assign to person" action (which optionally adds
+// the address to that person's email list) and a "Discard" action.
+//
+// Reads from the shared `notes` array (already in state from loadAll), so
+// no extra fetching is needed. The badge on the sidebar uses the same count.
+function InboxView({ notes, people, onAssign, onDiscard }) {
+  const { personRoles } = useTypes();
+  const [pickerFor, setPickerFor] = useState(null);  // note row currently being assigned
+
+  const unlinked = useMemo(() =>
+    notes
+      .filter(n => !n.personId)
+      .sort((a, b) => new Date(b.date) - new Date(a.date)),
+    [notes]);
+
+  // Snippet: first ~140 chars of the body, single-line for the row preview.
+  // Full body shows after expansion (click row).
+  const snippet = (t) => {
+    const s = String(t || '').replace(/\s+/g, ' ').trim();
+    return s.length > 140 ? s.slice(0, 140) + '…' : s;
+  };
+
+  return (
+    <div style={{padding:'24px 32px',maxWidth:920}}>
+      <div style={{display:'flex',alignItems:'baseline',gap:14,marginBottom:6}}>
+        <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:600,color:C.text,margin:0}}>
+          Inbox
+        </h1>
+        <span style={{color:C.muted,fontSize:13}}>
+          {unlinked.length === 0 ? 'all clear' : `${unlinked.length} unlinked communication${unlinked.length===1?'':'s'}`}
+        </span>
+      </div>
+      <p style={{color:C.muted,fontSize:13,marginTop:4,marginBottom:24,maxWidth:560,lineHeight:1.5}}>
+        Communications whose sender doesn't match any existing contact land here.
+        Assign each one to a person (or discard if spam / irrelevant).
+      </p>
+
+      {unlinked.length === 0 ? (
+        <Empty text="No unlinked communications. Inbox is clear." />
+      ) : (
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {unlinked.map(n => {
+            const meta = INTERACTION_KINDS[n.kind] || INTERACTION_KINDS.note;
+            // Show the address that's "the other party" — sender for inbound,
+            // recipient for outbound. Fall back to whichever's present.
+            const counterparty = n.direction === 'outbound'
+              ? (n.toEmail || n.fromEmail)
+              : (n.fromEmail || n.toEmail);
+            return (
+              <div key={n.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'14px 16px'}}>
+                {/* Top row: kind chip, direction, counterparty, date */}
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,flexWrap:'wrap'}}>
+                  <span style={{
+                    display:'inline-flex',alignItems:'center',gap:5,
+                    background:meta.bg,color:meta.color,
+                    border:`1px solid ${meta.color}55`,
+                    borderRadius:4,padding:'2px 8px',fontSize:11,fontWeight:600,letterSpacing:'0.3px',
+                  }}>
+                    <span style={{fontSize:11,lineHeight:1}}>{meta.icon}</span>
+                    {meta.label}
+                  </span>
+                  {n.direction && (
+                    <span style={{color:C.muted,fontSize:11,letterSpacing:'0.4px',textTransform:'uppercase'}}>
+                      {n.direction}
+                    </span>
+                  )}
+                  {counterparty && (
+                    <span style={{color:C.text,fontSize:13,fontWeight:500}}>{counterparty}</span>
+                  )}
+                  <span style={{marginLeft:'auto',color:C.muted,fontSize:11}}>{fmt(n.date)}</span>
+                </div>
+
+                {/* Subject (if email/form) */}
+                {n.subject && (
+                  <div style={{color:C.gold,fontSize:13,fontWeight:500,marginBottom:6}}>
+                    {n.subject}
+                  </div>
+                )}
+
+                {/* Body snippet */}
+                <div style={{color:C.text,fontSize:13,lineHeight:1.5,marginBottom:12,opacity:0.9}}>
+                  {snippet(n.text)}
+                </div>
+
+                {/* Actions */}
+                <div style={{display:'flex',justifyContent:'flex-end',gap:8,alignItems:'center'}}>
+                  <ConfirmBtn idleLabel="Discard"
+                    onConfirm={() => onDiscard(n.id)}
+                    title="Soft-delete this row (won't appear anywhere)" />
+                  <Btn small onClick={() => setPickerFor(n)}>Assign to person →</Btn>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {pickerFor && (
+        <AssignToPersonModal
+          note={pickerFor}
+          people={people}
+          onClose={() => setPickerFor(null)}
+          onAssign={(personId, addEmailIfNew) => {
+            onAssign(pickerFor.id, personId, addEmailIfNew);
+            setPickerFor(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// Modal for picking the person to assign an unlinked interaction to.
+// Reuses the existing SearchSelect component (used elsewhere for the class
+// register), so contact search behaviour is consistent. "Also add this email"
+// checkbox defaults on — the killer feature of the inbox is one-click
+// "log this comm AND learn this new address".
+function AssignToPersonModal({ note, people, onClose, onAssign }) {
+  const [selected, setSelected] = useState(null);
+  const [addEmail, setAddEmail] = useState(true);
+
+  // Pick which address would be added (matches assignToPerson logic in data layer).
+  const candidateEmail = note.direction === 'outbound'
+    ? note.toEmail
+    : note.fromEmail;
+
+  const available = people.filter(p => p.status !== 'inactive');
+
+  return (
+    <Modal title="Assign to contact" onClose={onClose} wide>
+      <div style={{color:C.muted,fontSize:12,marginBottom:14,lineHeight:1.5}}>
+        Pick the contact this {INTERACTION_KINDS[note.kind]?.label.toLowerCase() || 'communication'} belongs to.
+        {candidateEmail && (
+          <> The email address <span style={{color:C.gold}}>{candidateEmail}</span> can be added to their contact record at the same time.</>
+        )}
+      </div>
+
+      <SearchSelect people={available} onSelect={p => setSelected(p)} />
+
+      {selected && (
+        <div style={{marginTop:14,background:C.active,border:`1px solid ${C.gold}55`,borderRadius:6,padding:'10px 14px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom: candidateEmail ? 10 : 0}}>
+            <Avatar name={selected.name} size={28} role={primaryRole(selected)} />
+            <span style={{color:C.text,fontSize:14,flex:1}}>{selected.name}</span>
+          </div>
+
+          {candidateEmail && (
+            <label style={{display:'flex',alignItems:'center',gap:8,color:C.muted,fontSize:12,cursor:'pointer',userSelect:'none'}}>
+              <input type="checkbox" checked={addEmail}
+                onChange={e => setAddEmail(e.target.checked)}
+                style={{accentColor:C.gold}} />
+              Also add <span style={{color:C.text}}>{candidateEmail}</span> to {selected.name.split(' ')[0]}'s emails
+            </label>
+          )}
+        </div>
+      )}
+
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:18}}>
+        <Btn variant="ghost" small onClick={onClose}>Cancel</Btn>
+        <Btn small disabled={!selected}
+          onClick={() => selected && onAssign(selected.id, addEmail)}>
+          Assign
+        </Btn>
+      </div>
+    </Modal>
   );
 }
 
@@ -4105,6 +4280,7 @@ export default function FeltBodyCRM() {
     let label = 'Back';
     switch (prev.name) {
       case 'dashboard': label = 'Dashboard'; break;
+      case 'inbox': label = 'Inbox'; break;
       case 'classes': label = 'All Classes'; break;
       case 'week_view': label = 'Week View'; break;
       case 'forms_list': label = 'Forms'; break;
@@ -4289,6 +4465,31 @@ export default function FeltBodyCRM() {
     };
     setNotes(p => p.map(n => n.id === id ? { ...n, ...patch } : n));
     data.notes.patch(id, patch).catch(onError('Update note'));
+  };
+
+  // Inbox → assign an unlinked interaction to a real person. Two-step server
+  // operation (patch row, optionally insert new email) is wrapped by
+  // data.notes.assignToPerson. We update local state from the returned
+  // canonical shapes so the UI stays in sync with the DB. Server-confirmed,
+  // not optimistic — assignment is rare enough that the slight latency is
+  // fine, and rolling back two coupled writes if one fails is messy.
+  const assignNoteToPerson = async (noteId, personId, addEmailIfNew) => {
+    try {
+      const myAddresses = settings.my_addresses || [];
+      const { note, addedEmail } = await data.notes.assignToPerson(
+        noteId, personId, { addEmailIfNew, myAddresses });
+      // Reconcile the note (now has personId set).
+      setNotes(p => p.map(n => n.id === noteId ? note : n));
+      // If an email was added, splice it into the target person's emails array.
+      if (addedEmail) {
+        setPeople(p => p.map(person =>
+          person.id === personId
+            ? { ...person, emails: [...(person.emails || []), addedEmail] }
+            : person));
+      }
+    } catch (err) {
+      onError('Assign to contact')(err);
+    }
   };
   
   // ── Classes (sessions). Field updates from the class detail page (reflection, formsWorked, etc.)
@@ -4670,6 +4871,9 @@ export default function FeltBodyCRM() {
         onAddClass={(date)=>setModal({type:'add_class', date})}
         onCompleteNote={clearNoteAction}
         onReopenNote={reopenNote} />;
+      case 'inbox': return <InboxView notes={notes} people={people}
+        onAssign={assignNoteToPerson}
+        onDiscard={deleteNote} />;
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;
       case 'org_detail': {
         const org=orgs.find(o=>o.id===orgId); if(!org) return <Empty text="Not found" />;
@@ -4747,7 +4951,7 @@ export default function FeltBodyCRM() {
       <div style={{display:'flex',height:'100vh',overflow:'hidden',background:C.bg,fontFamily:"'Jost',sans-serif",color:C.text,position:'relative'}}>
         {/* Desktop sidebar: hidden on mobile via CSS media query */}
         <div data-desktop-sidebar>
-          <Sidebar view={view} nav={nav} invoices={invoices}
+          <Sidebar view={view} nav={nav} invoices={invoices} notes={notes}
             customOrgTypes={customOrgTypes}
             customPersonRoles={customPersonRoles}
             orgs={orgs} people={people}
@@ -4776,7 +4980,7 @@ export default function FeltBodyCRM() {
           <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.7)',zIndex:100,display:'flex',alignItems:'flex-start'}}>
             {/* Sidebar component in the modal */}
             <div style={{width:'min(80vw, 280px)',height:'100%',overflowY:'auto',background:C.sbg,boxShadow:'-2px 0 12px rgba(0,0,0,0.5)'}}>
-              <Sidebar view={view} nav={nav} invoices={invoices}
+              <Sidebar view={view} nav={nav} invoices={invoices} notes={notes}
                 customOrgTypes={customOrgTypes}
                 customPersonRoles={customPersonRoles}
                 orgs={orgs} people={people}

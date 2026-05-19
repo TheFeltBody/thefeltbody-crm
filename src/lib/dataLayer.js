@@ -21,7 +21,7 @@ import {
   seriesFromDb, seriesToDb,
   classFromDb, classToDb, classPatchToDb,
   attendanceFromDb, attendanceToDb,
-  noteFromDb, noteToDb,
+  noteFromDb, noteToDb, notePatchToDb,
   packageFromDb, packageToDb,
   invoiceFromDb, invoiceToDb, lineItemToDb,
   formFromDb, formToDb,
@@ -29,6 +29,7 @@ import {
   customPersonRoleFromDb, customPersonRoleToDb,
   orgContactFromDb, orgContactToDb,
   emailFromDb, emailToDb,
+  settingFromDb,
 } from './mappers.js';;
 
 // Throw on any Supabase error so callers (and React error boundaries) see
@@ -65,6 +66,7 @@ export async function loadAll() {
     orgTypeMetaRows,
     personRoleMetaRows,
     orgContactRows,
+    settingRows,
   ] = await Promise.all([
     supabase.from('active_organisations').select('*').order('name').then(ok),
     supabase.from('active_people').select('*').order('name').then(ok),
@@ -86,6 +88,7 @@ export async function loadAll() {
     supabase.from('person_role_meta').select('*').eq('is_builtin', false)
       .order('created_at').then(ok),
     supabase.from('org_contacts').select('*').order('created_at').then(ok),
+    supabase.from('settings').select('*').then(ok),
   ]);
 
   // Group person_roles by person_id -> array of role keys
@@ -106,6 +109,16 @@ export async function loadAll() {
     return acc;
   }, {});
 
+  // Reshape settings rows into a plain object keyed by setting name, so
+  // consumers can do `state.settings.my_addresses` rather than searching
+  // an array. Each value is already-parsed jsonb (Supabase returns parsed
+  // JSON for jsonb columns). Missing keys are simply absent — consumers
+  // should fall back to a sensible default.
+  const settingsByKey = settingRows.reduce((acc, r) => {
+    acc[r.key] = r.value;
+    return acc;
+  }, {});
+
   return {
     orgs: orgRows.map(orgFromDb),
     people: personRows.map((r) =>
@@ -120,6 +133,7 @@ export async function loadAll() {
     customOrgTypes: orgTypeMetaRows.map(customOrgTypeFromDb),
     customPersonRoles: personRoleMetaRows.map(customPersonRoleFromDb),
     orgContacts: orgContactRows.map(orgContactFromDb),
+    settings: settingsByKey,
   };
 }
 
@@ -411,6 +425,10 @@ export const attendance = {
 };
 
 // ─── Notes (DB: interactions) ────────────────────────────────────────────────
+// Includes both manually-entered notes and machine-ingested communications
+// (from the inbound Worker, form submissions, future Brevo webhooks). The
+// inbox view consumes rows where person_id IS NULL — these arrive from
+// machine paths when sender/recipient doesn't match any existing contact.
 export const notes = {
   async create(n) {
     const row = await supabase.from('interactions').insert(noteToDb(n))
@@ -422,13 +440,89 @@ export const notes = {
       .eq('id', id).select().single().then(ok);
     return noteFromDb(row);
   },
-  // Targeted patch for toggle/complete/action-date — avoids round-tripping the whole row
-  async patch(id, dbPatch) {
-    const row = await supabase.from('interactions').update(dbPatch)
+  // Targeted partial-patch. Takes a UI-shape patch (camelCase keys, e.g.
+  // { important: true, actionDate: '2026-06-01' }) and routes through the
+  // notePatchToDb mapper so only the touched columns are written. Mirrors
+  // classes.patch. Pre-2026-05-19 this took raw DB-shape patches; cleaned
+  // up alongside the assignToPerson work in Phase 8 Half A so all callers
+  // speak the same shape.
+  async patch(id, patch) {
+    const row = await supabase.from('interactions').update(notePatchToDb(patch))
       .eq('id', id).select().single().then(ok);
     return noteFromDb(row);
   },
   delete: (id) => softDelete('interactions', id),
+
+  // Assign an unlinked interaction (person_id IS NULL) to a real person.
+  // Used by the inbox UI. Two things happen atomically-from-the-UI's-perspective
+  // (two separate awaits, but a partial failure leaves the system in a
+  // recoverable state — see comment below):
+  //
+  //   1. Patch the interaction's person_id to the assignee
+  //   2. (Optional, default true) If the relevant address on the row isn't
+  //      already on the assignee's people_emails, add it as a non-primary
+  //      email. This is the "killer feature" of the inbox — one click both
+  //      logs the comm and learns the new address.
+  //
+  // The address chosen for step 2 depends on direction:
+  //   - inbound  → from_email (the sender, who we now know is this person)
+  //   - outbound → to_email   (the recipient, ditto)
+  // If the address belongs to *us* (in settings.my_addresses), it's skipped —
+  // assigning an outbound email to a contact shouldn't add jesse@ as their
+  // email.
+  //
+  // Returns { note, addedEmail } where addedEmail is the new email row if
+  // one was created, otherwise null. Caller updates local state from both.
+  //
+  // Partial-failure note: if step 1 succeeds and step 2 fails, the user
+  // sees the row move from inbox to PersonDetail (which is the main thing)
+  // but the email isn't captured. They can add it manually from PersonDetail.
+  // We don't roll back step 1 because the assignment is the important bit.
+  async assignToPerson(noteId, personId, { addEmailIfNew = true, myAddresses = [] } = {}) {
+    // Step 1: patch person_id. Read back the full row so we have all the
+    // context (kind, direction, from_email, to_email) for step 2.
+    const updatedRow = await supabase.from('interactions')
+      .update({ person_id: personId })
+      .eq('id', noteId).select().single().then(ok);
+    const note = noteFromDb(updatedRow);
+
+    if (!addEmailIfNew) return { note, addedEmail: null };
+
+    // Step 2: pick the relevant address based on direction.
+    const candidate = note.direction === 'outbound'
+      ? note.toEmail
+      : note.fromEmail;  // inbound, or null direction (default to from)
+    if (!candidate) return { note, addedEmail: null };
+
+    // Normalise for comparison (lowercase, trim) but preserve original case
+    // on write — email local-parts are technically case-sensitive per RFC,
+    // even though virtually all real-world handlers treat them as not.
+    const normalised = candidate.trim().toLowerCase();
+    if (!normalised) return { note, addedEmail: null };
+
+    // Skip if this is one of our own addresses (jesse@, info@, log@…).
+    // Case-insensitive comparison; settings.my_addresses values are stored
+    // lowercase by convention but we normalise both sides defensively.
+    const myList = (myAddresses || []).map(a => String(a).trim().toLowerCase());
+    if (myList.includes(normalised)) return { note, addedEmail: null };
+
+    // Skip if this person already has this email (case-insensitive). We
+    // fetch their current emails fresh rather than trusting whatever state
+    // the UI is holding — assignment is rare enough that a round-trip is
+    // fine, and it sidesteps a class of stale-state bugs.
+    const existing = await _fetchEmailsForPerson(personId);
+    if (existing.some(r => String(r.email || '').trim().toLowerCase() === normalised)) {
+      return { note, addedEmail: null };
+    }
+
+    // Add it as non-primary, source='import' so it's distinguishable from
+    // manually-typed addresses in the future (auditable provenance).
+    const emailRow = await supabase.from('people_emails')
+      .insert(emailToDb({ personId, email: candidate.trim(), isPrimary: false, source: 'import' }))
+      .select().single().then(ok);
+
+    return { note, addedEmail: emailFromDb(emailRow) };
+  },
 };
 
 // ─── Packages ────────────────────────────────────────────────────────────────
@@ -577,5 +671,38 @@ export const orgContacts = {
   },
   async delete(id) {
     await supabase.from('org_contacts').delete().eq('id', id).then(ok);
+  },
+};
+
+// ─── Settings (generic key-value store) ──────────────────────────────────────
+// Single source of truth for app config editable without code redeploys.
+// Loaded eagerly into state.settings on loadAll (as a keyed object). Writes
+// go through here when you change something live.
+//
+// Keys today:
+//   'my_addresses' — array of operator email addresses. Consumed by
+//     notes.assignToPerson to avoid auto-adding "your own" addresses as new
+//     contact emails when triaging the inbox.
+
+export const settings = {
+  // Read a single setting. Returns the parsed jsonb value, or undefined if
+  // the key doesn't exist. Most consumers will prefer reading from
+  // state.settings directly — this is for ad-hoc reads outside the loadAll
+  // flow (e.g., the inbox-assign action verifying the freshest list).
+  async get(key) {
+    const rows = await supabase.from('settings').select('*')
+      .eq('key', key).limit(1).then(ok);
+    if (!rows.length) return undefined;
+    return settingFromDb(rows[0]).value;
+  },
+
+  // Upsert. Writes the value as jsonb; pass any JSON-serialisable shape.
+  // Returns the saved row (settingFromDb shape) so callers can update
+  // local state with the server-confirmed value (including updatedAt).
+  async set(key, value) {
+    const row = await supabase.from('settings')
+      .upsert({ key, value }, { onConflict: 'key' })
+      .select().single().then(ok);
+    return settingFromDb(row);
   },
 };
