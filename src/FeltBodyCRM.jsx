@@ -4260,6 +4260,74 @@ export default function FeltBodyCRM() {
     return () => { cancelled = true; };
   }, []);
 
+  // ─── Inbox / comms polling ─────────────────────────────────────────────
+  // The inbound Worker (Phase 8 Half A, A4) writes to the `interactions`
+  // table directly from Cloudflare — it never touches React state. Without
+  // some form of pull, newly-logged emails don't appear in the CRM until
+  // the user hits refresh, which is poor UX (they sit in the database with
+  // no indication anything happened).
+  //
+  // Design choices:
+  //   - Poll just the interactions table, not loadAll(). Cheaper (one query
+  //     vs 16) and zero risk of clobbering in-flight edits in other state
+  //     arrays. The Worker only writes here, so this is the only state that
+  //     can change without user action.
+  //   - 60s cadence. Picked to be "fast enough that BCC-to-log feels live"
+  //     and "slow enough that keep-alive / Supabase budget never feels it".
+  //   - Visibility-gated: skip the poll when the tab is hidden (background
+  //     tab, minimised window). Picks back up immediately on visibility
+  //     change. Saves cycles, plays nicely with battery on laptops.
+  //   - Wait for initial load to complete (loadStatus === 'ready') before
+  //     starting the poller. No point fighting with the initial fetch.
+  //   - Skip the poll while a modal is open. The user might be editing a
+  //     note right now; replacing the array under them would feel jumpy.
+  //     They'll pick up changes when they close the modal anyway.
+  //
+  // No-op if Supabase is unreachable: the data.notes.list() call throws,
+  // we swallow it (just log to console) and try again next tick. The user
+  // doesn't see anything; the next successful poll catches up.
+  const POLL_INTERVAL_MS = 60_000;
+  // Use a ref to read the latest `modal` value inside the interval callback
+  // without re-creating the interval every time the modal opens/closes.
+  const modalOpenRef = useRef(false);
+  useEffect(() => { modalOpenRef.current = !!modal; }, [modal]);
+
+  useEffect(() => {
+    if (loadStatus !== 'ready') return;
+    let cancelled = false;
+
+    const pollOnce = async () => {
+      if (cancelled) return;
+      if (document.visibilityState !== 'visible') return;
+      if (modalOpenRef.current) return;
+      try {
+        const fresh = await data.notes.list();
+        if (cancelled) return;
+        setNotes(fresh);
+      } catch (e) {
+        // Soft-fail: log and try again next tick. Worker rows will still
+        // appear on the next successful poll, or on next manual refresh.
+        console.warn('[CRM] notes poll failed:', e?.message || e);
+      }
+    };
+
+    const id = setInterval(pollOnce, POLL_INTERVAL_MS);
+
+    // Fire an immediate poll when the tab regains visibility — covers the
+    // common case of "I switched back to the CRM, show me what I missed"
+    // without having to wait up to 60s for the next tick.
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') pollOnce();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [loadStatus]);
+
   // Generic error reporter for mutations. Logs to console and surfaces an alert.
   // A nicer toast UI can come later — alert keeps it visible and unmissable for now.
   const onError = (label) => (err) => {

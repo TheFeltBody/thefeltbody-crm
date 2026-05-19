@@ -453,6 +453,18 @@ export const notes = {
   },
   delete: (id) => softDelete('interactions', id),
 
+  // List all non-deleted interactions. Mirrors the read shape in loadAll().
+  // Used by the inbox poller (App component, ~60s interval) to surface new
+  // rows ingested by the inbound Worker without requiring a full page refresh.
+  // Cheap single query — one table, one filter, server-side ordering.
+  // Returns an array of UI-shape notes (camelCase).
+  async list() {
+    const rows = await supabase.from('interactions').select('*')
+      .is('deleted_at', null)
+      .order('date', { ascending: false }).then(ok);
+    return rows.map(noteFromDb);
+  },
+
   // Assign an unlinked interaction (person_id IS NULL) to a real person.
   // Used by the inbox UI. Two things happen atomically-from-the-UI's-perspective
   // (two separate awaits, but a partial failure leaves the system in a
