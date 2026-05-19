@@ -2,8 +2,8 @@
 //
 // The schema and the React UI grew in parallel and diverge in a few spots:
 //   - DB columns are snake_case; UI uses camelCase
-//   - DB has `org_id` on most tables but `organisation_id` on `payments` and `sessions`
-//     (existing schema drift; we normalise both to `orgId` for the UI)
+//   - All org FKs use `org_id` (normalised 2026-05-19 from previous drift
+//     where sessions/payments used `organisation_id`)
 //   - DB stores person source as flat columns `source_channel` + `source_detail`;
 //     UI expects `source: { channel, detail }`
 //   - DB has a `person_roles` junction table; UI expects `person.roles[]` as a string array
@@ -168,7 +168,7 @@ export const classFromDb = (row) => ({
   time: row.start_time ? String(row.start_time).slice(0, 5) : '',
   duration: row.duration_minutes ?? 60,
   location: row.location || '',
-  orgId: row.organisation_id || null,
+  orgId: row.org_id || null,   
   seriesId: row.series_id || null,
   rate: Number(row.rate) || 0,
   paymentModel: row.payment_model || 'per_person',
@@ -183,7 +183,7 @@ export const classToDb = (c) => ({
   start_time: c.time || null,
   duration_minutes: parseInt(c.duration) || 60,
   location: c.location || null,
-  organisation_id: c.orgId || null,
+  org_id: c.orgId || null,
   series_id: c.seriesId || null,
   rate: parseFloat(c.rate) || 0,
   payment_model: c.paymentModel || 'per_person',
@@ -204,7 +204,7 @@ export const classPatchToDb = (patch) => {
   if (patch.time !== undefined) out.start_time = patch.time || null;
   if (patch.duration !== undefined) out.duration_minutes = parseInt(patch.duration) || 60;
   if (patch.location !== undefined) out.location = patch.location || null;
-  if (patch.orgId !== undefined) out.organisation_id = patch.orgId || null;
+  if (patch.orgId !== undefined) out.org_id = patch.orgId || null;
   if (patch.seriesId !== undefined) out.series_id = patch.seriesId || null;
   if (patch.rate !== undefined) out.rate = parseFloat(patch.rate) || 0;
   if (patch.paymentModel !== undefined) out.payment_model = patch.paymentModel || 'per_person';

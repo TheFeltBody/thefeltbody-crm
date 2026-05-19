@@ -347,7 +347,7 @@ export const classes = {
     if (patch.time !== undefined) propagatePatch.start_time = patch.time || null;
     if (patch.duration !== undefined) propagatePatch.duration_minutes = parseInt(patch.duration) || 60;
     if (patch.location !== undefined) propagatePatch.location = patch.location || null;
-    if (patch.orgId !== undefined) propagatePatch.organisation_id = patch.orgId || null;
+    if (patch.orgId !== undefined) propagatePatch.org_id = patch.orgId || null;
     if (patch.rate !== undefined) propagatePatch.rate = parseFloat(patch.rate) || 0;
     if (patch.paymentModel !== undefined) propagatePatch.payment_model = patch.paymentModel || 'per_person';
 
