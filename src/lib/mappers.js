@@ -261,13 +261,21 @@ export const noteFromDb = (row) => ({
   actionDate: row.action_date || null,
   completed: row.completed,
   completedAt: row.completed_at || null,
-  // Batch A additions: kind discriminator + future-proofing
+  // Comms-logging fields: kind discriminator + future-proofing
   kind: row.kind || 'note',
   direction: row.direction || null,
   subject: row.subject || '',
   durationMins: row.duration_mins != null ? Number(row.duration_mins) : null,
   externalId: row.external_id || null,
   threadId: row.thread_id || null,
+  // Phase 8 Half A additions: raw addresses + ingestion source. fromEmail and
+  // toEmail are stored even when person_id is set, so the inbox can show
+  // "this came from X" and we keep audit trail post-assignment. source
+  // discriminates how the row arrived ('manual' / 'worker' / 'form' / 'brevo').
+  fromEmail: row.from_email || '',
+  toEmail: row.to_email || '',
+  rawHeaders: row.raw_headers || null,
+  source: row.source || 'manual',
 });
 
 export const noteToDb = (n) => ({
@@ -279,7 +287,7 @@ export const noteToDb = (n) => ({
   action_date: n.actionDate || null,
   completed: n.completed ?? false,
   completed_at: n.completedAt || null,
-  // Batch A additions
+  // Comms-logging fields
   kind: n.kind || 'note',           // DB default is 'note'; belt-and-braces
   direction: n.direction || null,   // null for notes/meetings
   subject: n.subject || null,       // empty string → null on write
@@ -287,7 +295,43 @@ export const noteToDb = (n) => ({
     ? parseInt(n.durationMins) : null,
   external_id: n.externalId || null,
   thread_id: n.threadId || null,
+  // Phase 8 Half A additions
+  from_email: n.fromEmail || null,  // empty string → null on write
+  to_email: n.toEmail || null,
+  raw_headers: n.rawHeaders || null,
+  source: n.source || 'manual',     // DB default is 'manual'; belt-and-braces
 });
+
+// Partial-patch mapper: only translates keys actually present in `patch`.
+// Used by data.notes.patch() so untouched columns aren't overwritten.
+// Mirrors notes.patch / classes.patch pattern. Specifically required for
+// the unlinked-comms inbox: assignToPerson() patches just person_id without
+// nulling out kind/direction/subject/etc.
+export const notePatchToDb = (patch) => {
+  const out = {};
+  if (patch.personId !== undefined) out.person_id = patch.personId || null;
+  if (patch.classId !== undefined) out.session_id = patch.classId || null;
+  if (patch.text !== undefined) out.text = patch.text;
+  if (patch.important !== undefined) out.important = patch.important;
+  if (patch.date !== undefined) out.date = patch.date;
+  if (patch.actionDate !== undefined) out.action_date = patch.actionDate || null;
+  if (patch.completed !== undefined) out.completed = patch.completed;
+  if (patch.completedAt !== undefined) out.completed_at = patch.completedAt || null;
+  if (patch.kind !== undefined) out.kind = patch.kind;
+  if (patch.direction !== undefined) out.direction = patch.direction || null;
+  if (patch.subject !== undefined) out.subject = patch.subject || null;
+  if (patch.durationMins !== undefined) {
+    out.duration_mins = patch.durationMins !== null && patch.durationMins !== ''
+      ? parseInt(patch.durationMins) : null;
+  }
+  if (patch.externalId !== undefined) out.external_id = patch.externalId || null;
+  if (patch.threadId !== undefined) out.thread_id = patch.threadId || null;
+  if (patch.fromEmail !== undefined) out.from_email = patch.fromEmail || null;
+  if (patch.toEmail !== undefined) out.to_email = patch.toEmail || null;
+  if (patch.rawHeaders !== undefined) out.raw_headers = patch.rawHeaders || null;
+  if (patch.source !== undefined) out.source = patch.source;
+  return out;
+};
 
 // ─── Packages ────────────────────────────────────────────────────────────────
 // Read from packages_with_usage view (gives sessions_remaining computed); write to packages base table.
@@ -438,4 +482,27 @@ export const orgContactToDb = (oc) => ({
   org_id: oc.orgId,
   person_id: oc.personId,
   role: oc.role || 'other',
+});
+
+// ─── Settings (generic key-value store) ──────────────────────────────────────
+// Single source of truth for app config that needs to be editable without
+// a code redeploy. value is jsonb on the DB side, parsed shape on the UI
+// side (whatever the consumer expects for that key).
+//
+// Today's keys:
+//   'my_addresses' — array of strings, the operator's own email addresses.
+//     Consumed by data.notes.assignToPerson() to skip auto-adding "your own"
+//     addresses as new emails on a contact when triaging the inbox.
+//
+// Future keys: invoice prefix, default rate, signature template, etc.
+
+export const settingFromDb = (row) => ({
+  key: row.key,
+  value: row.value,
+  updatedAt: row.updated_at,
+});
+
+export const settingToDb = (s) => ({
+  key: s.key,
+  value: s.value,
 });

@@ -4035,6 +4035,10 @@ export default function FeltBodyCRM() {
   // (primary contact, billing contact, etc.). Distinct from people.orgId which
   // models residency. Loaded eagerly, surfaced via OrgDetail in Batch 2.
   const [orgContacts, setOrgContacts] = useState([]);
+  // App config from the settings table — keyed object (e.g. settings.my_addresses
+  // is an array of operator email addresses). Loaded eagerly so inbox-assign
+  // and any other settings-aware flows have it on the first interaction.
+  const [settings, setSettings] = useState({});
   // Mobile nav state (Phase 1: basic hamburger button + modal nav for small screens)
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [modal, setModal] = useState(null);
@@ -4067,6 +4071,7 @@ export default function FeltBodyCRM() {
         setCustomOrgTypes(all.customOrgTypes);
         setCustomPersonRoles(all.customPersonRoles);
         setOrgContacts(all.orgContacts);
+        setSettings(all.settings || {});
         setLoadStatus('ready');
       } catch (e) {
         if (cancelled) return;
@@ -4252,11 +4257,11 @@ export default function FeltBodyCRM() {
   const clearNoteAction = (id) => {
     const completedAt = today();
     setNotes(p => p.map(n => n.id === id ? { ...n, completed: true, completedAt } : n));
-    data.notes.patch(id, { completed: true, completed_at: completedAt }).catch(onError('Complete note'));
+    data.notes.patch(id, { completed: true, completedAt }).catch(onError('Complete note'));
   };
   const reopenNote = (id) => {
     setNotes(p => p.map(n => n.id === id ? { ...n, completed: false, completedAt: null } : n));
-    data.notes.patch(id, { completed: false, completed_at: null }).catch(onError('Reopen note'));
+    data.notes.patch(id, { completed: false, completedAt: null }).catch(onError('Reopen note'));
   };
   const deleteNote = (id) => {
     setNotes(p => p.filter(n => n.id !== id));  // optimistic
@@ -4264,34 +4269,26 @@ export default function FeltBodyCRM() {
   };
   const updateNoteAction = (id, newDate) => {
     setNotes(p => p.map(n => n.id === id ? { ...n, actionDate: newDate || null } : n));
-    data.notes.patch(id, { action_date: newDate || null }).catch(onError('Update action date'));
+    data.notes.patch(id, { actionDate: newDate || null }).catch(onError('Update action date'));
   };
-  // Full-form edit from EditNoteForm. The form returns a UI-shape note; we
-  // translate the editable fields to DB-shape keys here. Pattern matches
-  // the other note handlers: optimistic-local + fire-and-forget.
+  // Full-form edit from EditNoteForm. The form returns a UI-shape note;
+  // notes.patch now consumes the same shape (via notePatchToDb in mappers),
+  // so we pass the touched fields straight through. Pattern matches the
+  // other note handlers: optimistic-local + fire-and-forget.
   // Excluded from the patch: id, date, completed, completedAt (managed by
   // create/complete/reopen paths, not edit), personId, classId (immutable).
   const updateNote = (id, edited) => {
-    setNotes(p => p.map(n => n.id === id ? {
-      ...n,
+    const patch = {
       text: edited.text,
       important: edited.important,
       actionDate: edited.actionDate || null,
       kind: edited.kind || 'note',
       direction: edited.direction || null,
-      subject: edited.subject || '',
+      subject: edited.subject || '',  // notePatchToDb normalises '' → null
       durationMins: edited.durationMins ?? null,
-    } : n));
-    const dbPatch = {
-      text: edited.text,
-      important: edited.important,
-      action_date: edited.actionDate || null,
-      kind: edited.kind || 'note',
-      direction: edited.direction || null,
-      subject: edited.subject ? edited.subject : null,  // '' → null in DB
-      duration_mins: edited.durationMins ?? null,
     };
-    data.notes.patch(id, dbPatch).catch(onError('Update note'));
+    setNotes(p => p.map(n => n.id === id ? { ...n, ...patch } : n));
+    data.notes.patch(id, patch).catch(onError('Update note'));
   };
   
   // ── Classes (sessions). Field updates from the class detail page (reflection, formsWorked, etc.)
