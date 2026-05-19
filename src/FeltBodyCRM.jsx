@@ -2827,6 +2827,15 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
   const visibleNotes = filterKind==='all' ? pNotes : pNotes.filter(n => (n.kind||'note')===filterKind);
   const impNotes = visibleNotes.filter(n=>n.important), regNotes = visibleNotes.filter(n=>!n.important);
   const pPkgs=packages.filter(pk=>pk.personId===person.id);
+  // Packages collapse by default — summary only (header + progress bar). Click expands
+  // to reveal linked sessions, manual offset controls, and notes. After 5 packages,
+  // the list itself becomes scrollable (mirrors the class-history cap pattern).
+  const [expandedPkgs, setExpandedPkgs] = useState(()=>new Set());
+  const togglePkg = (id) => setExpandedPkgs(prev => {
+    const next = new Set(prev);
+    if(next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   // When arriving with a highlightNoteId, switch to notes tab, scroll to the note, flash for ~1.6s
   useEffect(()=>{
@@ -2981,7 +2990,12 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
           </>}
           {tab==='packages'&&<>
             <div style={{display:'flex',justifyContent:'flex-end',marginBottom:16}}><Btn small onClick={onAddPackage}>+ Add Package</Btn></div>
-            {pPkgs.length?pPkgs.map(pk=>{
+            {pPkgs.length?(
+              // Scroll container kicks in past 5 packages — same pattern as the
+              // class-history cap on the info card. Height roughly fits 5
+              // collapsed cards plus a hint of the next one.
+              <div style={pPkgs.length>5 ? {maxHeight:670,overflowY:'auto',paddingRight:4} : undefined}>
+            {pPkgs.map(pk=>{
               const linkedAtt = attendance.filter(a => a.packageId === pk.id);
               const linkedCount = linkedAtt.length;
               const totalUsed = (pk.sessionsUsed || 0) + linkedCount;
@@ -2991,21 +3005,30 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
               const isExpended = remaining<=0;
               return (
                 <div key={pk.id} style={{background:C.card,border:`1px solid ${isExpended?C.border:pkColor+'55'}`,borderRadius:8,padding:'16px 20px',marginBottom:12}}>
-                  <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:10,gap:12}}>
-                    <div><div style={{color:C.text,fontSize:15,fontWeight:500}}>{pk.name}</div><div style={{color:C.muted,fontSize:12,marginTop:2}}>{PKG_TYPES[pk.type]?.label} · {fmt(pk.datePurchased)}</div></div>
-                    <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
-                      <div style={{textAlign:'right'}}><div style={{color:C.gold,fontSize:14,fontWeight:500}}>£{pk.amountPaid}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{PAY_VIA[pk.paidVia]||pk.paidVia}</div></div>
-                      <button onClick={()=>onEditPackage(pk.id)}
-                        style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:4,fontSize:11,padding:'3px 9px',fontFamily:"'Jost',sans-serif",flexShrink:0}}>
-                        Edit
-                      </button>
+                  {/* Summary: clicking anywhere in this block toggles expansion.
+                      Edit button stops propagation so it doesn't also toggle. */}
+                  <div onClick={()=>togglePkg(pk.id)} style={{cursor:'pointer'}}>
+                    <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:pk.type!=='drop_in'?10:0,gap:12}}>
+                      <div><div style={{color:C.text,fontSize:15,fontWeight:500}}>{pk.name}</div><div style={{color:C.muted,fontSize:12,marginTop:2}}>{PKG_TYPES[pk.type]?.label} · {fmt(pk.datePurchased)}</div></div>
+                      <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
+                        <div style={{textAlign:'right'}}><div style={{color:C.gold,fontSize:14,fontWeight:500}}>£{pk.amountPaid}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{PAY_VIA[pk.paidVia]||pk.paidVia}</div></div>
+                        <button onClick={(e)=>{e.stopPropagation();onEditPackage(pk.id);}}
+                          style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:4,fontSize:11,padding:'3px 9px',fontFamily:"'Jost',sans-serif",flexShrink:0}}>
+                          Edit
+                        </button>
+                        <span aria-hidden="true" style={{color:C.muted,fontSize:11,lineHeight:'22px',transition:'transform 0.18s',transform:expandedPkgs.has(pk.id)?'rotate(0deg)':'rotate(-90deg)',display:'inline-block'}}>▾</span>
+                      </div>
                     </div>
+                    {pk.type!=='drop_in'&&(
+                      <div style={{display:'flex',alignItems:'center',gap:12}}>
+                        <div style={{flex:1,height:5,background:C.surf,borderRadius:3,overflow:'hidden'}}><div style={{width:`${pct}%`,height:'100%',background:isExpended?C.red:pkColor,borderRadius:3,transition:'width 0.3s'}} /></div>
+                        <div style={{color:isExpended?C.red:pkColor,fontSize:14,fontWeight:600,minWidth:80,textAlign:'right'}}>{remaining}/{pk.totalSessions} left</div>
+                      </div>
+                    )}
                   </div>
+                  {/* Expanded details: linked sessions, manual offset, notes */}
+                  {expandedPkgs.has(pk.id) && <>
                   {pk.type!=='drop_in'&&<>
-                    <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10}}>
-                      <div style={{flex:1,height:5,background:C.surf,borderRadius:3,overflow:'hidden'}}><div style={{width:`${pct}%`,height:'100%',background:isExpended?C.red:pkColor,borderRadius:3,transition:'width 0.3s'}} /></div>
-                      <div style={{color:isExpended?C.red:pkColor,fontSize:14,fontWeight:600,minWidth:80,textAlign:'right'}}>{remaining}/{pk.totalSessions} left</div>
-                    </div>
                     {linkedAtt.length>0 && (
                       <div style={{marginTop:12,paddingTop:10,borderTop:`1px solid ${C.border}`}}>
                         <div style={{color:C.muted,fontSize:10,letterSpacing:'0.4px',marginBottom:7}}>LINKED SESSIONS · {linkedCount}</div>
@@ -3039,9 +3062,12 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
                     )}
                   </>}
                   {pk.notes&&<div style={{color:C.muted,fontSize:12,marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`}}>{pk.notes}</div>}
+                  </>}
                 </div>
               );
-            }):<Empty text="No packages yet" />}
+            })}
+            </div>
+            ):<Empty text="No packages yet" />}
           </>}
         </div>
       </div>
