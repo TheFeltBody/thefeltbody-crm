@@ -2622,7 +2622,7 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
 //
 // Reads from the shared `notes` array (already in state from loadAll), so
 // no extra fetching is needed. The badge on the sidebar uses the same count.
-function InboxView({ notes, people, onAssign, onDiscard }) {
+function InboxView({ notes, people, attendance, classes, onAssign, onDiscard }) {
   const { personRoles } = useTypes();
   const [pickerFor, setPickerFor] = useState(null);  // note row currently being assigned
 
@@ -2718,6 +2718,8 @@ function InboxView({ notes, people, onAssign, onDiscard }) {
         <AssignToPersonModal
           note={pickerFor}
           people={people}
+          attendance={attendance}
+          classes={classes}
           onClose={() => setPickerFor(null)}
           onAssign={(personId, addEmailIfNew) => {
             onAssign(pickerFor.id, personId, addEmailIfNew);
@@ -2734,7 +2736,7 @@ function InboxView({ notes, people, onAssign, onDiscard }) {
 // register), so contact search behaviour is consistent. "Also add this email"
 // checkbox defaults on — the killer feature of the inbox is one-click
 // "log this comm AND learn this new address".
-function AssignToPersonModal({ note, people, onClose, onAssign }) {
+function AssignToPersonModal({ note, people, attendance, classes, onClose, onAssign }) {
   const [selected, setSelected] = useState(null);
   const [addEmail, setAddEmail] = useState(true);
 
@@ -2754,7 +2756,8 @@ function AssignToPersonModal({ note, people, onClose, onAssign }) {
         )}
       </div>
 
-      <SearchSelect people={available} onSelect={p => setSelected(p)} />
+      <SearchSelect people={available} onSelect={p => setSelected(p)}
+        attendance={attendance} classes={classes} />
 
       {selected && (
         <div style={{marginTop:14,background:C.active,border:`1px solid ${C.gold}55`,borderRadius:6,padding:'10px 14px'}}>
@@ -4872,6 +4875,7 @@ export default function FeltBodyCRM() {
         onCompleteNote={clearNoteAction}
         onReopenNote={reopenNote} />;
       case 'inbox': return <InboxView notes={notes} people={people}
+        attendance={attendance} classes={classes}
         onAssign={assignNoteToPerson}
         onDiscard={deleteNote} />;
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;
