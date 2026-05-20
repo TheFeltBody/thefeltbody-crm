@@ -101,12 +101,23 @@ const BANK_DETAILS = {
 // 'note' is the default and dominant kind; others are added via the multi-kind
 // buttons on PersonDetail. Used for the kind badge on cards and the filter chips.
 // Note: separate from the KIND_META constant above, which is for class/session kinds.
+// Interaction kinds. The first five are human/inbound surfaces (notes Jesse
+// types, calls he logs, emails sent/received, meetings, website form
+// submissions). `booking` and `payment` are seeded ahead of Phase 7 — they'll
+// be written by the future Stripe webhook Worker when a customer books a
+// class or buys a package on thefeltbody.com. No rows of those kinds exist
+// yet, but the Comms Log renderer + filter chips are kind-agnostic, so the
+// feed lights up automatically when they start arriving. Adding them here
+// (not later) means the icon/color identity is settled before any real
+// rows depend on it.
 const INTERACTION_KINDS = {
   note:    { label:'Note',    icon:'📝', color:'#8a9aa3', bg:'#1a2226' },
   call:    { label:'Call',    icon:'📞', color:'#4db879', bg:'#132413' },
   email:   { label:'Email',   icon:'✉️',  color:'#6ba3d4', bg:'#131d2a' },
   meeting: { label:'Meeting', icon:'💬', color:'#a07fd4', bg:'#1a1428' },
   form:    { label:'Form',    icon:'📋', color:'#d49966', bg:'#2a1d10' },
+  booking: { label:'Booking', icon:'📅', color:'#7fc4b8', bg:'#13282a' },
+  payment: { label:'Payment', icon:'💷', color:'#c9a84c', bg:'#1b2213' },
 };
 
 // ─── CUSTOM TYPES INFRASTRUCTURE ──────────────────────────────────────────────
@@ -151,6 +162,24 @@ const buildPersonRoles = (custom=[]) => {
 
 const uid = () => `${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
 const fmt = d => d ? new Date(d+'T12:00').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) : '—';
+// Relative time for activity-feed rows. Takes a YYYY-MM-DD string and
+// resolves to "today", "yesterday", "N days ago", "last week", "N weeks
+// ago", falling back to the absolute fmt() for anything older than ~6
+// weeks. Used by CommsLogView and the Dashboard RecentActivitySummary.
+// Absolute dates remain available via the hover-title on each row.
+const fmtRel = d => {
+  if (!d) return '—';
+  const then = new Date(d+'T12:00');
+  const now  = new Date();
+  const days = Math.floor((now - then) / 86400000);
+  if (days < 0)   return fmt(d);            // future-dated (rare)
+  if (days === 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 7)   return `${days} days ago`;
+  if (days < 14)  return 'last week';
+  if (days < 42)  return `${Math.floor(days/7)} weeks ago`;
+  return fmt(d);
+};
 // Format a "HH:MM" 24h string as friendly 12h. Returns null if not set or malformed.
 const fmtTime = t => {
   if(!t || typeof t !== 'string') return null;
@@ -583,9 +612,12 @@ const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote, onUpda
         cursor: onClick?'pointer':'default',
         boxShadow: highlight?`0 0 0 2px ${C.gold}`:'none',
         transition: 'box-shadow 0.4s ease, background 0.2s, color 0.2s',
+        // Leaves room for the sticky PageHead so a scrolled-to note never
+        // tucks under it. Harmless on views without a sticky header.
+        scrollMarginTop: 90,
       }
       }>
-        <div style={{display:'flex',alignItems:'centre',gap:10,marginBottom:6,flexWrap:'wrap'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6,flexWrap:'wrap'}}>
         {(() => {
           const k = INTERACTION_KINDS[note.kind] || INTERACTION_KINDS.note;
           return (
@@ -734,8 +766,21 @@ const Empty = ({ text, action, onAction }) => (
     {text}{action && <><span> </span><span style={{color:C.gold,cursor:'pointer'}} onClick={onAction}>{action}</span></>}
   </div>
 );
-const PageHead = ({ back, onBack, children, action }) => (
-  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:28}}>
+const PageHead = ({ back, onBack, children, action, sticky }) => (
+  <div style={{
+    display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:28,
+    ...(sticky ? {
+      // Pin the header (back button + title + actions) to the top of the
+      // scroll container so it stays reachable on long pages — e.g. a contact
+      // with a deep notes history reached via a highlighted note. Negative
+      // top margin + matching padding absorbs the wrapper's top padding so the
+      // header sits flush at the top edge when stuck. zIndex keeps it above
+      // scrolling cards; the bg + border give it a clean edge.
+      position:'sticky', top:0, zIndex:5,
+      background:C.bg, marginTop:-32, paddingTop:18, paddingBottom:14,
+      borderBottom:`1px solid ${C.border}`,
+    } : {}),
+  }}>
     <div style={{display:'flex',alignItems:'center',gap:12}}>
       {back && <button onClick={onBack} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',padding:'5px 11px',borderRadius:6,fontSize:13}}>← {back}</button>}
       <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:600,color:C.text,letterSpacing:'-0.5px',margin:0}}>{children}</h1>
@@ -2320,6 +2365,7 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
       </div>
       <Item name="dashboard" label="Dashboard" icon="◈" />
       <Item name="inbox" label="Inbox" icon="✉" badge={inboxCount} />
+      <Item name="comms_log" label="Comms Log" icon="◷" />
 
       <SecHead>Organisations</SecHead>
       <ParentItem name="org_list" params={{orgType:'all'}} label="All Organisations" icon="⛁"
@@ -2609,6 +2655,91 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
           )}
         </div>
       )}
+
+      {/* ─── Recent activity summary ──────────────────────────────────────────
+          Last few interactions across ALL contacts (notes, calls, emails,
+          form submissions, future bookings/payments). Compact teaser for the
+          full Comms Log — the "did anything happen?" glance. Hidden if the
+          notes array is empty (Dashboard real-estate is precious; nothing to
+          show is better than an empty box).
+
+          Path B note: this surfaces machine-ingested rows (inbound emails
+          from the log Worker, form submissions, future Stripe bookings)
+          alongside manually-typed notes, which is the point — silent rows
+          shouldn't pass under attention. */}
+      {(() => {
+        const recent = [...notes]
+          .sort((a, b) => new Date(b.date) - new Date(a.date))
+          .slice(0, 6);
+        if (recent.length === 0) return null;
+        return (
+          <div style={{marginTop:32}}>
+            <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginBottom:14,gap:10,flexWrap:'wrap'}}>
+              <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:19,color:C.gold,fontWeight:600}}>
+                Recent activity
+                <span style={{color:C.muted,fontSize:13,fontWeight:400,marginLeft:8,fontFamily:"'Jost',sans-serif"}}>
+                  · last {recent.length}
+                </span>
+              </div>
+              <button onClick={()=>nav('comms_log')}
+                style={{background:'none',border:'none',color:C.gold,cursor:'pointer',fontSize:12,padding:0,fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>
+                View all →
+              </button>
+            </div>
+            <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+              {recent.map((n, i) => {
+                const meta = INTERACTION_KINDS[n.kind] || INTERACTION_KINDS.note;
+                const p = personOf(n.personId);
+                const onClick = p
+                  ? () => nav('person_detail', { personId: p.id, highlightNoteId: n.id })
+                  : (n.classId ? () => nav('class_detail', { classId: n.classId }) : null);
+                const clickable = !!onClick;
+                // Compact snippet — narrower than the full Comms Log row.
+                const snip = String(n.text || '').replace(/\s+/g, ' ').trim();
+                const display = snip.length > 90 ? snip.slice(0, 90) + '…' : snip;
+                return (
+                  <div key={n.id} onClick={onClick || undefined}
+                    title={`${meta.label} · ${fmt(n.date)}${p?` · ${p.name}`:''}`}
+                    style={{
+                      display:'flex',alignItems:'center',gap:12,padding:'10px 14px',
+                      borderBottom: i < recent.length - 1 ? `1px solid ${C.border}` : 'none',
+                      cursor: clickable ? 'pointer' : 'default',
+                      background: C.card, transition:'background 0.12s',
+                    }}
+                    onMouseEnter={e=>{ if(clickable) e.currentTarget.style.background = C.active; }}
+                    onMouseLeave={e=>{ if(clickable) e.currentTarget.style.background = C.card; }}>
+                    {/* Kind icon — single-character circle, no full label */}
+                    <div style={{
+                      width:24, height:24, borderRadius:6,
+                      background:meta.bg, border:`1px solid ${meta.color}55`,
+                      display:'flex',alignItems:'center',justifyContent:'center',
+                      flexShrink:0, fontSize:12, lineHeight:1,
+                    }}>{meta.icon}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:2}}>
+                        <div style={{color:C.text,fontSize:13,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                          {p ? p.name : (n.fromEmail || n.toEmail || 'Unassigned')}
+                        </div>
+                        {n.subject && (
+                          <div style={{color:C.gold,fontSize:11,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',opacity:0.9}}>
+                            {n.subject}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{color:C.muted,fontSize:12,lineHeight:1.4,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                        {display || <span style={{fontStyle:'italic',opacity:0.7}}>—</span>}
+                      </div>
+                    </div>
+                    <div style={{color:C.muted,fontSize:11,flexShrink:0,whiteSpace:'nowrap'}}>
+                      {fmtRel(n.date)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -2785,6 +2916,211 @@ function AssignToPersonModal({ note, people, attendance, classes, onClose, onAss
         </Btn>
       </div>
     </Modal>
+  );
+}
+
+// ─── COMMS LOG ────────────────────────────────────────────────────────────────
+// Recent activity feed across ALL contacts. Surfaces the last N interactions
+// (notes, calls, emails, meetings, form submissions, future bookings/payments)
+// in reverse-chronological order with kind filter chips.
+//
+// Why this exists: Phase 8 Half A auto-files inbound emails to PersonDetail
+// silently. Without a unified feed, those rows would pass under attention
+// unless the user happened to open the right contact. This view is the
+// "did anything happen?" surface — read it like an activity stream, click
+// any row to jump into the relevant person/class.
+//
+// Path B architectural note (2026-05-19): `interactions` is becoming the
+// universal event ledger for the business. When Phase 7 lands (Stripe
+// webhook Worker), kind='booking' and kind='payment' rows will arrive
+// here automatically. The renderer is kind-agnostic — it iterates over
+// INTERACTION_KINDS so new kinds appear without code changes here.
+//
+// Reads from the shared `notes` array (already kept fresh by the 60s
+// polling effect in App). No extra fetching, no data-layer changes.
+function CommsLogView({ notes, people, classes, nav }) {
+  const [kindFilter, setKindFilter] = useState('all');
+  const MAX_ROWS = 30;
+
+  // Sorted desc by date. We slice AFTER filtering so each filter view
+  // shows up to MAX_ROWS of its own kind, not "up to MAX_ROWS of all
+  // kinds then filtered down to maybe 2 of this kind".
+  const filtered = useMemo(() => {
+    const sorted = [...notes].sort((a, b) => new Date(b.date) - new Date(a.date));
+    const ofKind = kindFilter === 'all'
+      ? sorted
+      : sorted.filter(n => (n.kind || 'note') === kindFilter);
+    return ofKind.slice(0, MAX_ROWS);
+  }, [notes, kindFilter]);
+
+  // Counts for the filter chip badges. Use the FULL notes array (pre-slice)
+  // so chip counts reflect actual totals, not "what's in the current view".
+  const kindCounts = useMemo(() => {
+    const c = { all: notes.length };
+    Object.keys(INTERACTION_KINDS).forEach(k => { c[k] = 0; });
+    notes.forEach(n => {
+      const k = n.kind || 'note';
+      if (c[k] !== undefined) c[k] += 1;
+    });
+    return c;
+  }, [notes]);
+
+  // Filter chips: 'All' first, then each kind that has at least one row.
+  // Hiding zero-count chips keeps the bar tidy until booking/payment rows
+  // start arriving — they appear automatically when their first row lands.
+  const visibleChips = useMemo(() => {
+    const chips = [{ key: 'all', label: 'All', count: kindCounts.all }];
+    Object.entries(INTERACTION_KINDS).forEach(([k, meta]) => {
+      if (kindCounts[k] > 0) chips.push({ key: k, label: meta.label + 's', count: kindCounts[k], meta });
+    });
+    return chips;
+  }, [kindCounts]);
+
+  const personOf = (id) => people.find(p => p.id === id);
+  const classOf  = (id) => classes.find(c => c.id === id);
+
+  // Single-line snippet, ~140 chars. Mirrors InboxView.
+  const snippet = (t) => {
+    const s = String(t || '').replace(/\s+/g, ' ').trim();
+    return s.length > 140 ? s.slice(0, 140) + '…' : s;
+  };
+
+  // Row click target. Person takes priority — if a row is anchored to a
+  // person we go to their detail. Class-only rows (rare: a note attached
+  // to a class but not a person) go to ClassDetail. Orphan rows (Inbox
+  // candidates that haven't been assigned yet) get no nav — they belong
+  // in Inbox, not here. Returning null disables the cursor:pointer too.
+  const targetFor = (n) => {
+    if (n.personId) return () => nav('person_detail', { personId: n.personId, highlightNoteId: n.id });
+    if (n.classId)  return () => nav('class_detail',  { classId: n.classId });
+    return null;
+  };
+
+  return (
+    <div style={{padding:'24px 32px',maxWidth:920}}>
+      <div style={{display:'flex',alignItems:'baseline',gap:14,marginBottom:6}}>
+        <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:600,color:C.text,margin:0}}>
+          Comms Log
+        </h1>
+        <span style={{color:C.muted,fontSize:13}}>
+          {filtered.length === 0
+            ? 'nothing yet'
+            : `showing ${filtered.length}${filtered.length === MAX_ROWS ? ' (most recent)' : ''}`}
+        </span>
+      </div>
+      <p style={{color:C.muted,fontSize:13,marginTop:4,marginBottom:20,maxWidth:560,lineHeight:1.5}}>
+        Every note, call, email, meeting, and form submission across all contacts —
+        most recent first. Click any row to open the linked contact.
+      </p>
+
+      {/* Filter chips */}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:20}}>
+        {visibleChips.map(chip => {
+          const active = kindFilter === chip.key;
+          const activeColor = chip.meta ? chip.meta.color : C.gold;
+          const activeBg    = chip.meta ? chip.meta.bg    : C.goldBg;
+          return (
+            <button key={chip.key} onClick={() => setKindFilter(chip.key)}
+              style={{
+                background: active ? activeBg : C.surf,
+                border:     `1px solid ${active ? activeColor+'aa' : C.border}`,
+                color:      active ? activeColor : C.muted,
+                cursor:     'pointer', borderRadius:20, fontSize:11.5, padding:'3px 10px',
+                fontFamily: "'Jost',sans-serif",
+                fontWeight: active ? 600 : 400,
+                letterSpacing:'0.3px',
+                display:'inline-flex', alignItems:'center', gap:5,
+              }}>
+              {chip.meta && <span style={{fontSize:11,lineHeight:1}}>{chip.meta.icon}</span>}
+              {chip.label}{chip.count > 0 ? ` · ${chip.count}` : ''}
+            </button>
+          );
+        })}
+      </div>
+
+      {filtered.length === 0 ? (
+        <Empty text={kindFilter === 'all'
+          ? 'No activity yet. Logged notes, calls, emails and form submissions will appear here.'
+          : `No ${(INTERACTION_KINDS[kindFilter]?.label || 'item').toLowerCase()} activity yet.`} />
+      ) : (
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {filtered.map(n => {
+            const meta = INTERACTION_KINDS[n.kind] || INTERACTION_KINDS.note;
+            const person = personOf(n.personId);
+            const cls    = classOf(n.classId);
+            // Counterparty rules mirror InboxView — sender for inbound,
+            // recipient for outbound. Only shown for rows with raw email
+            // addresses (worker/form/brevo sources), not manual notes.
+            const counterparty = n.direction === 'outbound'
+              ? (n.toEmail || n.fromEmail)
+              : (n.fromEmail || n.toEmail);
+            const onClick = targetFor(n);
+            const clickable = !!onClick;
+            return (
+              <div key={n.id} onClick={onClick || undefined}
+                title={`${meta.label} · ${fmt(n.date)}`}
+                style={{
+                  background:C.card, border:`1px solid ${C.border}`,
+                  borderRadius:8, padding:'14px 16px',
+                  cursor: clickable ? 'pointer' : 'default',
+                  transition:'background 0.12s',
+                }}
+                onMouseEnter={e=>{ if(clickable) e.currentTarget.style.background = C.active; }}
+                onMouseLeave={e=>{ if(clickable) e.currentTarget.style.background = C.card; }}>
+                {/* Top row: kind chip, direction, person/class, date */}
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,flexWrap:'wrap'}}>
+                  <span style={{
+                    display:'inline-flex',alignItems:'center',gap:5,
+                    background:meta.bg, color:meta.color,
+                    border:`1px solid ${meta.color}55`,
+                    borderRadius:4, padding:'2px 8px', fontSize:11, fontWeight:600, letterSpacing:'0.3px',
+                  }}>
+                    <span style={{fontSize:11,lineHeight:1}}>{meta.icon}</span>
+                    {meta.label}
+                  </span>
+                  {n.direction && (
+                    <span style={{color:C.muted,fontSize:11,letterSpacing:'0.4px',textTransform:'uppercase'}}>
+                      {n.direction}
+                    </span>
+                  )}
+                  {/* Anchor — person primary, class secondary, orphan label
+                      for inbox-candidate rows that snuck through (shouldn't
+                      really happen since we filter inbox rows by personId
+                      IS NULL, but defensive). */}
+                  {person ? (
+                    <span style={{color:C.text,fontSize:13,fontWeight:500}}>{person.name}</span>
+                  ) : cls ? (
+                    <span style={{color:C.text,fontSize:13,fontWeight:500}}>
+                      {cls.name} <span style={{color:C.muted,fontSize:11,fontWeight:400,marginLeft:4}}>· {fmt(cls.date)}</span>
+                    </span>
+                  ) : (
+                    <span style={{color:C.muted,fontSize:13,fontStyle:'italic'}}>Unassigned</span>
+                  )}
+                  {/* Counterparty email address (when present and not redundant
+                      with person name) — small, muted, secondary. */}
+                  {counterparty && !person && (
+                    <span style={{color:C.muted,fontSize:12}}>{counterparty}</span>
+                  )}
+                  <span style={{marginLeft:'auto',color:C.muted,fontSize:11}}>{fmtRel(n.date)}</span>
+                </div>
+
+                {/* Subject (email/form) */}
+                {n.subject && (
+                  <div style={{color:C.gold,fontSize:13,fontWeight:500,marginBottom:6}}>
+                    {n.subject}
+                  </div>
+                )}
+
+                {/* Body snippet */}
+                <div style={{color:C.text,fontSize:13,lineHeight:1.5,opacity:0.9}}>
+                  {snippet(n.text)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -3015,14 +3351,24 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
     return next;
   });
 
-  // When arriving with a highlightNoteId, switch to notes tab, scroll to the note, flash for ~1.6s
+  // When arriving with a highlightNoteId, switch to notes tab, scroll the note
+  // into view, flash for ~1.6s. Uses block:'nearest' (not 'center') so we
+  // scroll the *minimum* needed: a note already on-screen doesn't move, and a
+  // note below the fold is brought just into view rather than yanked to the
+  // middle of the viewport — which previously pushed the back button far out
+  // of reach and felt like the page was stuck. We also only scroll when the
+  // note is actually outside the viewport, so short contacts don't jump at all.
   useEffect(()=>{
     if(!highlightNoteId) return;
     setTab('notes');
     setFlashId(highlightNoteId);
     const t1 = setTimeout(()=>{
       const el = document.querySelector(`[data-note-id="${highlightNoteId}"]`);
-      if(el) el.scrollIntoView({behavior:'smooth', block:'center'});
+      if(el){
+        const r = el.getBoundingClientRect();
+        const offscreen = r.top < 0 || r.bottom > window.innerHeight;
+        if(offscreen) el.scrollIntoView({behavior:'smooth', block:'nearest'});
+      }
     }, 80);
     const t2 = setTimeout(()=>setFlashId(null), 1800);
     return ()=>{ clearTimeout(t1); clearTimeout(t2); };
@@ -3045,7 +3391,7 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
 
   return (
     <div style={{padding:'32px 36px',maxWidth:940}}>
-      <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={<><Btn onClick={onBook}>+ Book</Btn><Btn variant="secondary" onClick={onEdit}>Edit</Btn></>}>{person.name}</PageHead>
+      <PageHead sticky back={backInfo?.label} onBack={backInfo?.onBack} action={<><Btn onClick={onBook}>+ Book</Btn><Btn variant="secondary" onClick={onEdit}>Edit</Btn></>}>{person.name}</PageHead>
       <div style={{display:'grid',gridTemplateColumns:'280px 1fr',gap:24}}>
         <div>
           <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:20,marginBottom:14}}>
@@ -4352,6 +4698,7 @@ export default function FeltBodyCRM() {
     switch (prev.name) {
       case 'dashboard': label = 'Dashboard'; break;
       case 'inbox': label = 'Inbox'; break;
+      case 'comms_log': label = 'Comms Log'; break;
       case 'classes': label = 'All Classes'; break;
       case 'week_view': label = 'Week View'; break;
       case 'forms_list': label = 'Forms'; break;
@@ -4946,6 +5293,7 @@ export default function FeltBodyCRM() {
         attendance={attendance} classes={classes}
         onAssign={assignNoteToPerson}
         onDiscard={deleteNote} />;
+      case 'comms_log': return <CommsLogView notes={notes} people={people} classes={classes} nav={nav} />;
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;
       case 'org_detail': {
         const org=orgs.find(o=>o.id===orgId); if(!org) return <Empty text="Not found" />;
