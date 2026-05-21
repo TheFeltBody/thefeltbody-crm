@@ -247,6 +247,81 @@ const classRevenue = (cls, attendance, packages) => {
   return total;
 };
 const addDays = (dateStr, n) => { const d = new Date(dateStr+'T12:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); };
+// ─── Derived activity (bookings + payments) ───────────────────────────────────
+// Bookings and payments already live in the system as attendance rows and
+// packages — they are NOT separate interaction records. Rather than dual-writing
+// duplicate rows into `interactions` (which would need backfilling and create a
+// permanent sync burden), we SYNTHESISE interaction-shaped rows from the
+// existing data at read time. The Recent Activity feed and the Payments tab
+// merge these with the real interactions; everything sorts together by date.
+//
+// This means every booking/payment ever entered shows up immediately with no
+// migration. When Phase 7 Stripe lands, those external events DO write real
+// interaction rows (they have no attendance row otherwise) and merge in
+// seamlessly alongside these derived ones.
+//
+// Each derived row mirrors the note/interaction shape enough for the feed:
+//   { id, kind, date, personId, classId, text, subject, _derived:true, ... }
+// `_derived` marks them so UI can avoid offering note-only actions (edit,
+// delete, mark-important) on rows that aren't real interactions.
+//
+// Booking rows are COMBINED: one row per attendance, showing the booking plus
+// how it was paid (drop-in £, package deduction, or unpaid). Package purchases
+// are their own payment rows, dated to datePurchased.
+
+// Human-readable payment descriptor for one attendance row.
+const attendancePayLabel = (a, packages) => {
+  if (a.paymentStatus === 'paid') {
+    return a.paidAmount != null ? `paid ${fmtMoney(a.paidAmount)} drop-in` : 'paid drop-in';
+  }
+  if (a.paymentStatus === 'package' && a.packageId) {
+    const pk = packages.find(p => p.id === a.packageId);
+    return pk ? `1 session from ${pk.name}` : '1 session from package';
+  }
+  return 'unpaid';
+};
+
+// Booking events — one combined row per attendance row. Dated to the class date.
+const deriveBookings = (attendance, classes, packages) =>
+  attendance.map(a => {
+    const cls = classes.find(c => c.id === a.classId);
+    if (!cls) return null; // orphan attendance (class deleted) — skip
+    const pay = attendancePayLabel(a, packages);
+    return {
+      id: `bk_${a.id}`,
+      kind: 'booking',
+      date: cls.date,
+      personId: a.personId,
+      classId: a.classId,
+      subject: cls.name,
+      text: `Booked into ${cls.name} — ${pay}${a.attended === false ? ' · did not attend' : ''}.`,
+      _derived: true,
+      _payStatus: a.paymentStatus || 'unpaid',
+      _attended: a.attended,
+    };
+  }).filter(Boolean);
+
+// Payment events — package PURCHASES (lump sums). Drop-in payments are already
+// surfaced inside their booking row above, so we don't double-count them here;
+// the Payments tab composes its own fuller list separately (see PersonDetail).
+const derivePackagePurchases = (packages) =>
+  packages.filter(pk => pk.datePurchased).map(pk => ({
+    id: `pay_pkg_${pk.id}`,
+    kind: 'payment',
+    date: pk.datePurchased,
+    personId: pk.personId,
+    classId: null,
+    subject: pk.name,
+    text: `Purchased ${pk.name}${pk.amountPaid ? ` — ${fmtMoney(pk.amountPaid)}` : ''}${pk.paidVia && pk.paidVia!=='other' ? ` (${pk.paidVia})` : ''}.`,
+    _derived: true,
+  }));
+
+// All derived activity for the global Recent Activity feed: bookings + package
+// purchases. (Drop-in payments live inside their booking rows.)
+const deriveActivity = (attendance, classes, packages) => [
+  ...deriveBookings(attendance, classes, packages),
+  ...derivePackagePurchases(packages),
+];
 // UK convention: weeks run Monday–Sunday. Returns the Monday of the week containing dateStr.
 const startOfWeek = (dateStr) => {
   const d = new Date(dateStr+'T12:00');
@@ -720,7 +795,6 @@ const SourceTag = ({ source }) => {
   const s = SOURCES[source.channel] || { label:source.channel, icon:'◇' };
   return <div style={{display:'flex',alignItems:'center',gap:4}}><span style={{color:C.muted,fontSize:11}}>{s.icon}</span><span style={{color:C.muted,fontSize:12}}>{s.label}{source.detail ? ` — ${source.detail}` : ''}</span></div>;
 };
-const SecHead = ({ children }) => <div style={{color:C.muted,fontSize:9.5,fontWeight:600,letterSpacing:'1.8px',textTransform:'uppercase',padding:'18px 20px 7px',opacity:0.7}}>{children}</div>;
 const Btn = ({ onClick, children, variant='primary', small, disabled }) => {
   const v = { primary:{background:C.gold,color:'#0a1408',border:'none'}, secondary:{background:C.card,color:C.text,border:`1px solid ${C.border}`}, ghost:{background:'none',color:C.muted,border:`1px solid ${C.border}`}, danger:{background:'#2a1313',color:C.red,border:`1px solid ${C.red}44`} };
   return <button onClick={onClick} disabled={disabled} style={{...v[variant],cursor:disabled?'not-allowed':'pointer',opacity:disabled?0.5:1,borderRadius:6,fontFamily:"'Jost',sans-serif",fontSize:small?12:14,fontWeight:500,padding:small?'5px 12px':'8px 18px'}}>{children}</button>;
@@ -2302,15 +2376,20 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
   const unpaidInvoices = invoices.filter(i=>i.status!=='paid').length;
   const inboxCount = notes.filter(n => !n.personId).length;
 
-  // Auto-expand each section if the current view falls inside it. The user can also
-  // toggle manually via the chevron — manual state takes precedence once they touch it.
-  const inOrgSection = view.name === 'org_list' || view.name === 'org_detail';
-  const inPeopleSection = view.name === 'people' || view.name === 'person_detail';
-  const [orgsExpanded, setOrgsExpanded] = useState(true);
-  const [peopleExpanded, setPeopleExpanded] = useState(true);
-  // When you navigate into a section, make sure it's open so the active sub-item is visible.
-  useEffect(()=>{ if(inOrgSection) setOrgsExpanded(true); }, [inOrgSection]);
-  useEffect(()=>{ if(inPeopleSection) setPeopleExpanded(true); }, [inPeopleSection]);
+  // Accordion nav: at most one section group open at a time. Sections are
+  // 'orgs' | 'people' | 'sessions' | 'finance'. Opening one closes the others.
+  // The top items (Dashboard / Inbox / Recent Activity) aren't grouped — they
+  // stay flat since each is a single destination with nothing to expand.
+  const sectionForView =
+    (view.name === 'org_list' || view.name === 'org_detail') ? 'orgs' :
+    (view.name === 'people'   || view.name === 'person_detail') ? 'people' :
+    (view.name === 'week_view' || view.name === 'classes' || view.name === 'class_detail' || view.name === 'forms_list') ? 'sessions' :
+    (view.name === 'invoices' || view.name === 'invoice_detail') ? 'finance' :
+    null;
+  const [openSection, setOpenSection] = useState(sectionForView || 'orgs');
+  // When navigating into a section, open it (and close the others).
+  useEffect(()=>{ if(sectionForView) setOpenSection(sectionForView); }, [sectionForView]);
+  const toggleSection = (key) => setOpenSection(cur => cur === key ? null : key);
 
   const Item = ({ name, params={}, label, icon, indent, badge, onClick, isActive }) => {
     const active = isActive !== undefined ? isActive : (view.name===name && Object.entries(params).every(([k,v])=>view[k]===v));
@@ -2325,28 +2404,6 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
     );
   };
 
-  // Parent item with expand/collapse chevron. Clicking the body navigates to the "all" view;
-  // clicking the chevron just toggles expansion without navigating away.
-  const ParentItem = ({ name, params, label, icon, expanded, onToggle, badge }) => {
-    const active = view.name === name && Object.entries(params).every(([k,v])=>view[k]===v);
-    return (
-      <div style={{display:'flex',alignItems:'center',padding:`8px 20px`,color:active?C.gold:C.muted,background:active?C.active:'transparent',fontSize:13,fontWeight:active?500:400,borderLeft:`2px solid ${active?C.gold:'transparent'}`,transition:'all 0.12s'}}
-        onMouseEnter={e=>{if(!active){e.currentTarget.style.color=C.text;e.currentTarget.style.background=C.surf;}}}
-        onMouseLeave={e=>{if(!active){e.currentTarget.style.color=C.muted;e.currentTarget.style.background='transparent';}}}>
-        <div onClick={()=>{ nav(name, params); if(!expanded) onToggle(); }} style={{display:'flex',alignItems:'center',gap:9,flex:1,cursor:'pointer',minWidth:0}}>
-          <span style={{fontSize:12,opacity:0.7,width:14,flexShrink:0}}>{icon}</span>
-          <span style={{flex:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{label}</span>
-          {badge>0&&<span style={{background:C.red,color:'#fff',fontSize:10,fontWeight:600,padding:'1px 7px',borderRadius:20,lineHeight:'16px'}}>{badge}</span>}
-        </div>
-        <button onClick={(e)=>{ e.stopPropagation(); onToggle(); }}
-          aria-label={expanded?'Collapse':'Expand'}
-          style={{background:'none',border:'none',color:'inherit',cursor:'pointer',padding:'2px 4px',marginLeft:4,fontSize:10,opacity:0.6,transition:'transform 0.18s',transform:expanded?'rotate(0deg)':'rotate(-90deg)',display:'inline-flex',alignItems:'center'}}>
-          ▾
-        </button>
-      </div>
-    );
-  };
-
   // Small "+ Add type" affordance that lives at the end of an expanded sub-list.
   const AddTypeAction = ({ onClick }) => (
     <div onClick={onClick} style={{display:'flex',alignItems:'center',gap:9,padding:'6px 20px 10px 28px',color:C.muted,cursor:'pointer',fontSize:11.5,fontStyle:'italic',opacity:0.75,transition:'all 0.12s'}}
@@ -2357,6 +2414,32 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
     </div>
   );
 
+  // Collapsible section header (accordion). Clicking anywhere on it toggles the
+  // group open/closed. Carries an optional badge (e.g. unpaid-invoice count)
+  // so a collapsed section can still signal it needs attention. Styled like
+  // the old SecHead label but interactive, with a rotating chevron. The label
+  // sits in a gold tint with a faint bottom rule so the section headers read
+  // clearly as group dividers (matching the gold section headings used on the
+  // Dashboard). Hover lifts the whole row to full gold.
+  const SectionToggle = ({ label, sectionKey, badge }) => {
+    const open = openSection === sectionKey;
+    return (
+      <div onClick={()=>toggleSection(sectionKey)}
+        style={{
+          display:'flex',alignItems:'center',gap:8,
+          margin:'10px 16px 2px', padding:'7px 4px 8px',
+          cursor:'pointer',userSelect:'none',transition:'color 0.12s',
+          color:C.gold, borderBottom:`1px solid ${C.border}`,
+        }}
+        onMouseEnter={e=>e.currentTarget.style.color=C.text}
+        onMouseLeave={e=>e.currentTarget.style.color=C.gold}>
+        <span style={{flex:1,fontSize:10,fontWeight:700,letterSpacing:'1.8px',textTransform:'uppercase',opacity:0.85}}>{label}</span>
+        {badge>0 && <span style={{background:C.red,color:'#fff',fontSize:9,fontWeight:600,padding:'1px 6px',borderRadius:20,lineHeight:'15px'}}>{badge}</span>}
+        <span style={{fontSize:9,opacity:0.6,transition:'transform 0.18s',transform:open?'rotate(0deg)':'rotate(-90deg)',display:'inline-flex'}}>▾</span>
+      </div>
+    );
+  };
+
   return (
     <div style={{width:216,background:C.sbg,borderRight:`1px solid ${C.border}`,display:'flex',flexDirection:'column',flexShrink:0,overflowY:'auto'}}>
       <div style={{padding:'24px 20px 12px'}}>
@@ -2365,13 +2448,12 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
       </div>
       <Item name="dashboard" label="Dashboard" icon="◈" />
       <Item name="inbox" label="Inbox" icon="✉" badge={inboxCount} />
-      <Item name="comms_log" label="Comms Log" icon="◷" />
+      <Item name="comms_log" label="Recent Activity" icon="◷" />
 
-      <SecHead>Organisations</SecHead>
-      <ParentItem name="org_list" params={{orgType:'all'}} label="All Organisations" icon="⛁"
-        expanded={orgsExpanded} onToggle={()=>setOrgsExpanded(v=>!v)} />
-      {orgsExpanded && (
+      <SectionToggle label="Organisations" sectionKey="orgs" />
+      {openSection==='orgs' && (
         <>
+          <Item name="org_list" params={{orgType:'all'}} label="All Organisations" icon="⛁" indent />
           <Item name="org_list" params={{orgType:'care_home'}} label="Care Homes" icon="⌂" indent />
           <Item name="org_list" params={{orgType:'gym'}} label="Gyms" icon="◎" indent />
           <Item name="org_list" params={{orgType:'other'}} label="Other Orgs" icon="◇" indent />
@@ -2388,11 +2470,10 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
         </>
       )}
 
-      <SecHead>People</SecHead>
-      <ParentItem name="people" params={{personType:'all'}} label="All Contacts" icon="◉"
-        expanded={peopleExpanded} onToggle={()=>setPeopleExpanded(v=>!v)} />
-      {peopleExpanded && (
+      <SectionToggle label="People" sectionKey="people" />
+      {openSection==='people' && (
         <>
+          <Item name="people" params={{personType:'all'}} label="All Contacts" icon="◉" indent />
           <Item name="people" params={{personType:'private_client'}} label="Private Clients" icon="▸" indent />
           <Item name="people" params={{personType:'website_student'}} label="Students" icon="▸" indent />
           <Item name="people" params={{personType:'resident'}} label="Residents" icon="▸" indent />
@@ -2412,12 +2493,21 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
         </>
       )}
 
-      <SecHead>Sessions</SecHead>
-      <Item name="week_view" label="Week View" icon="▦" />
-      <Item name="classes" label="All Classes" icon="≡" />
-      <Item name="forms_list" label="Forms" icon="◍" />
-      <SecHead>Finance</SecHead>
-      <Item name="invoices" label="Invoices" icon="⬡" badge={unpaidInvoices} />
+      <SectionToggle label="Sessions" sectionKey="sessions" />
+      {openSection==='sessions' && (
+        <>
+          <Item name="week_view" label="Week View" icon="▦" indent />
+          <Item name="classes" label="All Classes" icon="≡" indent />
+          <Item name="forms_list" label="Forms" icon="◍" indent />
+        </>
+      )}
+
+      <SectionToggle label="Finance" sectionKey="finance" badge={unpaidInvoices} />
+      {openSection==='finance' && (
+        <>
+          <Item name="invoices" label="Invoices" icon="⬡" badge={unpaidInvoices} indent />
+        </>
+      )}
 
       {/* Pushed to the bottom; flex:column on the parent + marginTop:auto on this wrapper */}
       <div style={{marginTop:'auto',padding:'14px 20px',borderTop:`1px solid ${C.border}`}}>
@@ -2668,7 +2758,7 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
           alongside manually-typed notes, which is the point — silent rows
           shouldn't pass under attention. */}
       {(() => {
-        const recent = [...notes]
+        const recent = [...notes, ...deriveActivity(attendance, classes, packages)]
           .sort((a, b) => new Date(b.date) - new Date(a.date))
           .slice(0, 6);
         if (recent.length === 0) return null;
@@ -2919,55 +3009,75 @@ function AssignToPersonModal({ note, people, attendance, classes, onClose, onAss
   );
 }
 
-// ─── COMMS LOG ────────────────────────────────────────────────────────────────
-// Recent activity feed across ALL contacts. Surfaces the last N interactions
-// (notes, calls, emails, meetings, form submissions, future bookings/payments)
-// in reverse-chronological order with kind filter chips.
+// ─── RECENT ACTIVITY ──────────────────────────────────────────────────────────
+// Activity feed across the whole business. Two modes:
+//   • Nothing selected  → global feed (last N interactions across everyone),
+//                          newest first, with kind filter chips.
+//   • Entity selected    → all activity for one contact or organisation,
+//                          reached via the search box at the top.
+//
+// For a contact, "activity" = interactions anchored to that person. For an
+// organisation, interactions don't carry an org_id, so we derive it: the
+// org's members (people.orgId === org.id) plus the org's classes — any
+// interaction anchored to one of those people or classes counts.
 //
 // Why this exists: Phase 8 Half A auto-files inbound emails to PersonDetail
-// silently. Without a unified feed, those rows would pass under attention
-// unless the user happened to open the right contact. This view is the
-// "did anything happen?" surface — read it like an activity stream, click
-// any row to jump into the relevant person/class.
+// silently. Without a feed, those rows pass under attention. This is the
+// "did anything happen?" surface — click any row to open the linked record.
 //
-// Path B architectural note (2026-05-19): `interactions` is becoming the
-// universal event ledger for the business. When Phase 7 lands (Stripe
-// webhook Worker), kind='booking' and kind='payment' rows will arrive
-// here automatically. The renderer is kind-agnostic — it iterates over
-// INTERACTION_KINDS so new kinds appear without code changes here.
-//
-// Reads from the shared `notes` array (already kept fresh by the 60s
-// polling effect in App). No extra fetching, no data-layer changes.
-function CommsLogView({ notes, people, classes, nav }) {
+// Path B note (2026-05-19): `interactions` is the universal event ledger.
+// Phase 7 Stripe Worker will write kind='booking'/'payment' rows; they show
+// here automatically. A chip lets the user hide transactional rows to focus
+// on human comms. Reads the shared `notes` array (kept fresh by 60s polling).
+function RecentActivityView({ notes, people, classes, orgs, attendance, packages, nav }) {
   const [kindFilter, setKindFilter] = useState('all');
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState(null); // null | {type:'person'|'org', id}
   const MAX_ROWS = 30;
 
-  // Sorted desc by date. We slice AFTER filtering so each filter view
-  // shows up to MAX_ROWS of its own kind, not "up to MAX_ROWS of all
-  // kinds then filtered down to maybe 2 of this kind".
-  const filtered = useMemo(() => {
-    const sorted = [...notes].sort((a, b) => new Date(b.date) - new Date(a.date));
-    const ofKind = kindFilter === 'all'
-      ? sorted
-      : sorted.filter(n => (n.kind || 'note') === kindFilter);
-    return ofKind.slice(0, MAX_ROWS);
-  }, [notes, kindFilter]);
+  const personOf = (id) => people.find(p => p.id === id);
+  const classOf  = (id) => classes.find(c => c.id === id);
 
-  // Counts for the filter chip badges. Use the FULL notes array (pre-slice)
-  // so chip counts reflect actual totals, not "what's in the current view".
+  // Merge real interactions with derived booking/payment rows (see deriveActivity).
+  // Derived rows are read-only (_derived:true) — synthesised from attendance +
+  // packages, not stored. This is the single source the feed filters/sorts from.
+  const allActivity = useMemo(
+    () => [...notes, ...deriveActivity(attendance, classes, packages)],
+    [notes, attendance, classes, packages]
+  );
+
+  // Resolve the selected entity to a concrete record + its activity set.
+  const selectedRecord = useMemo(() => {
+    if (!selected) return null;
+    if (selected.type === 'person') return people.find(p => p.id === selected.id) || null;
+    if (selected.type === 'org')    return orgs.find(o => o.id === selected.id) || null;
+    return null;
+  }, [selected, people, orgs]);
+
+  // The base set for the current scope (before kind filter).
+  // Global = everything; person = their rows; org = rows for its members/classes.
+  const scoped = useMemo(() => {
+    if (!selected) return allActivity;
+    if (selected.type === 'person') {
+      return allActivity.filter(n => n.personId === selected.id);
+    }
+    // org: build the member + class id sets, then match rows to either.
+    const memberIds = new Set(people.filter(p => p.orgId === selected.id).map(p => p.id));
+    const classIds  = new Set(classes.filter(c => c.orgId === selected.id).map(c => c.id));
+    return allActivity.filter(n => (n.personId && memberIds.has(n.personId)) || (n.classId && classIds.has(n.classId)));
+  }, [selected, allActivity, people, classes]);
+
+  // Kind counts over the current scope (drives chip visibility + badges).
   const kindCounts = useMemo(() => {
-    const c = { all: notes.length };
+    const c = { all: scoped.length };
     Object.keys(INTERACTION_KINDS).forEach(k => { c[k] = 0; });
-    notes.forEach(n => {
-      const k = n.kind || 'note';
-      if (c[k] !== undefined) c[k] += 1;
-    });
+    scoped.forEach(n => { const k = n.kind || 'note'; if (c[k] !== undefined) c[k] += 1; });
     return c;
-  }, [notes]);
+  }, [scoped]);
 
-  // Filter chips: 'All' first, then each kind that has at least one row.
-  // Hiding zero-count chips keeps the bar tidy until booking/payment rows
-  // start arriving — they appear automatically when their first row lands.
+  // Chips: 'All' first, then each kind present in scope. Zero-count kinds are
+  // hidden so the bar only shows what's actually here (incl. booking/payment
+  // once those rows exist — they're real chips, just filterable like any other).
   const visibleChips = useMemo(() => {
     const chips = [{ key: 'all', label: 'All', count: kindCounts.all }];
     Object.entries(INTERACTION_KINDS).forEach(([k, meta]) => {
@@ -2976,81 +3086,161 @@ function CommsLogView({ notes, people, classes, nav }) {
     return chips;
   }, [kindCounts]);
 
-  const personOf = (id) => people.find(p => p.id === id);
-  const classOf  = (id) => classes.find(c => c.id === id);
+  // If the active chip's kind has no rows in this scope, fall back to 'all'.
+  const effectiveKind = (kindFilter !== 'all' && kindCounts[kindFilter] === 0) ? 'all' : kindFilter;
 
-  // Single-line snippet, ~140 chars. Mirrors InboxView.
+  // Final list: scope → kind filter → sort desc → slice. In entity mode we
+  // don't slice (show the full history); the global feed caps at MAX_ROWS.
+  const rows = useMemo(() => {
+    const ofKind = effectiveKind === 'all' ? scoped : scoped.filter(n => (n.kind || 'note') === effectiveKind);
+    const sorted = [...ofKind].sort((a, b) => new Date(b.date) - new Date(a.date));
+    return selected ? sorted : sorted.slice(0, MAX_ROWS);
+  }, [scoped, effectiveKind, selected]);
+
+  // Search results: match contacts + orgs by name (and contact email). Capped.
+  // Only computed while typing and nothing is selected yet.
+  const searchResults = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const pHits = people
+      .filter(p => p.name?.toLowerCase().includes(q) || (p.email||'').toLowerCase().includes(q))
+      .slice(0, 6)
+      .map(p => ({ type:'person', id:p.id, name:p.name, sub: p.email || (orgs.find(o=>o.id===p.orgId)?.name) || '' }));
+    const oHits = orgs
+      .filter(o => o.name?.toLowerCase().includes(q))
+      .slice(0, 4)
+      .map(o => ({ type:'org', id:o.id, name:o.name, sub: 'Organisation' }));
+    return [...pHits, ...oHits];
+  }, [query, people, orgs]);
+
   const snippet = (t) => {
     const s = String(t || '').replace(/\s+/g, ' ').trim();
     return s.length > 140 ? s.slice(0, 140) + '…' : s;
   };
 
-  // Row click target. Person takes priority — if a row is anchored to a
-  // person we go to their detail. Class-only rows (rare: a note attached
-  // to a class but not a person) go to ClassDetail. Orphan rows (Inbox
-  // candidates that haven't been assigned yet) get no nav — they belong
-  // in Inbox, not here. Returning null disables the cursor:pointer too.
   const targetFor = (n) => {
-    if (n.personId) return () => nav('person_detail', { personId: n.personId, highlightNoteId: n.id });
-    if (n.classId)  return () => nav('class_detail',  { classId: n.classId });
+    // Derived booking rows are about the class — click through to it.
+    if (n._derived && n.kind === 'booking' && n.classId) {
+      return () => nav('class_detail', { classId: n.classId });
+    }
+    // Real interactions highlight the specific note on the person's page;
+    // derived rows (e.g. package purchases) just open the person.
+    if (n.personId) {
+      return () => nav('person_detail', n._derived ? { personId: n.personId } : { personId: n.personId, highlightNoteId: n.id });
+    }
+    if (n.classId) return () => nav('class_detail', { classId: n.classId });
     return null;
   };
+
+  const pickEntity = (hit) => { setSelected({ type: hit.type, id: hit.id }); setQuery(''); setKindFilter('all'); };
+  const clearEntity = () => { setSelected(null); setKindFilter('all'); };
 
   return (
     <div style={{padding:'24px 32px',maxWidth:920}}>
       <div style={{display:'flex',alignItems:'baseline',gap:14,marginBottom:6}}>
         <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:600,color:C.text,margin:0}}>
-          Comms Log
+          Recent Activity
         </h1>
         <span style={{color:C.muted,fontSize:13}}>
-          {filtered.length === 0
-            ? 'nothing yet'
-            : `showing ${filtered.length}${filtered.length === MAX_ROWS ? ' (most recent)' : ''}`}
+          {rows.length === 0
+            ? (selected ? 'no activity' : 'nothing yet')
+            : (selected ? `${rows.length} item${rows.length!==1?'s':''}` : `latest ${rows.length}`)}
         </span>
       </div>
-      <p style={{color:C.muted,fontSize:13,marginTop:4,marginBottom:20,maxWidth:560,lineHeight:1.5}}>
-        Every note, call, email, meeting, and form submission across all contacts —
-        most recent first. Click any row to open the linked contact.
-      </p>
 
-      {/* Filter chips */}
-      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:20}}>
-        {visibleChips.map(chip => {
-          const active = kindFilter === chip.key;
-          const activeColor = chip.meta ? chip.meta.color : C.gold;
-          const activeBg    = chip.meta ? chip.meta.bg    : C.goldBg;
-          return (
-            <button key={chip.key} onClick={() => setKindFilter(chip.key)}
-              style={{
-                background: active ? activeBg : C.surf,
-                border:     `1px solid ${active ? activeColor+'aa' : C.border}`,
-                color:      active ? activeColor : C.muted,
-                cursor:     'pointer', borderRadius:20, fontSize:11.5, padding:'3px 10px',
-                fontFamily: "'Jost',sans-serif",
-                fontWeight: active ? 600 : 400,
-                letterSpacing:'0.3px',
-                display:'inline-flex', alignItems:'center', gap:5,
-              }}>
-              {chip.meta && <span style={{fontSize:11,lineHeight:1}}>{chip.meta.icon}</span>}
-              {chip.label}{chip.count > 0 ? ` · ${chip.count}` : ''}
-            </button>
-          );
-        })}
+      {/* Search box (contacts + orgs). Selecting a result switches the page
+          into entity mode; clearing returns to the global feed. */}
+      <div style={{position:'relative',marginTop:14,marginBottom:18,maxWidth:440}}>
+        {selected ? (
+          // Selected-entity pill: shows who/what is scoped, with a clear (×).
+          <div style={{display:'flex',alignItems:'center',gap:10,background:C.goldBg,border:`1px solid ${C.gold}88`,borderRadius:8,padding:'9px 12px'}}>
+            <span style={{fontSize:13,opacity:0.8}}>{selected.type==='org' ? '⛁' : '◉'}</span>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{color:C.text,fontSize:14,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                {selectedRecord ? selectedRecord.name : 'Unknown'}
+              </div>
+              <div style={{color:C.muted,fontSize:11}}>
+                {selected.type==='org' ? 'All activity for this organisation' : 'All activity for this contact'}
+              </div>
+            </div>
+            <button onClick={clearEntity} title="Clear"
+              style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:16,lineHeight:1,padding:'2px 4px'}}>×</button>
+          </div>
+        ) : (
+          <>
+            <input
+              value={query}
+              onChange={e=>setQuery(e.target.value)}
+              placeholder="Search a contact or organisation…"
+              style={{width:'100%',boxSizing:'border-box',background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'9px 12px',color:C.text,fontSize:13,fontFamily:"'Jost',sans-serif",outline:'none'}}
+              onFocus={e=>e.currentTarget.style.borderColor=C.gold+'88'}
+              onBlur={e=>e.currentTarget.style.borderColor=C.border}
+            />
+            {searchResults.length > 0 && (
+              <div style={{position:'absolute',top:'100%',left:0,right:0,marginTop:4,background:C.surf,border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden',zIndex:20,boxShadow:'0 8px 24px rgba(0,0,0,0.4)'}}>
+                {searchResults.map(hit => (
+                  <div key={`${hit.type}_${hit.id}`} onClick={()=>pickEntity(hit)}
+                    style={{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',cursor:'pointer',borderBottom:`1px solid ${C.border}`}}
+                    onMouseEnter={e=>e.currentTarget.style.background=C.active}
+                    onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                    <span style={{fontSize:13,opacity:0.7,width:16,flexShrink:0}}>{hit.type==='org'?'⛁':'◉'}</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{color:C.text,fontSize:13,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{hit.name}</div>
+                      {hit.sub && <div style={{color:C.muted,fontSize:11,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{hit.sub}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </div>
 
-      {filtered.length === 0 ? (
-        <Empty text={kindFilter === 'all'
-          ? 'No activity yet. Logged notes, calls, emails and form submissions will appear here.'
-          : `No ${(INTERACTION_KINDS[kindFilter]?.label || 'item').toLowerCase()} activity yet.`} />
+      {!selected && (
+        <p style={{color:C.muted,fontSize:13,marginTop:0,marginBottom:18,maxWidth:560,lineHeight:1.5}}>
+          Everything happening across all contacts — most recent first. Search above to
+          see the full history for one contact or organisation.
+        </p>
+      )}
+
+      {/* Kind filter chips */}
+      {visibleChips.length > 1 && (
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:20}}>
+          {visibleChips.map(chip => {
+            const active = effectiveKind === chip.key;
+            const activeColor = chip.meta ? chip.meta.color : C.gold;
+            const activeBg    = chip.meta ? chip.meta.bg    : C.goldBg;
+            return (
+              <button key={chip.key} onClick={() => setKindFilter(chip.key)}
+                style={{
+                  background: active ? activeBg : C.surf,
+                  border:     `1px solid ${active ? activeColor+'aa' : C.border}`,
+                  color:      active ? activeColor : C.muted,
+                  cursor:     'pointer', borderRadius:20, fontSize:11.5, padding:'3px 10px',
+                  fontFamily: "'Jost',sans-serif",
+                  fontWeight: active ? 600 : 400, letterSpacing:'0.3px',
+                  display:'inline-flex', alignItems:'center', gap:5,
+                }}>
+                {chip.meta && <span style={{fontSize:11,lineHeight:1}}>{chip.meta.icon}</span>}
+                {chip.label}{chip.count > 0 ? ` · ${chip.count}` : ''}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <Empty text={selected
+          ? 'No activity recorded for this ' + (selected.type==='org'?'organisation':'contact') + ' yet.'
+          : (effectiveKind === 'all'
+              ? 'No activity yet. Logged notes, calls, emails and form submissions will appear here.'
+              : `No ${(INTERACTION_KINDS[effectiveKind]?.label || 'item').toLowerCase()} activity yet.`)} />
       ) : (
         <div style={{display:'flex',flexDirection:'column',gap:10}}>
-          {filtered.map(n => {
+          {rows.map(n => {
             const meta = INTERACTION_KINDS[n.kind] || INTERACTION_KINDS.note;
             const person = personOf(n.personId);
             const cls    = classOf(n.classId);
-            // Counterparty rules mirror InboxView — sender for inbound,
-            // recipient for outbound. Only shown for rows with raw email
-            // addresses (worker/form/brevo sources), not manual notes.
             const counterparty = n.direction === 'outbound'
               ? (n.toEmail || n.fromEmail)
               : (n.fromEmail || n.toEmail);
@@ -3067,7 +3257,6 @@ function CommsLogView({ notes, people, classes, nav }) {
                 }}
                 onMouseEnter={e=>{ if(clickable) e.currentTarget.style.background = C.active; }}
                 onMouseLeave={e=>{ if(clickable) e.currentTarget.style.background = C.card; }}>
-                {/* Top row: kind chip, direction, person/class, date */}
                 <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,flexWrap:'wrap'}}>
                   <span style={{
                     display:'inline-flex',alignItems:'center',gap:5,
@@ -3083,10 +3272,6 @@ function CommsLogView({ notes, people, classes, nav }) {
                       {n.direction}
                     </span>
                   )}
-                  {/* Anchor — person primary, class secondary, orphan label
-                      for inbox-candidate rows that snuck through (shouldn't
-                      really happen since we filter inbox rows by personId
-                      IS NULL, but defensive). */}
                   {person ? (
                     <span style={{color:C.text,fontSize:13,fontWeight:500}}>{person.name}</span>
                   ) : cls ? (
@@ -3096,22 +3281,18 @@ function CommsLogView({ notes, people, classes, nav }) {
                   ) : (
                     <span style={{color:C.muted,fontSize:13,fontStyle:'italic'}}>Unassigned</span>
                   )}
-                  {/* Counterparty email address (when present and not redundant
-                      with person name) — small, muted, secondary. */}
                   {counterparty && !person && (
                     <span style={{color:C.muted,fontSize:12}}>{counterparty}</span>
                   )}
                   <span style={{marginLeft:'auto',color:C.muted,fontSize:11}}>{fmtRel(n.date)}</span>
                 </div>
 
-                {/* Subject (email/form) */}
                 {n.subject && (
                   <div style={{color:C.gold,fontSize:13,fontWeight:500,marginBottom:6}}>
                     {n.subject}
                   </div>
                 )}
 
-                {/* Body snippet */}
                 <div style={{color:C.text,fontSize:13,lineHeight:1.5,opacity:0.9}}>
                   {snippet(n.text)}
                 </div>
@@ -3338,9 +3519,51 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
   const [tab, setTab] = useState('notes');
   const [flashId, setFlashId] = useState(null);
   const [filterKind, setFilterKind] = useState('all');
-  const visibleNotes = filterKind==='all' ? pNotes : pNotes.filter(n => (n.kind||'note')===filterKind);
+  // If the active filter points at a kind with no items (e.g. the last call
+  // was deleted and its chip vanished), fall back to showing all — otherwise
+  // the user is stranded on an empty list with no chip to click back to.
+  const effectiveFilter = (filterKind!=='all' && !pNotes.some(n => (n.kind||'note')===filterKind)) ? 'all' : filterKind;
+  const visibleNotes = effectiveFilter==='all' ? pNotes : pNotes.filter(n => (n.kind||'note')===effectiveFilter);
   const impNotes = visibleNotes.filter(n=>n.important), regNotes = visibleNotes.filter(n=>!n.important);
   const pPkgs=packages.filter(pk=>pk.personId===person.id);
+  // Payments tab data: three sources merged into one chronological list —
+  //   • drop-in payments  (attendance.paymentStatus==='paid', has paidAmount)
+  //   • package purchases (packages with a purchase date / amount)
+  //   • unpaid-but-owed   (attendance.paymentStatus==='unpaid' on a class with a
+  //                         rate > 0, i.e. money outstanding for a session)
+  // Package-funded sessions aren't listed individually here — they're covered by
+  // the package purchase row (the lump payment); listing each deduction too would
+  // double-count money. Each entry has a stable id so it can expand inline.
+  const pAttendance = attendance.filter(a => a.personId === person.id);
+  const pPayments = useMemo(() => {
+    const rows = [];
+    pAttendance.forEach(a => {
+      const cls = classes.find(c => c.id === a.classId);
+      if (!cls) return;
+      if (a.paymentStatus === 'paid') {
+        rows.push({ id:`drop_${a.id}`, kind:'drop_in', date:cls.date, amount:a.paidAmount ?? null,
+          title:cls.name, classId:cls.id, status:'paid' });
+      } else if (a.paymentStatus !== 'package') {
+        // unpaid (or any non-package, non-paid status) — owed iff the class has a rate
+        const owed = (cls.paymentModel !== 'org') ? (cls.rate || 0) : 0;
+        if (owed > 0) {
+          rows.push({ id:`owed_${a.id}`, kind:'owed', date:cls.date, amount:owed,
+            title:cls.name, classId:cls.id, status:'unpaid' });
+        }
+      }
+    });
+    pPkgs.forEach(pk => {
+      if (pk.datePurchased || pk.amountPaid) {
+        rows.push({ id:`pkg_${pk.id}`, kind:'package', date:pk.datePurchased, amount:pk.amountPaid ?? null,
+          title:pk.name, packageId:pk.id, paidVia:pk.paidVia, status:'paid' });
+      }
+    });
+    return rows.sort((x,y)=> new Date(y.date||0) - new Date(x.date||0));
+  }, [pAttendance, pPkgs, classes]);
+  const paidTotal = pPayments.filter(r=>r.status==='paid').reduce((s,r)=>s+(r.amount||0),0);
+  const owedTotal = pPayments.filter(r=>r.status==='unpaid').reduce((s,r)=>s+(r.amount||0),0);
+  const [expandedPays, setExpandedPays] = useState(()=>new Set());
+  const togglePay = (id) => setExpandedPays(prev => { const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
   // Packages collapse by default — summary only (header + progress bar). Click expands
   // to reveal linked sessions, manual offset controls, and notes. After 5 packages,
   // the list itself becomes scrollable (mirrors the class-history cap pattern).
@@ -3424,45 +3647,59 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
             {person.notes&&<div style={{borderTop:`1px solid ${C.border}`,marginTop:14,paddingTop:12,color:C.muted,fontSize:13,lineHeight:1.6}}>{person.notes}</div>}
           </div>
           <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'16px 20px'}}>
-            <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:12}}>CLASS HISTORY</div>
+            <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:12}}>BOOKINGS</div>
             {pClasses.length?(
               // Cap at ~8 rows visible (~38px each); scroll for the rest.
               <div style={{maxHeight:304,overflowY:'auto',paddingRight:4}}>
                 {pClasses.map(c=>{
                   const att=attendance.find(a=>a.classId===c.id&&a.personId===person.id);
-                  return (<div key={c.id} onClick={()=>nav('class_detail',{classId:c.id})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:`1px solid ${C.border}`,cursor:'pointer'}}><div><div style={{color:C.text,fontSize:13}}>{c.name}</div><div style={{color:C.muted,fontSize:11}}>{fmt(c.date)}</div></div><div style={{width:8,height:8,borderRadius:'50%',background:att?.attended?C.green:C.red}} /></div>);
+                  // Light payment-status hint. Jesse is undecided on showing this —
+                  // to remove it, delete the `payInfo`/`payHint` lines and the
+                  // {payHint} span below; nothing else depends on them.
+                  const ps = att?.paymentStatus || 'unpaid';
+                  const payInfo = ps==='paid' ? {t:'paid', c:C.green} : ps==='package' ? {t:'pkg', c:C.blue} : {t:'unpaid', c:C.muted};
+                  const payHint = <span style={{fontSize:10,color:payInfo.c,opacity:0.85,letterSpacing:'0.3px'}}>{payInfo.t}</span>;
+                  return (<div key={c.id} onClick={()=>nav('class_detail',{classId:c.id})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:`1px solid ${C.border}`,cursor:'pointer'}}><div><div style={{color:C.text,fontSize:13}}>{c.name}</div><div style={{color:C.muted,fontSize:11}}>{fmt(c.date)}</div></div><div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>{payHint}<div title={att?.attended?'Attended':'Did not attend'} style={{width:8,height:8,borderRadius:'50%',background:att?.attended?C.green:C.red}} /></div></div>);
                 })}
               </div>
-            ):<div style={{color:C.muted,fontSize:13}}>No classes yet</div>}
+            ):<div style={{color:C.muted,fontSize:13}}>No bookings yet</div>}
           </div>
         </div>
         <div>
-          <Tabs tabs={[{id:'notes',label:`Notes (${pNotes.length})`},{id:'packages',label:`Packages (${pPkgs.length})`}]} active={tab} onChange={setTab} />
+          <Tabs tabs={[{id:'notes',label:`Comms (${pNotes.length})`},{id:'packages',label:`Packages (${pPkgs.length})`},{id:'payments',label:`Payments (${pPayments.length})`}]} active={tab} onChange={setTab} />
           {tab==='notes'&&<>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16,gap:12,flexWrap:'wrap'}}>
               <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-                {['all', ...Object.keys(INTERACTION_KINDS)].map(k => {
-                  const active = filterKind === k;
-                  const meta = k==='all' ? null : INTERACTION_KINDS[k];
-                  const label = k==='all' ? 'All' : meta.label + 's';
-                  const icon = k==='all' ? '◯' : meta.icon;
-                  const count = k==='all' ? pNotes.length : pNotes.filter(n=>(n.kind||'note')===k).length;
-                  return (
-                    <button key={k} onClick={()=>setFilterKind(k)} title={label} style={{
-                      background: active ? (meta?meta.bg:C.surf) : 'transparent',
-                      color: active ? (meta?meta.color:C.text) : C.muted,
-                      border: `1px solid ${active ? (meta?meta.color+'88':C.border) : C.border}`,
-                      borderRadius:4, fontSize:11, fontWeight:500, letterSpacing:'0.3px',
-                      padding:'4px 10px', cursor:'pointer',
-                      fontFamily:"'Jost',sans-serif",
-                      display:'inline-flex', alignItems:'center', gap:5,
-                    }}>
-                      <span style={{fontSize:11,lineHeight:1}}>{icon}</span>
-                      <span data-chip-label>{label}</span>
-                      <span style={{opacity:0.55,fontSize:10}}>{count}</span>
-                    </button>
-                  );
-                })}
+                {(() => {
+                  // Comms kinds only — booking/payment are transactional and will
+                  // live in their own list (Phase 7), so they're excluded here.
+                  // We also hide any chip with zero items so the bar stays short:
+                  // only 'All' plus kinds actually present on this contact show.
+                  const COMMS_KINDS = ['note','call','email','meeting','form'];
+                  const chips = ['all', ...COMMS_KINDS.filter(k => pNotes.some(n => (n.kind||'note')===k))];
+                  return chips.map(k => {
+                    const active = effectiveFilter === k;
+                    const meta = k==='all' ? null : INTERACTION_KINDS[k];
+                    const label = k==='all' ? 'All' : meta.label + 's';
+                    const icon = k==='all' ? '◯' : meta.icon;
+                    const count = k==='all' ? pNotes.length : pNotes.filter(n=>(n.kind||'note')===k).length;
+                    return (
+                      <button key={k} onClick={()=>setFilterKind(k)} title={label} style={{
+                        background: active ? (meta?meta.bg:C.surf) : 'transparent',
+                        color: active ? (meta?meta.color:C.text) : C.muted,
+                        border: `1px solid ${active ? (meta?meta.color+'88':C.border) : C.border}`,
+                        borderRadius:4, fontSize:11, fontWeight:500, letterSpacing:'0.3px',
+                        padding:'4px 10px', cursor:'pointer',
+                        fontFamily:"'Jost',sans-serif",
+                        display:'inline-flex', alignItems:'center', gap:5,
+                      }}>
+                        <span style={{fontSize:11,lineHeight:1}}>{icon}</span>
+                        <span data-chip-label>{label}</span>
+                        <span style={{opacity:0.55,fontSize:10}}>{count}</span>
+                      </button>
+                    );
+                  });
+                })()}
               </div>
               {/* "+ Log ▾" dropdown — click to open menu, click an item to open
                   the form for that kind. Closes on outside-click or Escape (see
@@ -3510,7 +3747,7 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
             {addKind&&<NoteForm personId={person.id} classId={null} kind={addKind} onSave={n=>{onAddNote(n);setAddKind(null);}} onCancel={()=>setAddKind(null)} />}
             {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onClick={onEditNote?()=>onEditNote(n):undefined} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
             {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onClick={onEditNote?()=>onEditNote(n):undefined} highlight={flashId===n.id} />)}
-            {visibleNotes.length===0&&!addKind&&<Empty text={filterKind==='all' ? 'No notes yet' : `No ${INTERACTION_KINDS[filterKind].label.toLowerCase()}s logged yet`} />}
+            {visibleNotes.length===0&&!addKind&&<Empty text={effectiveFilter==='all' ? 'No comms yet' : `No ${INTERACTION_KINDS[effectiveFilter].label.toLowerCase()}s logged yet`} />}
           </>}
           {tab==='packages'&&<>
             <div style={{display:'flex',justifyContent:'flex-end',marginBottom:16}}><Btn small onClick={onAddPackage}>+ Add Package</Btn></div>
@@ -3592,6 +3829,72 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
             })}
             </div>
             ):<Empty text="No packages yet" />}
+          </>}
+          {tab==='payments'&&<>
+            {/* Summary line: money in vs outstanding. */}
+            <div style={{display:'flex',gap:10,marginBottom:16,flexWrap:'wrap'}}>
+              <div style={{flex:1,minWidth:120,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 14px'}}>
+                <div style={{color:C.muted,fontSize:10,letterSpacing:'0.4px',marginBottom:3}}>RECEIVED</div>
+                <div style={{color:C.green,fontSize:18,fontWeight:600}}>{fmtMoney(paidTotal)}</div>
+              </div>
+              <div style={{flex:1,minWidth:120,background:C.card,border:`1px solid ${owedTotal>0?C.red+'55':C.border}`,borderRadius:8,padding:'10px 14px'}}>
+                <div style={{color:C.muted,fontSize:10,letterSpacing:'0.4px',marginBottom:3}}>OUTSTANDING</div>
+                <div style={{color:owedTotal>0?C.red:C.muted,fontSize:18,fontWeight:600}}>{fmtMoney(owedTotal)}</div>
+              </div>
+            </div>
+            {pPayments.length ? (
+              <div style={pPayments.length>8 ? {maxHeight:560,overflowY:'auto',paddingRight:4} : undefined}>
+                {pPayments.map(r => {
+                  const meta = r.kind==='package' ? {label:'Package', icon:'🎟', color:C.blue}
+                             : r.kind==='drop_in' ? {label:'Drop-in', icon:'💷', color:C.green}
+                             : {label:'Owed', icon:'⚠', color:C.red};
+                  const open = expandedPays.has(r.id);
+                  return (
+                    <div key={r.id} style={{background:C.card,border:`1px solid ${r.status==='unpaid'?C.red+'44':C.border}`,borderRadius:8,marginBottom:8,overflow:'hidden'}}>
+                      <div onClick={()=>togglePay(r.id)} style={{display:'flex',alignItems:'center',gap:12,padding:'11px 14px',cursor:'pointer'}}>
+                        <span style={{fontSize:14,width:18,textAlign:'center',flexShrink:0}}>{meta.icon}</span>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{color:C.text,fontSize:13,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.title}</div>
+                          <div style={{color:C.muted,fontSize:11}}>{meta.label}{r.date?` · ${fmt(r.date)}`:''}</div>
+                        </div>
+                        <div style={{color:r.status==='unpaid'?C.red:C.gold,fontSize:14,fontWeight:600,flexShrink:0}}>
+                          {r.amount!=null ? fmtMoney(r.amount) : '—'}
+                        </div>
+                        <span aria-hidden="true" style={{color:C.muted,fontSize:11,transition:'transform 0.18s',transform:open?'rotate(0deg)':'rotate(-90deg)',display:'inline-block',flexShrink:0}}>▾</span>
+                      </div>
+                      {open && (
+                        <div style={{padding:'0 14px 12px 44px',borderTop:`1px solid ${C.border}`}}>
+                          <div style={{display:'flex',flexDirection:'column',gap:6,paddingTop:10}}>
+                            <div style={{display:'flex',justifyContent:'space-between',fontSize:12}}>
+                              <span style={{color:C.muted}}>Status</span>
+                              <span style={{color:r.status==='unpaid'?C.red:C.green,fontWeight:500}}>{r.status==='unpaid'?'Outstanding':'Paid'}</span>
+                            </div>
+                            {r.paidVia && (
+                              <div style={{display:'flex',justifyContent:'space-between',fontSize:12}}>
+                                <span style={{color:C.muted}}>Method</span>
+                                <span style={{color:C.text}}>{PAY_VIA[r.paidVia]||r.paidVia}</span>
+                              </div>
+                            )}
+                            {r.classId && (
+                              <div onClick={()=>nav('class_detail',{classId:r.classId})}
+                                style={{color:C.blue,fontSize:12,cursor:'pointer',marginTop:2}}>
+                                Open session →
+                              </div>
+                            )}
+                            {r.packageId && (
+                              <div onClick={()=>{ setTab('packages'); }}
+                                style={{color:C.blue,fontSize:12,cursor:'pointer',marginTop:2}}>
+                                View package →
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : <Empty text="No payments recorded yet" />}
           </>}
         </div>
       </div>
@@ -4698,7 +5001,7 @@ export default function FeltBodyCRM() {
     switch (prev.name) {
       case 'dashboard': label = 'Dashboard'; break;
       case 'inbox': label = 'Inbox'; break;
-      case 'comms_log': label = 'Comms Log'; break;
+      case 'comms_log': label = 'Recent Activity'; break;
       case 'classes': label = 'All Classes'; break;
       case 'week_view': label = 'Week View'; break;
       case 'forms_list': label = 'Forms'; break;
@@ -5293,7 +5596,7 @@ export default function FeltBodyCRM() {
         attendance={attendance} classes={classes}
         onAssign={assignNoteToPerson}
         onDiscard={deleteNote} />;
-      case 'comms_log': return <CommsLogView notes={notes} people={people} classes={classes} nav={nav} />;
+      case 'comms_log': return <RecentActivityView notes={notes} people={people} classes={classes} orgs={orgs} attendance={attendance} packages={packages} nav={nav} />;
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;
       case 'org_detail': {
         const org=orgs.find(o=>o.id===orgId); if(!org) return <Empty text="Not found" />;
