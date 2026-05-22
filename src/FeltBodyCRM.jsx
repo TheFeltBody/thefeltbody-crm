@@ -26,6 +26,7 @@ const ORG_META = {
   care_home:{ label:'Care Home', color:'#4db879', bg:'#132413' },
   gym:{ label:'Gym', color:'#6ba3d4', bg:'#131d2a' },
   other:{ label:'Organisation', color:'#c9a84c', bg:'#1b2213' },
+  personal:{ label:'Personal', color:'#c98fd4', bg:'#241328' },
 };
 const PERSON_ROLES = {
   resident:{ label:'Resident', color:'#4db879', bg:'#132413' },
@@ -34,6 +35,7 @@ const PERSON_ROLES = {
   tt_prospect:{ label:'TT Prospect', color:'#c9a84c', bg:'#1b2213' },
   retreat_interest:{ label:'Retreat Interest', color:'#c97070', bg:'#2a1313' },
   workshop_interest:{ label:'Workshop Interest', color:'#6ab86a', bg:'#132413' },
+  personal_contact:{ label:'Personal Contact', color:'#c98fd4', bg:'#241328' },
 };
 const SOURCES = {
   'thefeltbody.com':{ label:'thefeltbody.com', icon:'⬡' },
@@ -2440,7 +2442,7 @@ function SidebarCustomTypeItem({ active, indent, label, icon, count, onNav, onDe
 }
 
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────────
-function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles, onAddOrgType, onAddPersonRole, orgs, people, onRemoveOrgType, onRemovePersonRole, onSignOut }) {
+function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles, onAddOrgType, onAddPersonRole, orgs, people, onRemoveOrgType, onRemovePersonRole, onSignOut, mode='client', onSwitchMode, onAddPersonalOrg }) {
   const unpaidInvoices = invoices.filter(i=>i.status!=='paid').length;
   const inboxCount = notes.filter(n => !n.personId).length;
 
@@ -2458,6 +2460,9 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
   // When navigating into a section, open it (and close the others).
   useEffect(()=>{ if(sectionForView) setOpenSection(sectionForView); }, [sectionForView]);
   const toggleSection = (key) => setOpenSection(cur => cur === key ? null : key);
+  // Mode-switcher dropdown (Client ⇄ Personal record system)
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const isPersonal = mode === 'personal';
 
   const Item = ({ name, params={}, label, icon, indent, badge, onClick, isActive }) => {
     const active = isActive !== undefined ? isActive : (view.name===name && Object.entries(params).every(([k,v])=>view[k]===v));
@@ -2473,12 +2478,12 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
   };
 
   // Small "+ Add type" affordance that lives at the end of an expanded sub-list.
-  const AddTypeAction = ({ onClick }) => (
+  const AddTypeAction = ({ onClick, label }) => (
     <div onClick={onClick} style={{display:'flex',alignItems:'center',gap:9,padding:'6px 20px 10px 28px',color:C.muted,cursor:'pointer',fontSize:11.5,fontStyle:'italic',opacity:0.75,transition:'all 0.12s'}}
       onMouseEnter={e=>{e.currentTarget.style.color=C.gold;e.currentTarget.style.opacity=1;}}
       onMouseLeave={e=>{e.currentTarget.style.color=C.muted;e.currentTarget.style.opacity=0.75;}}>
       <span style={{fontSize:12,width:14,flexShrink:0}}>+</span>
-      <span>Add type…</span>
+      <span>{label ? `Add ${label}…` : 'Add type…'}</span>
     </div>
   );
 
@@ -2510,59 +2515,98 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
 
   return (
     <div style={{width:216,background:C.sbg,borderRight:`1px solid ${C.border}`,display:'flex',flexDirection:'column',flexShrink:0,overflowY:'auto'}}>
-      <div style={{padding:'24px 20px 12px'}}>
+      <div style={{padding:'24px 20px 12px',position:'relative'}}>
         <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:14,color:C.gold,letterSpacing:'1.5px',fontWeight:600}}>THE FELT BODY</div>
-        <div style={{color:C.muted,fontSize:9,letterSpacing:'3px',marginTop:2,opacity:0.6}}>CLIENT RECORD SYSTEM</div>
+        <div onClick={()=>setModeMenuOpen(o=>!o)}
+          style={{display:'flex',alignItems:'center',gap:6,marginTop:2,cursor:'pointer'}}
+          title="Switch record system">
+          <span style={{color:isPersonal?C.blue:C.muted,fontSize:9,letterSpacing:'3px',opacity:isPersonal?0.85:0.6}}>
+            {isPersonal ? 'PERSONAL RECORD SYSTEM' : 'CLIENT RECORD SYSTEM'}
+          </span>
+          <span style={{color:C.muted,fontSize:8,opacity:0.6,transform:modeMenuOpen?'rotate(180deg)':'none',transition:'transform 0.12s'}}>▾</span>
+        </div>
+        {modeMenuOpen && (
+          <div style={{position:'absolute',top:'100%',left:16,right:16,marginTop:2,background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,overflow:'hidden',zIndex:30,boxShadow:'0 8px 24px rgba(0,0,0,0.4)'}}>
+            {[{k:'client',l:'Client Record System',c:C.gold},{k:'personal',l:'Personal Record System',c:C.blue}].map(opt=>(
+              <div key={opt.k}
+                onClick={()=>{ setModeMenuOpen(false); onSwitchMode && onSwitchMode(opt.k); }}
+                style={{padding:'9px 12px',fontSize:11,letterSpacing:'0.5px',cursor:'pointer',color:mode===opt.k?opt.c:C.muted,background:mode===opt.k?C.active:'transparent',borderLeft:`2px solid ${mode===opt.k?opt.c:'transparent'}`}}
+                onMouseEnter={e=>{if(mode!==opt.k){e.currentTarget.style.color=C.text;e.currentTarget.style.background=C.card;}}}
+                onMouseLeave={e=>{if(mode!==opt.k){e.currentTarget.style.color=C.muted;e.currentTarget.style.background='transparent';}}}>
+                {mode===opt.k?'● ':'○ '}{opt.l}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       <Item name="dashboard" label="Dashboard" icon="◈" />
-      <Item name="inbox" label="Inbox" icon="✉" badge={inboxCount} />
-      <Item name="comms_log" label="Recent Activity" icon="◷" />
+      {!isPersonal && <Item name="inbox" label="Inbox" icon="✉" badge={inboxCount} />}
+      {!isPersonal && <Item name="comms_log" label="Recent Activity" icon="◷" />}
+      {isPersonal && <Item name="birthdays" label="Birthdays" icon="🎂" />}
 
       <SectionToggle label="Organisations" sectionKey="orgs" />
       {openSection==='orgs' && (
         <>
-          <Item name="org_list" params={{orgType:'all'}} label="All Organisations" icon="⛁" indent />
-          <Item name="org_list" params={{orgType:'care_home'}} label="Care Homes" icon="⌂" indent />
-          <Item name="org_list" params={{orgType:'gym'}} label="Gyms" icon="◎" indent />
-          <Item name="org_list" params={{orgType:'other'}} label="Other Orgs" icon="◇" indent />
-          {customOrgTypes.map(t => {
-            const count = orgs.filter(o=>o.type===t.key).length;
-            const active = view.name==='org_list' && view.orgType===t.key;
-            return <SidebarCustomTypeItem key={t.key}
-              active={active} indent
-              label={`${t.label}s`} icon={t.icon||'◇'} count={count}
-              onNav={()=>nav('org_list',{orgType:t.key})}
-              onDelete={()=>onRemoveOrgType && onRemoveOrgType(t.key)} />;
-          })}
-          <AddTypeAction onClick={onAddOrgType} />
+          {isPersonal ? (
+            <>
+              {orgs.filter(o=>o.type==='personal').map(o => (
+                <Item key={o.id} name="org_detail" params={{orgId:o.id}} label={o.name} icon="◈" indent
+                  isActive={view.name==='org_detail' && view.orgId===o.id} />
+              ))}
+              <AddTypeAction onClick={onAddPersonalOrg} label="Personal org" />
+            </>
+          ) : (
+            <>
+              <Item name="org_list" params={{orgType:'all'}} label="All Organisations" icon="⛁" indent />
+              <Item name="org_list" params={{orgType:'care_home'}} label="Care Homes" icon="⌂" indent />
+              <Item name="org_list" params={{orgType:'gym'}} label="Gyms" icon="◎" indent />
+              <Item name="org_list" params={{orgType:'other'}} label="Other Orgs" icon="◇" indent />
+              {customOrgTypes.filter(t=>t.key!=='personal').map(t => {
+                const count = orgs.filter(o=>o.type===t.key).length;
+                const active = view.name==='org_list' && view.orgType===t.key;
+                return <SidebarCustomTypeItem key={t.key}
+                  active={active} indent
+                  label={`${t.label}s`} icon={t.icon||'◇'} count={count}
+                  onNav={()=>nav('org_list',{orgType:t.key})}
+                  onDelete={()=>onRemoveOrgType && onRemoveOrgType(t.key)} />;
+              })}
+              <AddTypeAction onClick={onAddOrgType} />
+            </>
+          )}
         </>
       )}
 
-      <SectionToggle label="People" sectionKey="people" />
+      <SectionToggle label={isPersonal ? "Contacts" : "People"} sectionKey="people" />
       {openSection==='people' && (
         <>
-          <Item name="people" params={{personType:'all'}} label="All Contacts" icon="◉" indent />
-          <Item name="people" params={{personType:'private_client'}} label="Private Clients" icon="▸" indent />
-          <Item name="people" params={{personType:'website_student'}} label="Students" icon="▸" indent />
-          <Item name="people" params={{personType:'resident'}} label="Residents" icon="▸" indent />
-          <Item name="people" params={{personType:'tt_prospect'}} label="TT Prospects" icon="▸" indent />
-          <Item name="people" params={{personType:'retreat_interest'}} label="Retreat Interest" icon="▸" indent />
-          <Item name="people" params={{personType:'workshop_interest'}} label="Workshop Interest" icon="▸" indent />
-          {customPersonRoles.map(t => {
-            const count = people.filter(p=>(p.roles||[]).includes(t.key)).length;
-            const active = view.name==='people' && view.personType===t.key;
-            return <SidebarCustomTypeItem key={t.key}
-              active={active} indent
-              label={`${t.label}s`} icon="▸" count={count}
-              onNav={()=>nav('people',{personType:t.key})}
-              onDelete={()=>onRemovePersonRole && onRemovePersonRole(t.key)} />;
-          })}
-          <AddTypeAction onClick={onAddPersonRole} />
+          {isPersonal ? (
+            <Item name="people" params={{personType:'personal_contact'}} label="All Personal Contacts" icon="◉" indent />
+          ) : (
+            <>
+              <Item name="people" params={{personType:'all'}} label="All Contacts" icon="◉" indent />
+              <Item name="people" params={{personType:'private_client'}} label="Private Clients" icon="▸" indent />
+              <Item name="people" params={{personType:'website_student'}} label="Students" icon="▸" indent />
+              <Item name="people" params={{personType:'resident'}} label="Residents" icon="▸" indent />
+              <Item name="people" params={{personType:'tt_prospect'}} label="TT Prospects" icon="▸" indent />
+              <Item name="people" params={{personType:'retreat_interest'}} label="Retreat Interest" icon="▸" indent />
+              <Item name="people" params={{personType:'workshop_interest'}} label="Workshop Interest" icon="▸" indent />
+              {customPersonRoles.filter(t=>t.key!=='personal_contact').map(t => {
+                const count = people.filter(p=>(p.roles||[]).includes(t.key)).length;
+                const active = view.name==='people' && view.personType===t.key;
+                return <SidebarCustomTypeItem key={t.key}
+                  active={active} indent
+                  label={`${t.label}s`} icon="▸" count={count}
+                  onNav={()=>nav('people',{personType:t.key})}
+                  onDelete={()=>onRemovePersonRole && onRemovePersonRole(t.key)} />;
+              })}
+              <AddTypeAction onClick={onAddPersonRole} />
+            </>
+          )}
         </>
       )}
 
-      <SectionToggle label="Sessions" sectionKey="sessions" />
-      {openSection==='sessions' && (
+      {!isPersonal && <SectionToggle label="Sessions" sectionKey="sessions" />}
+      {!isPersonal && openSection==='sessions' && (
         <>
           <Item name="week_view" label="Week View" icon="▦" indent />
           <Item name="classes" label="All Classes" icon="≡" indent />
@@ -2570,8 +2614,8 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
         </>
       )}
 
-      <SectionToggle label="Finance" sectionKey="finance" badge={unpaidInvoices} />
-      {openSection==='finance' && (
+      {!isPersonal && <SectionToggle label="Finance" sectionKey="finance" badge={unpaidInvoices} />}
+      {!isPersonal && openSection==='finance' && (
         <>
           <Item name="invoices" label="Invoices" icon="⬡" badge={unpaidInvoices} indent />
         </>
@@ -3093,6 +3137,78 @@ function AssignToPersonModal({ note, people, attendance, classes, onClose, onAss
 // silently. Without a feed, those rows pass under attention. This is the
 // "did anything happen?" surface — click any row to open the linked record.
 //
+// ─── BIRTHDAYS (personal mode) ────────────────────────────────────────────────
+// Chronological "who's next" list of personal contacts with a date of birth.
+// The whole point of capturing DOB on personal contacts: a glanceable upcoming-
+// birthday list so Jesse doesn't miss them. Sorted by days-until-next-birthday
+// (computed via birthdayInfo), nearest first. Contacts without a DOB are listed
+// separately at the bottom as a gentle prompt to fill them in.
+function BirthdaysView({ people, orgs, nav }) {
+  const personal = useMemo(() => people.filter(p => (p.roles||[]).includes('personal_contact')), [people]);
+  const withDob = useMemo(() => {
+    return personal
+      .filter(p => p.dateOfBirth)
+      .map(p => ({ p, b: birthdayInfo(p.dateOfBirth) }))
+      .filter(x => x.b)
+      .sort((a, b) => a.b.days - b.b.days);
+  }, [personal]);
+  const withoutDob = useMemo(() => personal.filter(p => !p.dateOfBirth), [personal]);
+  const orgName = (id) => orgs.find(o => o.id === id)?.name || '';
+
+  return (
+    <div style={{padding:'24px 32px',maxWidth:680}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
+        <span style={{fontSize:22}}>🎂</span>
+        <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:26,fontWeight:600,color:C.text,margin:0}}>Birthdays</h1>
+      </div>
+      <p style={{color:C.muted,fontSize:13,marginTop:0,marginBottom:22,lineHeight:1.5}}>
+        Upcoming birthdays across your personal contacts — soonest first.
+      </p>
+
+      {withDob.length === 0 && withoutDob.length === 0 && (
+        <Empty text="No personal contacts yet. Add some in Personal mode to track birthdays." />
+      )}
+
+      {withDob.map(({ p, b }) => (
+        <div key={p.id} onClick={()=>nav('person_detail',{personId:p.id})}
+          style={{display:'flex',alignItems:'center',gap:14,padding:'12px 14px',marginBottom:8,background:C.surf,border:`1px solid ${b.days<=7?C.gold+'66':C.border}`,borderRadius:10,cursor:'pointer'}}
+          onMouseEnter={e=>e.currentTarget.style.background=C.card}
+          onMouseLeave={e=>e.currentTarget.style.background=C.surf}>
+          <div style={{width:44,textAlign:'center',flexShrink:0}}>
+            <div style={{color:b.days<=7?C.gold:C.text,fontSize:20,fontWeight:600,lineHeight:1}}>{b.days===0?'🎉':b.days}</div>
+            <div style={{color:C.muted,fontSize:9,letterSpacing:'0.5px',marginTop:2}}>{b.days===0?'TODAY':b.days===1?'DAY':'DAYS'}</div>
+          </div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{color:C.text,fontSize:15,fontWeight:500}}>{p.name}</div>
+            <div style={{color:C.muted,fontSize:12,marginTop:2}}>
+              {b.label}{orgName(p.orgId) && <span style={{opacity:0.7}}> · {orgName(p.orgId)}</span>}
+            </div>
+          </div>
+          <div style={{color:C.muted,fontSize:12,flexShrink:0}}>{p.dateOfBirth}</div>
+        </div>
+      ))}
+
+      {withoutDob.length > 0 && (
+        <div style={{marginTop:24}}>
+          <div style={{color:C.muted,fontSize:11,letterSpacing:'1.5px',textTransform:'uppercase',marginBottom:10}}>No date of birth yet</div>
+          {withoutDob.map(p => (
+            <div key={p.id} onClick={()=>nav('person_detail',{personId:p.id})}
+              style={{display:'flex',alignItems:'center',gap:14,padding:'10px 14px',marginBottom:6,background:'transparent',border:`1px solid ${C.border}`,borderRadius:10,cursor:'pointer',opacity:0.7}}
+              onMouseEnter={e=>e.currentTarget.style.opacity=1}
+              onMouseLeave={e=>e.currentTarget.style.opacity=0.7}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{color:C.text,fontSize:14}}>{p.name}</div>
+                {orgName(p.orgId) && <div style={{color:C.muted,fontSize:12,marginTop:2}}>{orgName(p.orgId)}</div>}
+              </div>
+              <div style={{color:C.muted,fontSize:11,fontStyle:'italic',flexShrink:0}}>add DOB</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Path B note (2026-05-19): `interactions` is the universal event ledger.
 // Phase 7 Stripe Worker will write kind='booking'/'payment' rows; they show
 // here automatically. A chip lets the user hide transactional rows to focus
@@ -3170,15 +3286,17 @@ function RecentActivityView({ notes, people, classes, orgs, attendance, packages
   const searchResults = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
+    const personIsPersonal = p => (p.roles||[]).includes('personal_contact') && !(p.roles||[]).some(r => CLIENT_ROLES.includes(r));
     const pHits = people
       .filter(p => p.name?.toLowerCase().includes(q) || (p.email||'').toLowerCase().includes(q))
       .slice(0, 6)
-      .map(p => ({ type:'person', id:p.id, name:p.name, sub: p.email || (orgs.find(o=>o.id===p.orgId)?.name) || '' }));
+      .map(p => ({ type:'person', id:p.id, name:p.name, sub: p.email || (orgs.find(o=>o.id===p.orgId)?.name) || '', offWorld: personIsPersonal(p) }));
     const oHits = orgs
       .filter(o => o.name?.toLowerCase().includes(q))
       .slice(0, 4)
-      .map(o => ({ type:'org', id:o.id, name:o.name, sub: 'Organisation' }));
-    return [...pHits, ...oHits];
+      .map(o => ({ type:'org', id:o.id, name:o.name, sub: o.type==='personal' ? 'Personal' : 'Organisation', offWorld: o.type==='personal' }));
+    // On-world results first, off-world (personal) dimmed and after.
+    return [...pHits, ...oHits].sort((a,b) => (a.offWorld?1:0) - (b.offWorld?1:0));
   }, [query, people, orgs]);
 
   const snippet = (t) => {
@@ -3248,7 +3366,7 @@ function RecentActivityView({ notes, people, classes, orgs, attendance, packages
               <div style={{position:'absolute',top:'100%',left:0,right:0,marginTop:4,background:C.surf,border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden',zIndex:20,boxShadow:'0 8px 24px rgba(0,0,0,0.4)'}}>
                 {searchResults.map(hit => (
                   <div key={`${hit.type}_${hit.id}`} onClick={()=>pickEntity(hit)}
-                    style={{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',cursor:'pointer',borderBottom:`1px solid ${C.border}`}}
+                    style={{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',cursor:'pointer',borderBottom:`1px solid ${C.border}`,opacity:hit.offWorld?0.5:1}}
                     onMouseEnter={e=>e.currentTarget.style.background=C.active}
                     onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
                     <span style={{fontSize:13,opacity:0.7,width:16,flexShrink:0}}>{hit.type==='org'?'⛁':'◉'}</span>
@@ -3256,6 +3374,7 @@ function RecentActivityView({ notes, people, classes, orgs, attendance, packages
                       <div style={{color:C.text,fontSize:13,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{hit.name}</div>
                       {hit.sub && <div style={{color:C.muted,fontSize:11,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{hit.sub}</div>}
                     </div>
+                    {hit.offWorld && <span style={{fontSize:9,letterSpacing:'0.5px',color:C.blue,border:`1px solid ${C.blue}55`,borderRadius:10,padding:'1px 7px',flexShrink:0}}>PERSONAL</span>}
                   </div>
                 ))}
               </div>
@@ -4916,6 +5035,12 @@ function InvoiceDetail({ inv, org, onEdit, onStatusChange, nav, backInfo }) {
 export default function FeltBodyCRM() {
   const [history, setHistory] = useState([{ name:'dashboard' }]);
   const view = history[history.length - 1];
+  // App mode: 'client' (default) shows the client CRM; 'personal' shows the
+  // personal record system (Sienna World, Neighbours — friends/teachers/etc).
+  // UI lens only — one data store. Personal contacts carry the personal_contact
+  // role; personal orgs are type 'personal'. Switching mode filters what's shown
+  // and pre-tags new records, but does not partition the data.
+  const [mode, setMode] = useState('client');
   const [orgs, setOrgs] = useState(SEED.orgs);
   const [people, setPeople] = useState(SEED.people);
   const [series, setSeries] = useState(SEED.series);
@@ -5063,6 +5188,14 @@ export default function FeltBodyCRM() {
     });
   };
   const goBack = () => setHistory(h => h.length > 1 ? h.slice(0, -1) : h);
+  // Switch between client and personal record systems. Resets navigation to the
+  // dashboard so we never land on a section (e.g. Finance) that the new mode
+  // doesn't surface, and clears history so Back doesn't cross the boundary.
+  const switchMode = (m) => {
+    if (m === mode) return;
+    setMode(m);
+    setHistory([{ name:'dashboard' }]);
+  };
 // Compute a smart back label from the previous entry in the history stack
   const backInfo = useMemo(() => {
     if (history.length < 2) return null;
@@ -5658,7 +5791,9 @@ export default function FeltBodyCRM() {
   const renderView = () => {
     const { name, orgId, orgType, personType, personId, classId, invoiceId, highlightNoteId } = view;
     switch(name){
-      case 'dashboard': return <Dashboard orgs={orgs} people={people} classes={classes} attendance={attendance} notes={notes} packages={packages} invoices={invoices} nav={nav}
+      case 'dashboard':
+        if (mode === 'personal') return <BirthdaysView people={people} orgs={orgs} nav={nav} />;
+        return <Dashboard orgs={orgs} people={people} classes={classes} attendance={attendance} notes={notes} packages={packages} invoices={invoices} nav={nav}
         onAddClass={(date)=>setModal({type:'add_class', date})}
         onCompleteNote={clearNoteAction}
         onReopenNote={reopenNote} />;
@@ -5667,6 +5802,7 @@ export default function FeltBodyCRM() {
         onAssign={assignNoteToPerson}
         onDiscard={deleteNote} />;
       case 'comms_log': return <RecentActivityView notes={notes} people={people} classes={classes} orgs={orgs} attendance={attendance} packages={packages} nav={nav} />;
+      case 'birthdays': return <BirthdaysView people={people} orgs={orgs} nav={nav} />;
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;
       case 'org_detail': {
         const org=orgs.find(o=>o.id===orgId); if(!org) return <Empty text="Not found" />;
@@ -5678,7 +5814,7 @@ export default function FeltBodyCRM() {
           onEditInvoice={inv=>setModal({type:'edit_invoice',inv})}
           onUpdateInvoiceStatus={setInvoiceStatus} />;
       }
-      case 'people': return <PeopleList people={people} orgs={orgs} personType={personType} nav={nav} onAdd={()=>setModal({type:'add_person',personType:personType==='all'?'private_client':personType})} onMerge={(a,b)=>setModal({type:'merge_people',personA:a,personB:b})} />;
+      case 'people': return <PeopleList people={people} orgs={orgs} personType={personType} nav={nav} mode={mode} onAdd={()=>setModal({type:'add_person',personType: personType==='all'?'private_client':personType, ...(mode==='personal'?{orgId: orgs.find(o=>o.type==='personal')?.id}:{})})} onMerge={(a,b)=>setModal({type:'merge_people',personA:a,personB:b})} />;
       case 'person_detail': {
         const person=people.find(p=>p.id===personId); if(!person) return <Empty text="Not found" />;
         const org=orgs.find(o=>o.id===person.orgId);
@@ -5752,7 +5888,7 @@ export default function FeltBodyCRM() {
             onAddPersonRole={()=>setModal({type:'add_person_role'})}
             onRemoveOrgType={handleRemoveOrgType}
             onRemovePersonRole={handleRemovePersonRole}
-            onSignOut={signOut} />
+            onSignOut={signOut} mode={mode} onSwitchMode={switchMode} onAddPersonalOrg={()=>setModal({type:"add_org",orgType:"personal"})} />
         </div>
 
         {/* Main content area with mobile hamburger button */}
@@ -5781,7 +5917,7 @@ export default function FeltBodyCRM() {
                 onAddPersonRole={()=>{ setMobileNavOpen(false); setModal({type:'add_person_role'}); }}
                 onRemoveOrgType={handleRemoveOrgType}
                 onRemovePersonRole={handleRemovePersonRole}
-                onSignOut={signOut} />
+                onSignOut={signOut} mode={mode} onSwitchMode={switchMode} onAddPersonalOrg={()=>setModal({type:"add_org",orgType:"personal"})} />
             </div>
             {/* Backdrop click closes the modal */}
             <div onClick={()=>setMobileNavOpen(false)} style={{flex:1,height:'100%'}} />
