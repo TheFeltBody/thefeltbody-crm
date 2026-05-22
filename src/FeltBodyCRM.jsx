@@ -144,6 +144,25 @@ const useTypes = () => useContext(TypesContext);
 // keep it in the merged map and as a sidebar item, just at the bottom of built-ins.
 const ORG_SIDEBAR_TYPES = ['care_home','gym','other'];
 const PERSON_SIDEBAR_ROLES = ['private_client','website_student','tt_prospect','retreat_interest','workshop_interest'];
+// ─── Personal contacts (Sienna World, Neighbours, etc.) ──────────────────────
+// Personal contacts are tagged with the `personal_contact` role and filed under
+// an org of type `personal`. Both the role and the org type are created through
+// the normal custom-type UI — no schema change. These predicates keep personal
+// people/orgs out of client-facing surfaces (All Contacts, dashboard stats, the
+// All Organisations list) while leaving them reachable via their own sidebar
+// section and their org's detail page.
+//
+// isPersonalOnly: carries the personal tag AND is not also a client. A person who
+// is BOTH a client and personal is NOT personal-only — they stay visible in client
+// views, get emailed per their client relationship, and also appear under their
+// personal org. doNotEmail is left as a manual per-person flag (set true by hand on
+// pure personal contacts); it is intentionally not driven by these predicates.
+const CLIENT_ROLES = ['private_client','website_student','tt_prospect','retreat_interest','workshop_interest','resident'];
+const isPersonalOnly = p => {
+  const roles = p.roles || [];
+  return roles.includes('personal_contact') && !roles.some(r => CLIENT_ROLES.includes(r));
+};
+const isPersonalOrg = o => o.type === 'personal';
 
 // Merge built-ins (ALL of them, so badges/avatars keep working) with custom types.
 // Custom types are appended in the order they were created.
@@ -204,6 +223,32 @@ const timeToMin = t => {
   return h*60+m;
 };
 const fmtMoney = n => typeof n==='number' ? `£${n.toFixed(2).replace(/\.00$/,'')}` : '—';
+
+// Given an ISO date string 'YYYY-MM-DD', return { age, label } where label is a
+// human birthday line, e.g. "turns 8 in 12 days" or "today! 🎂". Returns null for
+// blank/invalid input so callers can render nothing. Computed at read time — no
+// stored age to drift. Uses local date parts to avoid timezone-shift off-by-one.
+const birthdayInfo = (iso) => {
+  if (!iso) return null;
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const [, y, mo, d] = m.map(Number);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let age = today.getFullYear() - y;
+  // Next birthday this year (months are 0-indexed in Date)
+  let next = new Date(today.getFullYear(), mo - 1, d);
+  if (next < today) { next = new Date(today.getFullYear() + 1, mo - 1, d); }
+  else if (next > today) { age -= 1; } // haven't had this year's birthday yet
+  const days = Math.round((next - today) / 86400000);
+  const turning = age + 1;
+  let label;
+  if (days === 0) label = `${turning} today 🎂`;
+  else if (days === 1) label = `turns ${turning} tomorrow`;
+  else if (days <= 30) label = `turns ${turning} in ${days} days`;
+  else label = `age ${age}`;
+  return { age, days, label };
+};
 const initials = n => n.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
 const today = () => new Date().toISOString().slice(0,10);
 const primaryRole = p => (p.roles && p.roles[0]) || 'other';
@@ -966,7 +1011,7 @@ function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOr
   const initRoles = existing?.roles || (defaultType?[defaultType]:['private_client']);
   // Strip `emails` and `email` from form state — managed separately
   const initForm = existing ? (() => { const {emails, email, ...rest} = existing; return rest; })()
-    : {name:'',phone:'',website:'',orgId:defaultOrgId||'',status:'active',source:{channel:'manual',detail:''},notes:'',defaultSessionRate:'',rateNotes:''};
+    : {name:'',phone:'',website:'',address:'',dateOfBirth:'',orgId:defaultOrgId||'',status:'active',source:{channel:'manual',detail:''},notes:'',defaultSessionRate:'',rateNotes:''};
   const [f, setF] = useState(initForm);
   const [roles, setRoles] = useState(initRoles);
   // Emails: live for edit (server is source of truth), staged for create.
@@ -1106,6 +1151,11 @@ function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOr
 
       <FI label="PHONE" value={f.phone} onChange={s('phone')} />
       <FI label="WEBSITE" value={f.website||''} onChange={s('website')} />
+      <FI label="ADDRESS" value={f.address||''} onChange={s('address')} />
+      <div style={{display:'flex',gap:12}}>
+        <FI label="DATE OF BIRTH" value={f.dateOfBirth||''} onChange={s('dateOfBirth')} type="date" half />
+        <div style={{flex:'1 1 0'}} />
+      </div>
       <div style={{display:'flex',gap:12}}>
         <FI label="DEFAULT SESSION RATE (£)" value={f.defaultSessionRate||''} onChange={s('defaultSessionRate')} type="number" half />
         <FI label="RATE NOTES" value={f.rateNotes||''} onChange={s('rateNotes')} half />
@@ -1422,7 +1472,7 @@ function MergePeopleForm({ personA, personB, orgs, onMerge, onClose }) {
 
   // For each field, track which side the user picked when values differ.
   // Default: master side wins. Reset whenever masterSide flips.
-  const fields = ['name','phone','website','notes','orgId','status','defaultSessionRate','rateNotes'];
+  const fields = ['name','phone','website','address','dateOfBirth','notes','orgId','status','defaultSessionRate','rateNotes'];
   const [pick, setPick] = useState(() => Object.fromEntries(fields.map(k=>[k,masterSide])));
   // sourceChannel + sourceDetail nested under source.* — handle separately
   const [sourcePick, setSourcePick] = useState(masterSide);
@@ -1540,6 +1590,8 @@ function MergePeopleForm({ personA, personB, orgs, onMerge, onClose }) {
         name: get('name'),
         phone: get('phone') || null,
         website: get('website') || null,
+        address: get('address') || null,
+        date_of_birth: get('dateOfBirth') || null,
         notes: get('notes') || null,
         org_id: get('orgId') || null,
         status: get('status') || 'active',
@@ -1635,6 +1687,22 @@ function MergePeopleForm({ personA, personB, orgs, onMerge, onClose }) {
             <input value={get('website')} onChange={e=>setOverride('website')(e.target.value)}
               style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}} />
             <FieldRadio fieldKey="website" valA={personA.website} valB={personB.website} displayA={personA.website} displayB={personB.website} />
+          </div>
+
+          {/* ADDRESS */}
+          <div style={{marginBottom:12}}>
+            <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>ADDRESS</label>
+            <input value={get('address')} onChange={e=>setOverride('address')(e.target.value)}
+              style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}} />
+            <FieldRadio fieldKey="address" valA={personA.address} valB={personB.address} displayA={personA.address} displayB={personB.address} />
+          </div>
+
+          {/* DATE OF BIRTH */}
+          <div style={{marginBottom:12}}>
+            <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>DATE OF BIRTH</label>
+            <input type="date" value={get('dateOfBirth')||''} onChange={e=>setOverride('dateOfBirth')(e.target.value)}
+              style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}} />
+            <FieldRadio fieldKey="dateOfBirth" valA={personA.dateOfBirth} valB={personB.dateOfBirth} displayA={personA.dateOfBirth||'—'} displayB={personB.dateOfBirth||'—'} />
           </div>
 
           {/* ORG */}
@@ -2603,8 +2671,8 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
         <div style={{color:C.muted,fontSize:14}}>{fmt(today())}</div>
       </div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:36}}>
-        <Stat label="Organisations" value={orgs.length} sub={`${orgs.filter(o=>o.type==='care_home').length} care homes`} />
-        <Stat label="All Contacts" value={people.length} sub={`${people.filter(p=>p.status==='active').length} active`} />
+        <Stat label="Organisations" value={orgs.filter(o=>!isPersonalOrg(o)).length} sub={`${orgs.filter(o=>o.type==='care_home').length} care homes`} />
+        <Stat label="All Contacts" value={people.filter(p=>!isPersonalOnly(p)).length} sub={`${people.filter(p=>p.status==='active'&&!isPersonalOnly(p)).length} active`} />
         <Stat label="To Do" value={todoCounts.all} sub={(()=>{ const o=notes.filter(n=>n.actionDate&&!n.completed&&n.actionDate<t).length; return o>0?`${o} overdue`:'all on track'; })()} />
         <Stat label="Outstanding" value={fmtMoney(outstanding)} sub={`${invoices.filter(i=>i.status!=='paid').length} invoice${invoices.filter(i=>i.status!=='paid').length!==1?'s':''}`} />
       </div>
@@ -3310,7 +3378,7 @@ function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
   const { orgTypes } = useTypes();
   const isAll = orgType === 'all';
   const m = orgTypes[orgType] || ORG_META[orgType] || { label:'Organisation', color:C.muted, bg:C.surf };
-  const list = isAll ? orgs : orgs.filter(o=>o.type===orgType);
+  const list = isAll ? orgs.filter(o=>!isPersonalOrg(o)) : orgs.filter(o=>o.type===orgType);
   const heading = isAll ? 'All Organisations' : `${m.label}s`;
   const addLabel = isAll ? 'Organisation' : m.label;
   // Group by type when showing all, so the user can scan by category at a glance.
@@ -3457,7 +3525,7 @@ function PeopleList({ people, orgs, personType, nav, onAdd, onMerge }) {
   const [q, setQ] = useState('');
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(new Set());
-  const list = people.filter(p=>personType==='all'||p.roles.includes(personType)).filter(p=>!q||p.name.toLowerCase().includes(q.toLowerCase())||(p.email||'').toLowerCase().includes(q.toLowerCase()));
+  const list = people.filter(p=> personType==='all' ? !isPersonalOnly(p) : p.roles.includes(personType)).filter(p=>!q||p.name.toLowerCase().includes(q.toLowerCase())||(p.email||'').toLowerCase().includes(q.toLowerCase()));
   const title = personType==='all'?'All Contacts':((personRoles[personType]||PERSON_ROLES[personType])?.label+'s'||personType);
   const toggleSel = (id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const exitSelect = () => { setSelectMode(false); setSelected(new Set()); };
@@ -3640,6 +3708,8 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
               </div>}
               {person.phone&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>PHONE</div><div style={{color:C.text,fontSize:13}}>{person.phone}</div></div>}
               {person.website&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>WEBSITE</div><a href={/^https?:\/\//i.test(person.website)?person.website:`https://${person.website}`} target="_blank" rel="noopener noreferrer" style={{color:C.blue,fontSize:13,textDecoration:'none',wordBreak:'break-all'}}>{person.website}</a></div>}
+              {person.address&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>ADDRESS</div><div style={{color:C.text,fontSize:13}}>{person.address}</div></div>}
+              {person.dateOfBirth&&(()=>{const b=birthdayInfo(person.dateOfBirth);return <div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>DATE OF BIRTH</div><div style={{color:C.text,fontSize:13}}>{person.dateOfBirth}{b&&<span style={{color:b.days<=30?C.gold:C.muted,fontSize:12,marginLeft:8}}>· {b.label}</span>}</div></div>;})()}
               {org&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>ORGANISATION</div><div style={{color:C.blue,fontSize:13,cursor:'pointer'}} onClick={()=>nav('org_detail',{orgId:org.id})}>{org.name}</div></div>}
               <div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>STATUS</div><div style={{color:person.status==='active'?C.green:person.status==='interested'?C.gold:C.muted,fontSize:13,fontWeight:500}}>{person.status}</div></div>
               <div><div style={{color:C.muted,fontSize:10,marginBottom:3}}>SOURCE</div><SourceTag source={person.source} /></div>

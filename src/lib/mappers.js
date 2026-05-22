@@ -58,6 +58,10 @@ export const personFromDb = (row, roles = [], emails = []) => {
     emails: mappedEmails,
     phone: row.phone || '',
     website: row.website || '',
+    address: row.address || '',
+    // date_of_birth is a DATE column; Postgres returns 'YYYY-MM-DD'. Keep '' when
+    // null so the date input stays blank and controlled.
+    dateOfBirth: row.date_of_birth || '',
     orgId: row.org_id || null,
     status: row.status || 'active',
     source: {
@@ -82,6 +86,9 @@ export const personToDb = (p) => ({
   name: p.name,
   phone: p.phone || null,
   website: p.website || null,
+  address: p.address || null,
+  // empty string from the date input → null (Postgres DATE rejects '')
+  date_of_birth: p.dateOfBirth ? String(p.dateOfBirth).trim() || null : null,
   org_id: p.orgId || null,
   status: p.status || 'active',
   source_channel: p.source?.channel || 'manual',
