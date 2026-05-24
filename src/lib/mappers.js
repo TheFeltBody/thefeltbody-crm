@@ -491,6 +491,42 @@ export const orgContactToDb = (oc) => ({
   role: oc.role || 'other',
 });
 
+// ─── Households (people <-> people grouping) ─────────────────────────────────
+// A household is a lightweight grouping of related people (a family, a couple,
+// a child and their parents). Distinct from both people.org_id (membership /
+// residency) and org_contacts (working roles for an org). A household carries
+// no billing or class weight — it exists purely so related contacts can be
+// seen together. Members join through the household_members junction, mirroring
+// the org_contacts pattern. The `relationship` is constrained at the DB level
+// by a CHECK constraint (see migration): adult/child/partner/parent/guardian/
+// friend/grandparent/other.
+
+export const householdFromDb = (row) => ({
+  id: row.id,
+  name: row.name,
+  notes: row.notes || '',
+  createdAt: row.created_at,
+});
+
+export const householdToDb = (h) => ({
+  name: h.name,
+  notes: h.notes || null,
+});
+
+export const householdMemberFromDb = (row) => ({
+  id: row.id,
+  householdId: row.household_id,
+  personId: row.person_id,
+  relationship: row.relationship || 'other',
+  createdAt: row.created_at,
+});
+
+export const householdMemberToDb = (m) => ({
+  household_id: m.householdId,
+  person_id: m.personId,
+  relationship: m.relationship || 'other',
+});
+
 // ─── Settings (generic key-value store) ──────────────────────────────────────
 // Single source of truth for app config that needs to be editable without
 // a code redeploy. value is jsonb on the DB side, parsed shape on the UI

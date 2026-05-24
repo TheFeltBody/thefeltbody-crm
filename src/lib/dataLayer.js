@@ -28,6 +28,8 @@ import {
   customOrgTypeFromDb, customOrgTypeToDb,
   customPersonRoleFromDb, customPersonRoleToDb,
   orgContactFromDb, orgContactToDb,
+  householdFromDb, householdToDb,
+  householdMemberFromDb, householdMemberToDb,
   emailFromDb, emailToDb,
   settingFromDb,
 } from './mappers.js';;
@@ -66,6 +68,8 @@ export async function loadAll() {
     orgTypeMetaRows,
     personRoleMetaRows,
     orgContactRows,
+    householdRows,
+    householdMemberRows,
     settingRows,
   ] = await Promise.all([
     supabase.from('active_organisations').select('*').order('name').then(ok),
@@ -88,6 +92,8 @@ export async function loadAll() {
     supabase.from('person_role_meta').select('*').eq('is_builtin', false)
       .order('created_at').then(ok),
     supabase.from('org_contacts').select('*').order('created_at').then(ok),
+    supabase.from('households').select('*').order('name').then(ok),
+    supabase.from('household_members').select('*').order('created_at').then(ok),
     supabase.from('settings').select('*').then(ok),
   ]);
 
@@ -133,6 +139,8 @@ export async function loadAll() {
     customOrgTypes: orgTypeMetaRows.map(customOrgTypeFromDb),
     customPersonRoles: personRoleMetaRows.map(customPersonRoleFromDb),
     orgContacts: orgContactRows.map(orgContactFromDb),
+    households: householdRows.map(householdFromDb),
+    householdMembers: householdMemberRows.map(householdMemberFromDb),
     settings: settingsByKey,
   };
 }
@@ -683,6 +691,48 @@ export const orgContacts = {
   },
   async delete(id) {
     await supabase.from('org_contacts').delete().eq('id', id).then(ok);
+  },
+};
+
+// ─── Households + household members (people <-> people grouping) ─────────────
+// Households are hard-deleted (cheap to recreate; no audit need). The
+// household_members FK has ON DELETE CASCADE, so deleting a household
+// auto-removes its membership rows server-side — no need to clear them first.
+// Deleting a person likewise cascades them out of any household.
+// household_members has a unique (household_id, person_id) index, so adding the
+// same person twice to one household will throw — the UI guards against it, but
+// callers should handle the error too.
+
+export const households = {
+  async create(h) {
+    const row = await supabase.from('households').insert(householdToDb(h))
+      .select().single().then(ok);
+    return householdFromDb(row);
+  },
+  async update(id, h) {
+    const row = await supabase.from('households').update(householdToDb(h))
+      .eq('id', id).select().single().then(ok);
+    return householdFromDb(row);
+  },
+  // Hard delete. Cascade removes household_members rows automatically.
+  async delete(id) {
+    await supabase.from('households').delete().eq('id', id).then(ok);
+  },
+};
+
+export const householdMembers = {
+  async create(m) {
+    const row = await supabase.from('household_members').insert(householdMemberToDb(m))
+      .select().single().then(ok);
+    return householdMemberFromDb(row);
+  },
+  async updateRelationship(id, relationship) {
+    const row = await supabase.from('household_members').update({ relationship })
+      .eq('id', id).select().single().then(ok);
+    return householdMemberFromDb(row);
+  },
+  async delete(id) {
+    await supabase.from('household_members').delete().eq('id', id).then(ok);
   },
 };
 
