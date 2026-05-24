@@ -122,6 +122,22 @@ const INTERACTION_KINDS = {
   payment: { label:'Payment', icon:'💷', color:'#c9a84c', bg:'#1b2213' },
 };
 
+// Household member relationship labels. Keys match the DB CHECK constraint on
+// household_members.relationship (adult/child/partner/parent/guardian/friend/
+// grandparent/other). Used for the relationship picker and the member rows on
+// the PersonDetail household card.
+const RELATIONSHIP_LABELS = {
+  adult:       'Adult',
+  child:       'Child',
+  partner:     'Partner',
+  parent:      'Parent',
+  guardian:    'Guardian',
+  friend:      'Friend',
+  grandparent: 'Grandparent',
+  other:       'Other',
+};
+const RELATIONSHIP_KEYS = ['adult','child','partner','parent','guardian','friend','grandparent','other'];
+
 // ─── CUSTOM TYPES INFRASTRUCTURE ──────────────────────────────────────────────
 // Built-in org types and person roles can be extended at runtime by the user.
 // Custom types are persisted and merged with the built-ins everywhere via TypesContext.
@@ -3700,7 +3716,181 @@ function PeopleList({ people, orgs, personType, nav, onAdd, onMerge }) {
   );
 }
 
-function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, orgs, nav, backInfo, highlightNoteId, onAddNote, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
+// ─── HOUSEHOLD MODAL ──────────────────────────────────────────────────────────
+// Reached from the HOUSEHOLD card on PersonDetail. Two modes in one component:
+//   - No household yet: name a new household; `person` becomes the first member.
+//   - Existing household: rename, add members (person picker + relationship),
+//     change each member's relationship inline, remove members, delete the
+//     whole household (armed-confirm).
+// One-household-per-person is enforced here in the UI only — the person picker
+// excludes anyone already in a household. The schema permits multi-membership,
+// so relaxing this later needs no migration.
+function HouseholdModal({ person, household, roster, allPeople, households, householdMembers, orgs, onClose, onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, nav }) {
+  const [name, setName] = useState(household?.name || `${person.name.split(' ').slice(-1)[0]} Household`);
+  const [founderRel, setFounderRel] = useState('adult');
+  const [busy, setBusy] = useState(false);
+  // Add-member sub-form state (only used when a household exists)
+  const [addPersonId, setAddPersonId] = useState('');
+  const [addRel, setAddRel] = useState('child');
+  const [addBusy, setAddBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  // "+ Add new contact" sub-mode: when set, we show AddPersonForm and, on save,
+  // create the person + add them to this household with `newContactRel`. The
+  // chosen relationship is captured before opening the form so the new contact
+  // lands with the right label.
+  const [addingNew, setAddingNew] = useState(false);
+  const [newContactRel, setNewContactRel] = useState('child');
+
+  // People eligible to be added: not deleted, not already in any household,
+  // and not the contacts already on this household's roster.
+  const inAHousehold = new Set((householdMembers || []).map(m => m.personId));
+  const addable = (allPeople || [])
+    .filter(p => !inAHousehold.has(p.id))
+    .sort((a,b) => a.name.localeCompare(b.name));
+
+  const relOpts = RELATIONSHIP_KEYS.map(k => ({ v:k, l:RELATIONSHIP_LABELS[k] }));
+
+  const doCreate = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    try { await onCreateHousehold(trimmed, person.id, founderRel); onClose(); }
+    catch { setBusy(false); }
+  };
+  const doRename = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === household.name) return;
+    await onRenameHousehold(household.id, trimmed);
+  };
+  const doAddMember = async () => {
+    if (!addPersonId || addBusy) return;
+    setAddBusy(true);
+    try {
+      await onAddHouseholdMember(household.id, addPersonId, addRel);
+      setAddPersonId(''); setAddRel('child');
+    } catch { /* surfaced via onError */ }
+    setAddBusy(false);
+  };
+
+  // ── Create mode (no household yet) ──────────────────────────────────────────
+  if (!household) {
+    return (
+      <Modal title="Create household" onClose={onClose}>
+        <div style={{color:C.muted,fontSize:12,marginBottom:18,lineHeight:1.5}}>
+          A household groups related contacts so you can see them together. <strong style={{color:C.text}}>{person.name}</strong> will be the first member — you can add others afterwards.
+        </div>
+        <FI label="HOUSEHOLD NAME" value={name} onChange={setName} />
+        <FI label={`${person.name.toUpperCase()}'S RELATIONSHIP`} value={founderRel} onChange={setFounderRel} opts={relOpts} />
+        <div style={{display:'flex',justifyContent:'flex-end',gap:10,marginTop:8}}>
+          <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={doCreate} disabled={busy || !name.trim()}>{busy?'Creating…':'Create household'}</Btn>
+        </div>
+      </Modal>
+    );
+  }
+
+  // ── Add-new-contact sub-mode (only reachable from manage mode) ───────────────
+  // Renders AddPersonForm. On save, the parent creates the person AND links them
+  // to this household with the relationship picked before opening the form.
+  if (addingNew && household) {
+    return (
+      <AddPersonForm
+        orgs={orgs}
+        onSave={async (p) => { await onCreatePersonForHousehold(household.id, p, newContactRel); }}
+        onClose={() => setAddingNew(false)}
+      />
+    );
+  }
+
+  // ── Manage mode (household exists) ──────────────────────────────────────────
+  return (
+    <Modal title={`Household: ${household.name}`} onClose={onClose} wide>
+      {/* Rename */}
+      <div style={{marginBottom:18}}>
+        <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>HOUSEHOLD NAME</label>
+        <div style={{display:'flex',gap:8}}>
+          <input value={name} onChange={e=>setName(e.target.value)} onBlur={doRename}
+            style={{flex:1,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}} />
+        </div>
+        <div style={{color:C.muted,fontSize:10,marginTop:4,fontStyle:'italic'}}>Saves when you click away.</div>
+      </div>
+
+      {/* Members */}
+      <div style={{marginBottom:18}}>
+        <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:8}}>MEMBERS ({roster.length})</div>
+        <div style={{display:'flex',flexDirection:'column',gap:6}}>
+          {roster.map(({membership, person:mp}) => {
+            const isSelf = mp.id === person.id;
+            return (
+              <div key={membership.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 10px',background:C.card,border:`1px solid ${C.border}`,borderRadius:6}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div onClick={isSelf?undefined:()=>{onClose();nav('person_detail',{personId:mp.id});}}
+                    style={{color:isSelf?C.text:C.blue,fontSize:13,fontWeight:500,cursor:isSelf?'default':'pointer',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                    {mp.name}{isSelf && <span style={{color:C.muted,fontSize:11,fontStyle:'italic'}}> · this contact</span>}
+                  </div>
+                </div>
+                <select value={membership.relationship} onChange={e=>onUpdateMemberRelationship(membership.id, e.target.value)}
+                  style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:5,color:C.text,fontSize:12,padding:'5px 7px',fontFamily:"'Jost',sans-serif"}}>
+                  {relOpts.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+                </select>
+                <ConfirmBtn idleLabel="Remove" onConfirm={()=>onRemoveHouseholdMember(membership.id)} title="Remove from household" />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Add member */}
+      <div style={{marginBottom:18,borderTop:`1px solid ${C.border}`,paddingTop:16}}>
+        <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:8}}>ADD A MEMBER</div>
+        {addable.length > 0 && (
+          <div style={{display:'flex',gap:8,alignItems:'flex-end',flexWrap:'wrap',marginBottom:10}}>
+            <div style={{flex:'2 1 200px',minWidth:0}}>
+              <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>EXISTING CONTACT</label>
+              <select value={addPersonId} onChange={e=>setAddPersonId(e.target.value)}
+                style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}}>
+                <option value="">— select contact —</option>
+                {addable.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div style={{flex:'1 1 120px'}}>
+              <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>RELATIONSHIP</label>
+              <select value={addRel} onChange={e=>setAddRel(e.target.value)}
+                style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}}>
+                {relOpts.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+              </select>
+            </div>
+            <Btn onClick={doAddMember} disabled={!addPersonId || addBusy}>{addBusy?'Adding…':'Add'}</Btn>
+          </div>
+        )}
+        {/* Add a brand-new contact straight into this household. Always
+            available — even when every existing contact is already housed.
+            The relationship picked here is applied when the new person saves. */}
+        <div style={{display:'flex',gap:8,alignItems:'flex-end',flexWrap:'wrap'}}>
+          <div style={{flex:'1 1 120px'}}>
+            <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>NEW CONTACT'S RELATIONSHIP</label>
+            <select value={newContactRel} onChange={e=>setNewContactRel(e.target.value)}
+              style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}}>
+              {relOpts.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+            </select>
+          </div>
+          <Btn variant="ghost" onClick={()=>setAddingNew(true)}>+ Add new contact</Btn>
+        </div>
+      </div>
+
+      {/* Delete household */}
+      <div style={{borderTop:`1px solid ${C.border}`,paddingTop:16,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <ConfirmBtn idleLabel="Delete household"
+          armedLabel="Delete entire household?"
+          onConfirm={()=>{ onDeleteHousehold(household.id); onClose(); }}
+          title="Removes the household and unlinks all members. The contacts themselves are not deleted." />
+        <Btn variant="secondary" onClick={onClose}>Done</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, orgs, nav, backInfo, highlightNoteId, people, households, householdMembers, onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddNote, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
   const [tab, setTab] = useState('notes');
@@ -3712,6 +3902,22 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
   const effectiveFilter = (filterKind!=='all' && !pNotes.some(n => (n.kind||'note')===filterKind)) ? 'all' : filterKind;
   const visibleNotes = effectiveFilter==='all' ? pNotes : pNotes.filter(n => (n.kind||'note')===effectiveFilter);
   const impNotes = visibleNotes.filter(n=>n.important), regNotes = visibleNotes.filter(n=>!n.important);
+
+  // ── Household derivation. A person belongs to at most one household in the v1
+  // UI (the schema allows many; we just don't surface multi-membership yet).
+  // myMembership = this person's junction row; myHousehold = the group; members
+  // = every junction row in that household joined to its person record + label.
+  const myMembership = (householdMembers || []).find(m => m.personId === person.id) || null;
+  const myHousehold = myMembership ? (households || []).find(h => h.id === myMembership.householdId) : null;
+  const householdRoster = myHousehold
+    ? (householdMembers || [])
+        .filter(m => m.householdId === myHousehold.id)
+        .map(m => ({ membership: m, person: (people || []).find(p => p.id === m.personId) }))
+        .filter(x => x.person)
+        .sort((a,b) => a.person.name.localeCompare(b.person.name))
+    : [];
+  // null | 'manage' — the household management modal (create / add member / edit)
+  const [householdModal, setHouseholdModal] = useState(null);
   const pPkgs=packages.filter(pk=>pk.personId===person.id);
   // Payments tab data: three sources merged into one chronological list —
   //   • drop-in payments  (attendance.paymentStatus==='paid', has paidAmount)
@@ -3852,6 +4058,50 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
                 })}
               </div>
             ):<div style={{color:C.muted,fontSize:13}}>No bookings yet</div>}
+          </div>
+          {/* HOUSEHOLD card — shows the contact's household and fellow members,
+              or an action to create/join one. Members are clickable through to
+              their own PersonDetail. Birthdays reuse birthdayInfo(). */}
+          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'16px 20px',marginTop:14}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
+              <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px'}}>HOUSEHOLD</div>
+              {myHousehold && <span style={{color:C.muted,fontSize:11,cursor:'pointer'}} onClick={()=>setHouseholdModal('manage')}>Manage</span>}
+            </div>
+            {myHousehold ? (
+              <>
+                <div style={{color:C.text,fontSize:14,fontWeight:500,marginBottom:10}}>{myHousehold.name}</div>
+                {householdRoster.length > 1 ? (
+                  <div style={{display:'flex',flexDirection:'column',gap:2}}>
+                    {householdRoster.map(({membership, person:mp}) => {
+                      const isSelf = mp.id === person.id;
+                      const b = mp.dateOfBirth ? birthdayInfo(mp.dateOfBirth) : null;
+                      return (
+                        <div key={membership.id}
+                          onClick={isSelf ? undefined : ()=>nav('person_detail',{personId:mp.id})}
+                          style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'7px 0',borderBottom:`1px solid ${C.border}`,cursor:isSelf?'default':'pointer'}}>
+                          <div style={{minWidth:0}}>
+                            <div style={{color:isSelf?C.muted:C.blue,fontSize:13,fontWeight:isSelf?400:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                              {mp.name}{isSelf && <span style={{color:C.muted,fontSize:11,fontStyle:'italic'}}> · this contact</span>}
+                            </div>
+                            <div style={{color:C.muted,fontSize:11}}>
+                              {RELATIONSHIP_LABELS[membership.relationship] || 'Other'}
+                              {b && <span style={{color:b.days<=30?C.gold:C.muted,marginLeft:6}}>· {b.label}</span>}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={{color:C.muted,fontSize:13}}>Just this contact so far. <span style={{color:C.blue,cursor:'pointer'}} onClick={()=>setHouseholdModal('manage')}>Add someone →</span></div>
+                )}
+              </>
+            ) : (
+              <div>
+                <div style={{color:C.muted,fontSize:13,marginBottom:10}}>Not in a household.</div>
+                <Btn small onClick={()=>setHouseholdModal('manage')}>+ Create or join household</Btn>
+              </div>
+            )}
           </div>
         </div>
         <div>
@@ -4087,6 +4337,26 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
           </>}
         </div>
       </div>
+      {householdModal === 'manage' && (
+        <HouseholdModal
+          person={person}
+          household={myHousehold}
+          roster={householdRoster}
+          allPeople={people}
+          households={households}
+          householdMembers={householdMembers}
+          orgs={orgs}
+          onClose={()=>setHouseholdModal(null)}
+          onCreateHousehold={onCreateHousehold}
+          onRenameHousehold={onRenameHousehold}
+          onDeleteHousehold={onDeleteHousehold}
+          onAddHouseholdMember={onAddHouseholdMember}
+          onCreatePersonForHousehold={onCreatePersonForHousehold}
+          onUpdateMemberRelationship={onUpdateMemberRelationship}
+          onRemoveHouseholdMember={onRemoveHouseholdMember}
+          nav={nav}
+        />
+      )}
     </div>
   );
 }
@@ -5057,6 +5327,12 @@ export default function FeltBodyCRM() {
   // (primary contact, billing contact, etc.). Distinct from people.orgId which
   // models residency. Loaded eagerly, surfaced via OrgDetail in Batch 2.
   const [orgContacts, setOrgContacts] = useState([]);
+  // Households: lightweight people<->people groupings (families, couples, a
+  // child and their parents). households = the group rows; householdMembers =
+  // the junction (householdId, personId, relationship). Surfaced via a card on
+  // PersonDetail. No billing/class weight — visibility only.
+  const [households, setHouseholds] = useState([]);
+  const [householdMembers, setHouseholdMembers] = useState([]);
   // App config from the settings table — keyed object (e.g. settings.my_addresses
   // is an array of operator email addresses). Loaded eagerly so inbox-assign
   // and any other settings-aware flows have it on the first interaction.
@@ -5093,6 +5369,8 @@ export default function FeltBodyCRM() {
         setCustomOrgTypes(all.customOrgTypes);
         setCustomPersonRoles(all.customPersonRoles);
         setOrgContacts(all.orgContacts);
+        setHouseholds(all.households || []);
+        setHouseholdMembers(all.householdMembers || []);
         setSettings(all.settings || {});
         setLoadStatus('ready');
       } catch (e) {
@@ -5291,6 +5569,70 @@ export default function FeltBodyCRM() {
       onError('Merge contacts')(e);
       throw e;  // let the form keep busy-state clean
     }
+  };
+
+  // ── Households (people<->people groupings)
+  // Server-confirmed updates on the create/add paths (we need the real UUID);
+  // optimistic-local on relationship change and removal (cheap, reconciled by
+  // the next loadAll). All four mutate the households/householdMembers arrays.
+
+  // Create a new household AND add the founding member in one user action.
+  // Returns the new household so callers can chain (e.g. close the modal).
+  const createHousehold = async (name, founderPersonId, founderRelationship) => {
+    try {
+      const h = await data.households.create({ name });
+      setHouseholds(prev => [...prev, h]);
+      const m = await data.householdMembers.create({
+        householdId: h.id, personId: founderPersonId, relationship: founderRelationship || 'other',
+      });
+      setHouseholdMembers(prev => [...prev, m]);
+      return h;
+    } catch (e) { onError('Create household')(e); throw e; }
+  };
+  const renameHousehold = async (id, name) => {
+    try {
+      const saved = await data.households.update(id, { name });
+      setHouseholds(prev => prev.map(h => h.id === id ? saved : h));
+    } catch (e) { onError('Rename household')(e); }
+  };
+  // Hard delete. Cascade clears member rows server-side; mirror that locally.
+  const deleteHousehold = async (id) => {
+    try {
+      await data.households.delete(id);
+      setHouseholds(prev => prev.filter(h => h.id !== id));
+      setHouseholdMembers(prev => prev.filter(m => m.householdId !== id));
+    } catch (e) { onError('Delete household')(e); }
+  };
+  const addHouseholdMember = async (householdId, personId, relationship) => {
+    try {
+      const m = await data.householdMembers.create({ householdId, personId, relationship: relationship || 'other' });
+      setHouseholdMembers(prev => [...prev, m]);
+      return m;
+    } catch (e) { onError('Add household member')(e); throw e; }
+  };
+  const updateMemberRelationship = (id, relationship) => {
+    // Optimistic-local + fire-and-forget (matches attendance/note toggles).
+    setHouseholdMembers(prev => prev.map(m => m.id === id ? { ...m, relationship } : m));
+    data.householdMembers.updateRelationship(id, relationship).catch(onError('Update relationship'));
+  };
+  const removeHouseholdMember = (id) => {
+    setHouseholdMembers(prev => prev.filter(m => m.id !== id));
+    data.householdMembers.delete(id).catch(onError('Remove from household'));
+  };
+  // Chained "+ Add new contact" from the household modal: create the person,
+  // then immediately add them to the household with the chosen relationship —
+  // mirrors the add-person-to-register chain. Updates both people and
+  // householdMembers state. Returns nothing; the modal closes its sub-form on
+  // success and the new member appears in the roster.
+  const createPersonForHousehold = async (householdId, personData, relationship) => {
+    try {
+      const savedPerson = await data.people.create(personData);
+      setPeople(prev => [...prev, savedPerson]);
+      const m = await data.householdMembers.create({
+        householdId, personId: savedPerson.id, relationship: relationship || 'other',
+      });
+      setHouseholdMembers(prev => [...prev, m]);
+    } catch (e) { onError('Add new contact to household')(e); }
   };
 
   // ── People emails (junction CRUD)
@@ -5821,6 +6163,14 @@ export default function FeltBodyCRM() {
         const pn=notes.filter(n=>n.personId===person.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
         const pc=attendance.filter(a=>a.personId===person.id).map(a=>classes.find(c=>c.id===a.classId)).filter(Boolean).sort((a,b)=>b.date.localeCompare(a.date));
         return <PersonDetail person={person} org={org} pNotes={pn} pClasses={pc} attendance={attendance} packages={packages} classes={classes} orgs={orgs} nav={nav} backInfo={backInfo} highlightNoteId={highlightNoteId}
+          people={people} households={households} householdMembers={householdMembers}
+          onCreateHousehold={createHousehold}
+          onRenameHousehold={renameHousehold}
+          onDeleteHousehold={deleteHousehold}
+          onAddHouseholdMember={addHouseholdMember}
+          onCreatePersonForHousehold={createPersonForHousehold}
+          onUpdateMemberRelationship={updateMemberRelationship}
+          onRemoveHouseholdMember={removeHouseholdMember}
           onAddNote={addNote}
           onToggleImportant={toggleNoteImportant}
           onClearAction={clearNoteAction}
