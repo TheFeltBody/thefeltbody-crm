@@ -2469,7 +2469,7 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
   const sectionForView =
     (view.name === 'org_list' || view.name === 'org_detail') ? 'orgs' :
     (view.name === 'people'   || view.name === 'person_detail') ? 'people' :
-    (view.name === 'week_view' || view.name === 'classes' || view.name === 'class_detail' || view.name === 'forms_list') ? 'sessions' :
+    (view.name === 'week_view' || view.name === 'month_view' || view.name === 'classes' || view.name === 'class_detail' || view.name === 'forms_list') ? 'sessions' :
     (view.name === 'invoices' || view.name === 'invoice_detail') ? 'finance' :
     null;
   const [openSection, setOpenSection] = useState(sectionForView || 'orgs');
@@ -2625,6 +2625,7 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
       {!isPersonal && openSection==='sessions' && (
         <>
           <Item name="week_view" label="Week View" icon="▦" indent />
+          <Item name="month_view" label="Month View" icon="▥" indent />
           <Item name="classes" label="All Classes" icon="≡" indent />
           <Item name="forms_list" label="Forms" icon="◍" indent />
         </>
@@ -3508,6 +3509,69 @@ function RecentActivityView({ notes, people, classes, orgs, attendance, packages
   );
 }
 
+// ─── SESSION-NOTE INDICATOR ───────────────────────────────────────────────────
+// Small notepad icon shown on a booking/class row when that session has notes
+// attached. Desktop: hovering shows the note text in a floating tooltip.
+// Everywhere: clicking the icon calls onToggle so the parent row can expand
+// inline to reveal the full note(s) — no navigation away (Jesse's preference).
+// `count` drives an optional little badge; `expanded` flips the icon's tint so
+// it reads as "open". The click is stopPropagation'd by the parent wrapper so
+// it never triggers the row's own navigate-on-click.
+function NoteIndicator({ count, expanded, onToggle, previewText }) {
+  if (!count) return null;
+  // Hover preview uses the NATIVE title attribute rather than a positioned
+  // element: a custom absolute tooltip gets clipped by any ancestor with
+  // overflow:auto/hidden (e.g. the scrollable BOOKINGS list on a contact card),
+  // which was cutting the note in half. The native title is never clipped.
+  // The full note is always reachable by tapping the icon to expand the row.
+  const hint = previewText ? (previewText.length>180 ? previewText.slice(0,177)+'…' : previewText) : '';
+  return (
+    <span
+      onClick={(e)=>{ e.stopPropagation(); onToggle && onToggle(); }}
+      title={hint}
+      style={{
+        position:'relative', display:'inline-flex', alignItems:'center', gap:3,
+        cursor:'pointer', flexShrink:0,
+        color: expanded ? C.gold : C.muted,
+        fontSize:14, lineHeight:1, userSelect:'none',
+      }}>
+      <span style={{opacity: expanded?1:0.8}}>🗒️</span>
+      {count>1 && <span style={{fontSize:10,opacity:0.7}}>{count}</span>}
+    </span>
+  );
+}
+
+// ─── SESSION NOTE ROW ─────────────────────────────────────────────────────────
+// A class/session row that expands inline to reveal its note(s) when the notepad
+// icon is tapped. Hoisted to module level (not nested in OrgDetail) so it has a
+// stable component identity — a nested definition gets a new identity on every
+// parent render, which remounts the row and was swallowing the expand toggle.
+// All state is owned by the parent and passed in: `notesList` is the resolved
+// notes for this session, `open`/`onToggle` drive expansion.
+function SessionNoteRow({ c, notesList, open, onToggle, nav }) {
+  const cnt = notesList.length;
+  const preview = notesList[0]?.text || '';
+  return (
+    <div style={{borderBottom:`1px solid ${C.border}`}}>
+      <Row onClick={()=>nav('class_detail',{classId:c.id})} style={{borderBottom:'none'}}>
+        <div style={{flex:1}}><div style={{color:C.text,fontSize:14,fontWeight:500}}>{c.name}{c.seriesId&&<span style={{color:C.muted,fontSize:11,marginLeft:6}}>↻</span>}</div><div style={{color:C.muted,fontSize:12}}>{fmt(c.date)} · {c.location}</div></div>
+        <NoteIndicator count={cnt} expanded={open} previewText={preview} onToggle={onToggle} />
+        {c.rate>0&&<div style={{color:C.muted,fontSize:13}}>{fmtMoney(c.rate)}</div>}
+      </Row>
+      {open && cnt>0 && (
+        <div style={{background:C.surf,padding:'10px 20px 12px'}} onClick={e=>e.stopPropagation()}>
+          {notesList.map(n=>(
+            <div key={n.id} style={{display:'flex',gap:8,padding:'6px 0',color:C.text,fontSize:13,lineHeight:1.6}}>
+              <span style={{opacity:0.7,flexShrink:0}}>{n._reflection?'📔':(INTERACTION_KINDS[n.kind]||INTERACTION_KINDS.note).icon}</span>
+              <span>{n.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── ORG LIST / DETAIL ────────────────────────────────────────────────────────
 function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
   const { orgTypes } = useTypes();
@@ -3580,15 +3644,240 @@ function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
   );
 }
 
-function OrgDetail({ org, people, classes, invoices, nav, backInfo, onEdit, onAddPerson, onAddClass, onCreateInvoice, onEditInvoice, onUpdateInvoiceStatus }) {
-  const { orgTypes } = useTypes();
+function OrgDetail({ org, people, classes, invoices, notes=[], nav, backInfo, onEdit, onAddPerson, onAddClass, onCreateInvoice, onEditInvoice, onUpdateInvoiceStatus, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate }) {
+  const { orgTypes, personRoles } = useTypes();
   const [tab, setTab] = useState('people');
   const m = orgTypes[org.type] || ORG_META[org.type] || { label:'Organisation', color:C.muted, bg:C.surf };
   const op=people.filter(p=>p.orgId===org.id);
   const oc=classes.filter(c=>c.orgId===org.id).sort((a,b)=>b.date.localeCompare(a.date));
   const oi=invoices.filter(i=>i.orgId===org.id).sort((a,b)=>b.issueDate.localeCompare(a.issueDate));
   const showInvoices = org.type==='care_home'||org.type==='gym';
-  const tabList = [{id:'people',label:`People (${op.length})`},{id:'classes',label:`Classes (${oc.length})`}];
+
+  // ── Member notes. There's no org_id on interactions, so an org's notes are
+  // derived: every note belonging to one of this org's people. We attach the
+  // person (for the "whose note" line + role filtering + click-through) and
+  // sort newest-first. booking/payment are transactional, excluded here.
+  const memberIds = useMemo(()=>new Set(op.map(p=>p.id)), [op]);
+  const memberById = useMemo(()=>Object.fromEntries(op.map(p=>[p.id,p])), [op]);
+  const orgNotes = useMemo(()=> notes
+    .filter(n => n.personId && memberIds.has(n.personId) && !['booking','payment'].includes(n.kind))
+    .map(n => ({ ...n, _person: memberById[n.personId] }))
+    .sort((a,b)=>new Date(b.date)-new Date(a.date))
+  , [notes, memberIds, memberById]);
+
+  // Role filter for the notes tab — populated dynamically from the roles
+  // actually present on this org's members (design decision #26), plus 'all'.
+  const [noteRole, setNoteRole] = useState('all');
+  const memberRoles = useMemo(()=>[...new Set(op.flatMap(p=>p.roles||[]))].sort(), [op]);
+  const roleLabel = r => (personRoles[r]||PERSON_ROLES[r])?.label || r;
+  const effectiveRole = (noteRole!=='all' && !memberRoles.includes(noteRole)) ? 'all' : noteRole;
+  const visibleNotes = effectiveRole==='all' ? orgNotes : orgNotes.filter(n => (n._person?.roles||[]).includes(effectiveRole));
+
+  // ── Invoice status filter. Chips for 'all' + each status present on this
+  // org's invoices (hides empty ones, same idea as the comms chips).
+  const [invStatus, setInvStatus] = useState('all');
+  const invStatuses = useMemo(()=>[...new Set(oi.map(i=>i.status))], [oi]);
+  const effectiveInvStatus = (invStatus!=='all' && !invStatuses.includes(invStatus)) ? 'all' : invStatus;
+  const visibleInvoices = effectiveInvStatus==='all' ? oi : oi.filter(i=>i.status===effectiveInvStatus);
+
+  // ── Events grouping for the classes tab: List (flat) / Week / Month.
+  const [eventsView, setEventsView] = useState('list');
+  // List-view time filter: all | upcoming | past. Keeps the filter row to a
+  // single 3-way toggle rather than a chip per period. Only applies to List;
+  // the calendars are navigable by period already.
+  const [whenFilter, setWhenFilter] = useState('all');
+  // What counts as a "note" on a session, for the booking-row indicator:
+  //   (1) interaction notes anchored to that class (session_id == classId), and
+  //   (2) the session's own reflection (cls.reflection — the Class Log text).
+  // Reflection is folded in as a synthetic entry so it renders in the inline
+  // expansion exactly like a real note. This is why Chaim's sessions light up:
+  // his session content lives in reflections, not as classId-anchored notes.
+  const interactionNotesByClass = useMemo(()=>{
+    const map = {};
+    notes.forEach(n => { if(n.classId && !['booking','payment'].includes(n.kind)) (map[n.classId]||(map[n.classId]=[])).push(n); });
+    return map;
+  }, [notes]);
+  const sessionNotes = (c) => {
+    const list = [...(interactionNotesByClass[c.id]||[])];
+    if (c.reflection && c.reflection.trim()) {
+      list.unshift({ id:`reflection-${c.id}`, kind:'note', text:c.reflection, _reflection:true });
+    }
+    return list;
+  };
+  // Calendar state: an anchor date that the Weekly/Monthly views page through.
+  // List view ignores it (shows the flat newest-first list).
+  const [calAnchor, setCalAnchor] = useState(()=>today());
+  // Index this org's classes by date string for O(1) day lookups in the grid.
+  const classesByDate = useMemo(()=>{
+    const map = {};
+    oc.forEach(c=>{ (map[c.date]||(map[c.date]=[])).push(c); });
+    // Within a day, order by time so the calendar reads top-to-bottom chronologically.
+    Object.values(map).forEach(list=>list.sort((a,b)=>(a.time||'').localeCompare(b.time||'')));
+    return map;
+  }, [oc]);
+
+  // List view: bundle classes month-by-month (newest month first; oc is already
+  // sorted newest-first so insertion order gives us that for free). Respects the
+  // when-filter (all/upcoming/past) — today counts as upcoming.
+  const listByMonth = useMemo(()=>{
+    const todayStr = today();
+    const src = whenFilter==='upcoming' ? oc.filter(c=>c.date>=todayStr)
+              : whenFilter==='past' ? oc.filter(c=>c.date<todayStr)
+              : oc;
+    const buckets = new Map(); // 'YYYY-MM' -> { label, items }
+    src.forEach(c=>{
+      const d = new Date(c.date+'T12:00');
+      const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      if(!buckets.has(key)) buckets.set(key, { label: d.toLocaleDateString('en-GB',{month:'long',year:'numeric'}), items: [] });
+      buckets.get(key).items.push(c);
+    });
+    // Upcoming reads more naturally soonest-first (ascending); past/all stay
+    // newest-first. Sort the buckets and their items accordingly.
+    const entries = [...buckets.entries()];
+    if (whenFilter==='upcoming') {
+      entries.sort((a,b)=>a[0].localeCompare(b[0]));
+      entries.forEach(([,v])=>v.items.sort((a,b)=>a.date.localeCompare(b.date)));
+    }
+    return entries.map(([key,v])=>({key,...v}));
+  }, [oc, whenFilter]);
+
+  // Which booking/class rows are expanded to show their note(s) inline.
+  const [expandedNotes, setExpandedNotes] = useState(()=>new Set());
+  const toggleExpand = (cid) => setExpandedNotes(s=>{ const n=new Set(s); n.has(cid)?n.delete(cid):n.add(cid); return n; });
+  // Calendar note reveal: clicking a pill's 🗒️ selects that class and shows its
+  // note(s) in a panel beneath the grid (cells are too small to expand inline).
+  // Clicking the same icon again clears it. Toggling calendar view/period clears.
+  const [calNoteClassId, setCalNoteClassId] = useState(null);
+  const toggleCalNote = (cid) => setCalNoteClassId(prev => prev===cid ? null : cid);
+
+  // A single class as it appears inside a calendar day cell: a compact pill.
+  // Pill body click opens the class; the 🗒️ (when the session has notes) instead
+  // toggles a note panel below the grid — no navigation, fits the cramped cell.
+  const CalEvent = ({ c }) => {
+    const hasNotes = sessionNotes(c).length > 0;
+    const sel = calNoteClassId===c.id;
+    return (
+      <div onClick={(e)=>{ e.stopPropagation(); nav('class_detail',{classId:c.id}); }}
+        title={`${c.name}${c.time?` · ${fmtTime(c.time)}`:''}${c.location?` · ${c.location}`:''}`}
+        style={{background:sel?C.gold+'33':C.goldBg,border:`1px solid ${sel?C.gold:C.gold+'55'}`,borderRadius:4,padding:'2px 5px',marginBottom:3,cursor:'pointer',display:'flex',alignItems:'center',gap:4,overflow:'hidden'}}>
+        {c.time && <span style={{color:C.gold,fontSize:9,fontWeight:600,flexShrink:0}}>{fmtTime(c.time)}</span>}
+        <span style={{color:C.text,fontSize:10,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{c.name}</span>
+        {hasNotes && <span onClick={(e)=>{ e.stopPropagation(); toggleCalNote(c.id); }} title="Show note" style={{marginLeft:'auto',fontSize:9,flexShrink:0,cursor:'pointer',opacity:sel?1:0.85}}>🗒️</span>}
+      </div>
+    );
+  };
+
+  // Note panel shown beneath the calendar grid for the currently-selected class.
+  const CalNotePanel = () => {
+    if (!calNoteClassId) return null;
+    const c = oc.find(x=>x.id===calNoteClassId);
+    if (!c) return null;
+    const sn = sessionNotes(c);
+    if (!sn.length) return null;
+    return (
+      <div style={{marginTop:14,background:C.surf,border:`1px solid ${C.gold}55`,borderRadius:8,padding:'12px 16px'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+          <div style={{display:'flex',alignItems:'baseline',gap:8,minWidth:0}}>
+            <span style={{color:C.text,fontSize:14,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{c.name}</span>
+            <span style={{color:C.muted,fontSize:11,flexShrink:0}}>{fmt(c.date)}</span>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:12,flexShrink:0}}>
+            <span style={{color:C.blue,fontSize:11,cursor:'pointer'}} onClick={()=>nav('class_detail',{classId:c.id})}>Open class →</span>
+            <span style={{color:C.muted,fontSize:14,cursor:'pointer',lineHeight:1}} onClick={()=>setCalNoteClassId(null)} title="Close">×</span>
+          </div>
+        </div>
+        {sn.map(n=>(
+          <div key={n.id} style={{display:'flex',gap:8,padding:'5px 0',color:C.text,fontSize:13,lineHeight:1.6}}>
+            <span style={{opacity:0.7,flexShrink:0}}>{n._reflection?'📔':(INTERACTION_KINDS[n.kind]||INTERACTION_KINDS.note).icon}</span>
+            <span>{n.text}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+  // WEEKLY calendar: 7 day-columns (Mon–Sun) anchored to calAnchor's week.
+  const WeekCalendar = () => {
+    const start = startOfWeek(calAnchor);
+    const days = Array.from({length:7},(_,i)=>addDays(start,i));
+    const label = `${new Date(days[0]+'T12:00').toLocaleDateString('en-GB',{day:'numeric',month:'short'})} – ${new Date(days[6]+'T12:00').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}`;
+    const count = days.reduce((s,d)=>s+(classesByDate[d]?.length||0),0);
+    return (
+      <div>
+        <CalNav label={label} count={count} onPrev={()=>setCalAnchor(addDays(calAnchor,-7))} onNext={()=>setCalAnchor(addDays(calAnchor,7))} onToday={()=>setCalAnchor(today())} />
+        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:6}}>
+          {days.map((d,i)=>{
+            const isToday = d===today();
+            const dayClasses = classesByDate[d]||[];
+            return (
+              <div key={d} style={{border:`1px solid ${isToday?C.gold+'88':C.border}`,borderRadius:6,minHeight:120,padding:6,background:isToday?C.goldBg:C.card}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:5}}>
+                  <span style={{color:C.muted,fontSize:9,fontWeight:600,letterSpacing:'0.5px'}}>{DOW[i]}</span>
+                  <span style={{color:isToday?C.gold:C.text,fontSize:14,fontWeight:isToday?600:400,fontFamily:"'Cormorant Garamond',serif"}}>{new Date(d+'T12:00').getDate()}</span>
+                </div>
+                {dayClasses.map(c=><CalEvent key={c.id} c={c} />)}
+              </div>
+            );
+          })}
+        </div>
+        <CalNotePanel />
+      </div>
+    );
+  };
+
+  // MONTHLY calendar: classic 6-row × 7-col grid for calAnchor's month, with
+  // leading/trailing days from adjacent months dimmed.
+  const MonthCalendar = () => {
+    const anchor = new Date(calAnchor+'T12:00');
+    const year = anchor.getFullYear(), month = anchor.getMonth();
+    const first = new Date(year, month, 1);
+    const gridStart = startOfWeek(first.toISOString().slice(0,10));
+    const cells = Array.from({length:42},(_,i)=>addDays(gridStart,i));
+    const label = anchor.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+    const count = oc.filter(c=>{ const d=new Date(c.date+'T12:00'); return d.getFullYear()===year && d.getMonth()===month; }).length;
+    const prevMonth = ()=>{ const d=new Date(year,month-1,1); setCalAnchor(d.toISOString().slice(0,10)); };
+    const nextMonth = ()=>{ const d=new Date(year,month+1,1); setCalAnchor(d.toISOString().slice(0,10)); };
+    return (
+      <div>
+        <CalNav label={label} count={count} onPrev={prevMonth} onNext={nextMonth} onToday={()=>setCalAnchor(today())} />
+        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:1,marginBottom:4}}>
+          {DOW.map(d=><div key={d} style={{textAlign:'center',color:C.muted,fontSize:9,fontWeight:600,letterSpacing:'0.5px',padding:'2px 0'}}>{d}</div>)}
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:4}}>
+          {cells.map(d=>{
+            const dd = new Date(d+'T12:00');
+            const inMonth = dd.getMonth()===month;
+            const isToday = d===today();
+            const dayClasses = classesByDate[d]||[];
+            return (
+              <div key={d} style={{border:`1px solid ${isToday?C.gold+'88':C.border}`,borderRadius:6,minHeight:84,padding:5,background:isToday?C.goldBg:(inMonth?C.card:'transparent'),opacity:inMonth?1:0.4}}>
+                <div style={{color:isToday?C.gold:C.text,fontSize:12,fontWeight:isToday?600:400,marginBottom:3,textAlign:'right'}}>{dd.getDate()}</div>
+                {dayClasses.slice(0,3).map(c=><CalEvent key={c.id} c={c} />)}
+                {dayClasses.length>3 && <div style={{color:C.muted,fontSize:9,paddingLeft:2}}>+{dayClasses.length-3} more</div>}
+              </div>
+            );
+          })}
+        </div>
+        <CalNotePanel />
+      </div>
+    );
+  };
+
+  // Shared calendar navigator (‹ label › + "Today" + count).
+  const CalNav = ({ label, count, onPrev, onNext, onToday }) => (
+    <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+      <button onClick={onPrev} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:14,padding:'4px 10px',lineHeight:1,fontFamily:"'Jost',sans-serif"}}>‹</button>
+      <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,color:C.text,fontWeight:600,minWidth:150}}>{label}</div>
+      <button onClick={onNext} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:14,padding:'4px 10px',lineHeight:1,fontFamily:"'Jost',sans-serif"}}>›</button>
+      <button onClick={onToday} style={{background:C.goldBg,border:`1px solid ${C.gold}88`,color:C.gold,cursor:'pointer',borderRadius:6,fontSize:12,padding:'4px 11px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>Today</button>
+      <div style={{flex:1}} />
+      <div style={{color:C.muted,fontSize:12}}>{count} class{count!==1?'es':''}</div>
+    </div>
+  );
+
+  const tabList = [{id:'people',label:`People (${op.length})`},{id:'classes',label:`Classes (${oc.length})`},{id:'notes',label:`Notes (${orgNotes.length})`}];
   if(showInvoices) tabList.push({id:'invoices',label:`Invoices (${oi.length})`});
   return (
     <div style={{padding:'32px 36px'}}>
@@ -3620,20 +3909,96 @@ function OrgDetail({ org, people, classes, invoices, nav, backInfo, onEdit, onAd
             </div>:<Empty text="No people added yet" />}
           </>}
           {tab==='classes'&&<>
-            <div style={{display:'flex',justifyContent:'flex-end',marginBottom:12}}><Btn small onClick={onAddClass}>+ Add Class</Btn></div>
-            {oc.length?<div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
-              {oc.map(c=>(
-                <Row key={c.id} onClick={()=>nav('class_detail',{classId:c.id})}>
-                  <div style={{flex:1}}><div style={{color:C.text,fontSize:14,fontWeight:500}}>{c.name}{c.seriesId&&<span style={{color:C.muted,fontSize:11,marginLeft:6}}>↻</span>}</div><div style={{color:C.muted,fontSize:12}}>{fmt(c.date)} · {c.location}</div></div>
-                  {c.rate>0&&<div style={{color:C.muted,fontSize:13}}>{fmtMoney(c.rate)}</div>}
-                </Row>
-              ))}
-            </div>:<Empty text="No classes logged yet" />}
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,gap:12,flexWrap:'wrap'}}>
+              {/* List (flat) / Weekly + Monthly (calendar) toggle */}
+              <div style={{display:'flex',gap:6}}>
+                {[['list','List'],['week','Weekly'],['month','Monthly']].map(([v,l])=>{
+                  const active=eventsView===v;
+                  return <button key={v} onClick={()=>setEventsView(v)} style={{background:active?C.goldBg:'transparent',color:active?C.gold:C.muted,border:`1px solid ${active?C.gold+'88':C.border}`,borderRadius:4,fontSize:11,fontWeight:500,letterSpacing:'0.3px',padding:'4px 12px',cursor:'pointer',fontFamily:"'Jost',sans-serif"}}>{l}</button>;
+                })}
+                {/* When filter — only meaningful for the List view */}
+                {eventsView==='list' && <span style={{width:1,background:C.border,margin:'2px 2px'}} />}
+                {eventsView==='list' && [['all','All'],['upcoming','Upcoming'],['past','Past']].map(([v,l])=>{
+                  const active=whenFilter===v;
+                  return <button key={v} onClick={()=>setWhenFilter(v)} style={{background:active?C.goldBg:'transparent',color:active?C.gold:C.muted,border:`1px solid ${active?C.gold+'88':C.border}`,borderRadius:4,fontSize:11,fontWeight:500,letterSpacing:'0.3px',padding:'4px 12px',cursor:'pointer',fontFamily:"'Jost',sans-serif"}}>{l}</button>;
+                })}
+              </div>
+              <Btn small onClick={onAddClass}>+ Add Class</Btn>
+            </div>
+            {oc.length ? (
+              eventsView==='list' ? (
+                listByMonth.length ? (
+                <div style={{display:'flex',flexDirection:'column',gap:18}}>
+                  {listByMonth.map(g=>(
+                    <div key={g.key}>
+                      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                        <span style={{color:C.gold,fontSize:12,fontWeight:600,letterSpacing:'0.5px'}}>{g.label}</span>
+                        <span style={{flex:1,height:1,background:C.border}} />
+                        <span style={{color:C.muted,fontSize:11}}>{g.items.length} {g.items.length===1?'class':'classes'}</span>
+                      </div>
+                      <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+                        {g.items.map(c=><SessionNoteRow key={c.id} c={c} notesList={sessionNotes(c)} open={expandedNotes.has(c.id)} onToggle={()=>toggleExpand(c.id)} nav={nav} />)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                ) : <Empty text={whenFilter==='upcoming'?'No upcoming classes':whenFilter==='past'?'No past classes':'No classes logged yet'} />
+              ) : eventsView==='week' ? <WeekCalendar /> : <MonthCalendar />
+            ):<Empty text="No classes logged yet" />}
+          </>}
+          {tab==='notes'&&<>
+            {/* Role filter — slices member notes by Felt Body role (design #26) */}
+            {orgNotes.length>0 && memberRoles.length>0 && (
+              <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
+                {['all',...memberRoles].map(r=>{
+                  const active=effectiveRole===r;
+                  const count = r==='all' ? orgNotes.length : orgNotes.filter(n=>(n._person?.roles||[]).includes(r)).length;
+                  const meta = r==='all' ? null : (personRoles[r]||PERSON_ROLES[r]);
+                  return <button key={r} onClick={()=>setNoteRole(r)} style={{background:active?(meta?meta.bg:C.surf):'transparent',color:active?(meta?meta.color:C.text):C.muted,border:`1px solid ${active?(meta?meta.color+'88':C.border):C.border}`,borderRadius:4,fontSize:11,fontWeight:500,letterSpacing:'0.3px',padding:'4px 10px',cursor:'pointer',fontFamily:"'Jost',sans-serif",display:'inline-flex',alignItems:'center',gap:5}}>
+                    <span>{r==='all'?'All':roleLabel(r)}</span><span style={{opacity:0.55,fontSize:10}}>{count}</span>
+                  </button>;
+                })}
+              </div>
+            )}
+            {visibleNotes.length ? (
+              <div>
+                {visibleNotes.map(n=>(
+                  <div key={n.id}>
+                    {/* Whose note — clickable through to the contact */}
+                    <div onClick={()=>nav('person_detail',{personId:n.personId})} style={{display:'flex',alignItems:'center',gap:8,margin:'2px 0 4px',cursor:'pointer'}}>
+                      <Avatar name={n._person?.name||'?'} size={22} role={n._person?primaryRole(n._person):'other'} />
+                      <span style={{color:C.muted,fontSize:11}}>{n._person?.name||'Unknown'} · {fmt(n.date)}</span>
+                    </div>
+                    <NoteCard note={n}
+                      onToggleImportant={onToggleImportant}
+                      onClearAction={onClearAction}
+                      onReopenNote={onReopenNote}
+                      onUpdateActionDate={onUpdateActionDate}
+                      onDelete={onDeleteNote}
+                      onClick={()=>nav('person_detail',{personId:n.personId,highlightNoteId:n.id})} />
+                  </div>
+                ))}
+              </div>
+            ):<Empty text={orgNotes.length? 'No notes for this role' : 'No notes from members yet'} />}
           </>}
           {tab==='invoices'&&<>
-            <div style={{display:'flex',justifyContent:'flex-end',marginBottom:12}}><Btn small onClick={onCreateInvoice}>+ Create Invoice</Btn></div>
-            {oi.length?<div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
-              {oi.map(inv=>{
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,gap:12,flexWrap:'wrap'}}>
+              {/* Status filter chips — 'all' + statuses present on this org */}
+              <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                {['all',...invStatuses].map(s=>{
+                  const active=effectiveInvStatus===s;
+                  const sm = s==='all' ? null : (INV_STATUS[s]||INV_STATUS.draft);
+                  const count = s==='all' ? oi.length : oi.filter(i=>i.status===s).length;
+                  return <button key={s} onClick={()=>setInvStatus(s)} style={{background:active?(sm?sm.bg:C.surf):'transparent',color:active?(sm?sm.color:C.text):C.muted,border:`1px solid ${active?(sm?sm.color+'88':C.border):C.border}`,borderRadius:4,fontSize:11,fontWeight:500,letterSpacing:'0.3px',padding:'4px 10px',cursor:'pointer',fontFamily:"'Jost',sans-serif",display:'inline-flex',alignItems:'center',gap:5}}>
+                    <span>{s==='all'?'All':sm.label}</span><span style={{opacity:0.55,fontSize:10}}>{count}</span>
+                  </button>;
+                })}
+              </div>
+              <Btn small onClick={onCreateInvoice}>+ Create Invoice</Btn>
+            </div>
+            {visibleInvoices.length?<>
+              <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+              {visibleInvoices.map(inv=>{
                 const sm=INV_STATUS[inv.status]||INV_STATUS.draft;
                 return (
                   <Row key={inv.id} onClick={()=>nav('invoice_detail',{invoiceId:inv.id})}>
@@ -3646,7 +4011,19 @@ function OrgDetail({ org, people, classes, invoices, nav, backInfo, onEdit, onAd
                   </Row>
                 );
               })}
-            </div>:<Empty text="No invoices yet" />}
+              </div>
+              {/* Totals reflect the current filter. Outstanding = anything not paid. */}
+              <div style={{display:'flex',justifyContent:'flex-end',gap:24,marginTop:12,padding:'0 4px'}}>
+                {(() => {
+                  const sum = visibleInvoices.reduce((s,i)=>s+(i.total||0),0);
+                  const outstanding = visibleInvoices.filter(i=>i.status!=='paid').reduce((s,i)=>s+(i.total||0),0);
+                  return (<>
+                    {outstanding>0 && outstanding!==sum && <div style={{color:C.muted,fontSize:13}}>Outstanding <span style={{color:C.text,fontWeight:500,marginLeft:6}}>{fmtMoney(outstanding)}</span></div>}
+                    <div style={{color:C.muted,fontSize:13}}>{effectiveInvStatus==='all'?'Total':INV_STATUS[effectiveInvStatus]?.label} <span style={{color:C.gold,fontWeight:600,marginLeft:6,fontSize:15}}>{fmtMoney(sum)}</span></div>
+                  </>);
+                })()}
+              </div>
+            </>:<Empty text={oi.length? 'No invoices with this status' : 'No invoices yet'} />}
           </>}
         </div>
       </div>
@@ -3718,13 +4095,16 @@ function PeopleList({ people, orgs, personType, nav, onAdd, onMerge }) {
 
 // ─── HOUSEHOLD MODAL ──────────────────────────────────────────────────────────
 // Reached from the HOUSEHOLD card on PersonDetail. Two modes in one component:
-//   - No household yet: name a new household; `person` becomes the first member.
-//   - Existing household: rename, add members (person picker + relationship),
-//     change each member's relationship inline, remove members, delete the
-//     whole household (armed-confirm).
-// One-household-per-person is enforced here in the UI only — the person picker
-// excludes anyone already in a household. The schema permits multi-membership,
-// so relaxing this later needs no migration.
+//   - Create mode (household=null): name a new household; `person` becomes the
+//     first member. Reachable even when the contact already belongs to other
+//     households — a person can be in several (e.g. a child across two homes).
+//   - Manage mode (household set): rename, add members (person picker +
+//     relationship), change each member's relationship inline, remove members,
+//     delete the whole household (armed-confirm).
+// Multi-household is supported: the add-member picker only excludes people
+// already in THIS household, and relationship labels are per-household (stored
+// on the junction row). Create mode also offers a subtle "add to an existing
+// household" link → join sub-screen (pick a household the person isn't in yet).
 function HouseholdModal({ person, household, roster, allPeople, households, householdMembers, orgs, onClose, onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, nav }) {
   const [name, setName] = useState(household?.name || `${person.name.split(' ').slice(-1)[0]} Household`);
   const [founderRel, setFounderRel] = useState('adult');
@@ -3740,12 +4120,32 @@ function HouseholdModal({ person, household, roster, allPeople, households, hous
   // lands with the right label.
   const [addingNew, setAddingNew] = useState(false);
   const [newContactRel, setNewContactRel] = useState('child');
+  // Join-existing sub-mode (reached via a subtle link on the create screen):
+  // pick an existing household this person isn't already in, choose a
+  // relationship, and link them via onAddHouseholdMember.
+  const [joinMode, setJoinMode] = useState(false);
+  const [joinHouseholdId, setJoinHouseholdId] = useState('');
+  const [joinRel, setJoinRel] = useState('adult');
+  const [joinBusy, setJoinBusy] = useState(false);
+  // Households the person is NOT already a member of (the only ones worth joining).
+  const personHouseholdIds = new Set(
+    (householdMembers || []).filter(m => m.personId === person.id).map(m => m.householdId)
+  );
+  const joinableHouseholds = (households || [])
+    .filter(h => !personHouseholdIds.has(h.id))
+    .sort((a,b) => a.name.localeCompare(b.name));
 
-  // People eligible to be added: not deleted, not already in any household,
-  // and not the contacts already on this household's roster.
-  const inAHousehold = new Set((householdMembers || []).map(m => m.personId));
+  // People eligible to be added to THIS household: not deleted, and not already
+  // a member of this specific household. A person CAN belong to multiple
+  // households, so we no longer exclude people who are in some other household —
+  // only those already on this household's roster.
+  const inThisHousehold = new Set(
+    (householdMembers || [])
+      .filter(m => household && m.householdId === household.id)
+      .map(m => m.personId)
+  );
   const addable = (allPeople || [])
-    .filter(p => !inAHousehold.has(p.id))
+    .filter(p => !inThisHousehold.has(p.id))
     .sort((a,b) => a.name.localeCompare(b.name));
 
   const relOpts = RELATIONSHIP_KEYS.map(k => ({ v:k, l:RELATIONSHIP_LABELS[k] }));
@@ -3756,6 +4156,12 @@ function HouseholdModal({ person, household, roster, allPeople, households, hous
     setBusy(true);
     try { await onCreateHousehold(trimmed, person.id, founderRel); onClose(); }
     catch { setBusy(false); }
+  };
+  const doJoin = async () => {
+    if (!joinHouseholdId || joinBusy) return;
+    setJoinBusy(true);
+    try { await onAddHouseholdMember(joinHouseholdId, person.id, joinRel); onClose(); }
+    catch { setJoinBusy(false); }
   };
   const doRename = async () => {
     const trimmed = name.trim();
@@ -3774,6 +4180,37 @@ function HouseholdModal({ person, household, roster, allPeople, households, hous
 
   // ── Create mode (no household yet) ──────────────────────────────────────────
   if (!household) {
+    // Join-existing sub-screen, reached via the subtle link below the create form.
+    if (joinMode) {
+      return (
+        <Modal title="Join a household" onClose={onClose}>
+          <div style={{color:C.muted,fontSize:12,marginBottom:18,lineHeight:1.5}}>
+            Add <strong style={{color:C.text}}>{person.name}</strong> to an existing household. They'll keep any other households they belong to.
+          </div>
+          {joinableHouseholds.length ? (
+            <>
+              <FI label="HOUSEHOLD" value={joinHouseholdId} onChange={setJoinHouseholdId}
+                opts={[{v:'',l:'Select a household…'}, ...joinableHouseholds.map(h=>({v:h.id,l:h.name}))]} />
+              <FI label={`${person.name.toUpperCase()}'S RELATIONSHIP`} value={joinRel} onChange={setJoinRel} opts={relOpts} />
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,marginTop:8}}>
+                <span style={{color:C.blue,fontSize:12,cursor:'pointer'}} onClick={()=>setJoinMode(false)}>← Create new instead</span>
+                <div style={{display:'flex',gap:10}}>
+                  <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+                  <Btn onClick={doJoin} disabled={joinBusy || !joinHouseholdId}>{joinBusy?'Joining…':'Join household'}</Btn>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{color:C.muted,fontSize:13,marginBottom:16}}>There are no other households to join yet.</div>
+              <div style={{display:'flex',justifyContent:'flex-end',gap:10}}>
+                <Btn variant="secondary" onClick={()=>setJoinMode(false)}>← Back</Btn>
+              </div>
+            </>
+          )}
+        </Modal>
+      );
+    }
     return (
       <Modal title="Create household" onClose={onClose}>
         <div style={{color:C.muted,fontSize:12,marginBottom:18,lineHeight:1.5}}>
@@ -3781,9 +4218,14 @@ function HouseholdModal({ person, household, roster, allPeople, households, hous
         </div>
         <FI label="HOUSEHOLD NAME" value={name} onChange={setName} />
         <FI label={`${person.name.toUpperCase()}'S RELATIONSHIP`} value={founderRel} onChange={setFounderRel} opts={relOpts} />
-        <div style={{display:'flex',justifyContent:'flex-end',gap:10,marginTop:8}}>
-          <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={doCreate} disabled={busy || !name.trim()}>{busy?'Creating…':'Create household'}</Btn>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,marginTop:8}}>
+          {joinableHouseholds.length > 0
+            ? <span style={{color:C.blue,fontSize:12,cursor:'pointer'}} onClick={()=>setJoinMode(true)}>or add to an existing household</span>
+            : <span />}
+          <div style={{display:'flex',gap:10}}>
+            <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+            <Btn onClick={doCreate} disabled={busy || !name.trim()}>{busy?'Creating…':'Create household'}</Btn>
+          </div>
         </div>
       </Modal>
     );
@@ -3890,12 +4332,28 @@ function HouseholdModal({ person, household, roster, allPeople, households, hous
   );
 }
 
-function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, orgs, nav, backInfo, highlightNoteId, people, households, householdMembers, onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddNote, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
+function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], orgs, nav, backInfo, highlightNoteId, people, households, householdMembers, onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddNote, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
   const [tab, setTab] = useState('notes');
   const [flashId, setFlashId] = useState(null);
   const [filterKind, setFilterKind] = useState('all');
+  // Which booking rows are expanded to show their session note(s) inline.
+  const [bookingNotesOpen, setBookingNotesOpen] = useState(()=>new Set());
+  const toggleBookingNotes = (cid) => setBookingNotesOpen(s=>{ const n=new Set(s); n.has(cid)?n.delete(cid):n.add(cid); return n; });
+  // Notes shown on a booking row: interaction notes anchored to that session
+  // (session_id == classId), plus the session's own reflection (Class Log text),
+  // folded in as a synthetic entry so it renders inline like a note. Reflection
+  // is why a private session with written-up content lights up even when no
+  // classId-anchored interaction note exists.
+  const classNotes = (cls) => {
+    const cid = cls.id;
+    const list = notes.filter(n => n.classId===cid && !['booking','payment'].includes(n.kind));
+    if (cls.reflection && cls.reflection.trim()) {
+      list.unshift({ id:`reflection-${cid}`, kind:'note', text:cls.reflection, _reflection:true });
+    }
+    return list;
+  };
   // If the active filter points at a kind with no items (e.g. the last call
   // was deleted and its chip vanished), fall back to showing all — otherwise
   // the user is stranded on an empty list with no chip to click back to.
@@ -3903,20 +4361,34 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
   const visibleNotes = effectiveFilter==='all' ? pNotes : pNotes.filter(n => (n.kind||'note')===effectiveFilter);
   const impNotes = visibleNotes.filter(n=>n.important), regNotes = visibleNotes.filter(n=>!n.important);
 
-  // ── Household derivation. A person belongs to at most one household in the v1
-  // UI (the schema allows many; we just don't surface multi-membership yet).
-  // myMembership = this person's junction row; myHousehold = the group; members
-  // = every junction row in that household joined to its person record + label.
-  const myMembership = (householdMembers || []).find(m => m.personId === person.id) || null;
-  const myHousehold = myMembership ? (households || []).find(h => h.id === myMembership.householdId) : null;
-  const householdRoster = myHousehold
+  // ── Household derivation. A contact may belong to MULTIPLE households (the
+  // junction table supports it). myMemberships = all this person's junction rows;
+  // myHouseholds = the groups they belong to (sorted by name). The card shows
+  // one household at a time via a tab selector (activeHouseholdId).
+  const myMemberships = (householdMembers || []).filter(m => m.personId === person.id);
+  const myHouseholds = myMemberships
+    .map(m => (households || []).find(h => h.id === m.householdId))
+    .filter(Boolean)
+    .sort((a,b) => a.name.localeCompare(b.name));
+  const [activeHouseholdId, setActiveHouseholdId] = useState(null);
+  // Keep the active selection valid as households are added/removed: default to
+  // the first, and fall back if the active one disappears (e.g. left/deleted).
+  useEffect(() => {
+    if (myHouseholds.length === 0) { if(activeHouseholdId!==null) setActiveHouseholdId(null); return; }
+    if (!activeHouseholdId || !myHouseholds.some(h => h.id === activeHouseholdId)) {
+      setActiveHouseholdId(myHouseholds[0].id);
+    }
+  }, [myHouseholds.map(h=>h.id).join(','), activeHouseholdId]);
+  const activeHousehold = myHouseholds.find(h => h.id === activeHouseholdId) || myHouseholds[0] || null;
+  // Roster (members + their relationship + person record) for the active household.
+  const householdRoster = activeHousehold
     ? (householdMembers || [])
-        .filter(m => m.householdId === myHousehold.id)
+        .filter(m => m.householdId === activeHousehold.id)
         .map(m => ({ membership: m, person: (people || []).find(p => p.id === m.personId) }))
         .filter(x => x.person)
         .sort((a,b) => a.person.name.localeCompare(b.person.name))
     : [];
-  // null | 'manage' — the household management modal (create / add member / edit)
+  // Household modal state: null | { mode:'create' } | { mode:'manage', householdId }
   const [householdModal, setHouseholdModal] = useState(null);
   const pPkgs=packages.filter(pk=>pk.personId===person.id);
   // Payments tab data: three sources merged into one chronological list —
@@ -4054,22 +4526,50 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
                   const ps = att?.paymentStatus || 'unpaid';
                   const payInfo = ps==='paid' ? {t:'paid', c:C.green} : ps==='package' ? {t:'pkg', c:C.blue} : {t:'unpaid', c:C.muted};
                   const payHint = <span style={{fontSize:10,color:payInfo.c,opacity:0.85,letterSpacing:'0.3px'}}>{payInfo.t}</span>;
-                  return (<div key={c.id} onClick={()=>nav('class_detail',{classId:c.id})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:`1px solid ${C.border}`,cursor:'pointer'}}><div><div style={{color:C.text,fontSize:13}}>{c.name}</div><div style={{color:C.muted,fontSize:11}}>{fmt(c.date)}</div></div><div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>{payHint}<div title={att?.attended?'Attended':'Did not attend'} style={{width:8,height:8,borderRadius:'50%',background:att?.attended?C.green:C.red}} /></div></div>);
+                  const cn = classNotes(c);
+                  const open = bookingNotesOpen.has(c.id);
+                  return (<div key={c.id}>
+                    <div onClick={()=>nav('class_detail',{classId:c.id})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:open?'none':`1px solid ${C.border}`,cursor:'pointer'}}><div><div style={{color:C.text,fontSize:13}}>{c.name}</div><div style={{color:C.muted,fontSize:11}}>{fmt(c.date)}</div></div><div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}><NoteIndicator count={cn.length} expanded={open} previewText={cn[0]?.text||''} onToggle={()=>toggleBookingNotes(c.id)} />{payHint}<div title={att?.attended?'Attended':'Did not attend'} style={{width:8,height:8,borderRadius:'50%',background:att?.attended?C.green:C.red}} /></div></div>
+                    {open && cn.length>0 && (
+                      <div style={{background:C.surf,borderBottom:`1px solid ${C.border}`,padding:'8px 10px 10px',marginBottom:0}} onClick={e=>e.stopPropagation()}>
+                        {cn.map(n=>(
+                          <div key={n.id} style={{display:'flex',gap:7,padding:'4px 0',color:C.text,fontSize:12,lineHeight:1.55}}>
+                            <span style={{opacity:0.7,flexShrink:0}}>{n._reflection?'📔':(INTERACTION_KINDS[n.kind]||INTERACTION_KINDS.note).icon}</span>
+                            <span>{n.text}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>);
                 })}
               </div>
             ):<div style={{color:C.muted,fontSize:13}}>No bookings yet</div>}
           </div>
-          {/* HOUSEHOLD card — shows the contact's household and fellow members,
-              or an action to create/join one. Members are clickable through to
-              their own PersonDetail. Birthdays reuse birthdayInfo(). */}
+          {/* HOUSEHOLD card — a contact can belong to several households. When
+              there's more than one, a tab row switches between them; each shows
+              its own roster and per-household relationships. "+ household"
+              creates a new one (joining an existing household comes later).
+              Members are clickable through to their own PersonDetail. */}
           <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'16px 20px',marginTop:14}}>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
-              <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px'}}>HOUSEHOLD</div>
-              {myHousehold && <span style={{color:C.muted,fontSize:11,cursor:'pointer'}} onClick={()=>setHouseholdModal('manage')}>Manage</span>}
+              <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px'}}>{myHouseholds.length>1?'HOUSEHOLDS':'HOUSEHOLD'}</div>
+              <div style={{display:'flex',alignItems:'center',gap:12}}>
+                {myHouseholds.length>0 && <span style={{color:C.muted,fontSize:11,cursor:'pointer'}} onClick={()=>setHouseholdModal({mode:'create'})} title="Create another household">+ household</span>}
+                {activeHousehold && <span style={{color:C.muted,fontSize:11,cursor:'pointer'}} onClick={()=>setHouseholdModal({mode:'manage',householdId:activeHousehold.id})}>Manage</span>}
+              </div>
             </div>
-            {myHousehold ? (
+            {/* Tab row — only when the contact is in more than one household */}
+            {myHouseholds.length>1 && (
+              <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>
+                {myHouseholds.map(h=>{
+                  const active=h.id===activeHousehold?.id;
+                  return <button key={h.id} onClick={()=>setActiveHouseholdId(h.id)} style={{background:active?C.goldBg:'transparent',color:active?C.gold:C.muted,border:`1px solid ${active?C.gold+'88':C.border}`,borderRadius:4,fontSize:11,fontWeight:500,letterSpacing:'0.3px',padding:'4px 10px',cursor:'pointer',fontFamily:"'Jost',sans-serif",maxWidth:140,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{h.name}</button>;
+                })}
+              </div>
+            )}
+            {activeHousehold ? (
               <>
-                <div style={{color:C.text,fontSize:14,fontWeight:500,marginBottom:10}}>{myHousehold.name}</div>
+                {myHouseholds.length<=1 && <div style={{color:C.text,fontSize:14,fontWeight:500,marginBottom:10}}>{activeHousehold.name}</div>}
                 {householdRoster.length > 1 ? (
                   <div style={{display:'flex',flexDirection:'column',gap:2}}>
                     {householdRoster.map(({membership, person:mp}) => {
@@ -4093,13 +4593,13 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
                     })}
                   </div>
                 ) : (
-                  <div style={{color:C.muted,fontSize:13}}>Just this contact so far. <span style={{color:C.blue,cursor:'pointer'}} onClick={()=>setHouseholdModal('manage')}>Add someone →</span></div>
+                  <div style={{color:C.muted,fontSize:13}}>Just this contact so far. <span style={{color:C.blue,cursor:'pointer'}} onClick={()=>setHouseholdModal({mode:'manage',householdId:activeHousehold.id})}>Add someone →</span></div>
                 )}
               </>
             ) : (
               <div>
                 <div style={{color:C.muted,fontSize:13,marginBottom:10}}>Not in a household.</div>
-                <Btn small onClick={()=>setHouseholdModal('manage')}>+ Create or join household</Btn>
+                <Btn small onClick={()=>setHouseholdModal({mode:'create'})}>+ Create household</Btn>
               </div>
             )}
           </div>
@@ -4337,26 +4837,37 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
           </>}
         </div>
       </div>
-      {householdModal === 'manage' && (
-        <HouseholdModal
-          person={person}
-          household={myHousehold}
-          roster={householdRoster}
-          allPeople={people}
-          households={households}
-          householdMembers={householdMembers}
-          orgs={orgs}
-          onClose={()=>setHouseholdModal(null)}
-          onCreateHousehold={onCreateHousehold}
-          onRenameHousehold={onRenameHousehold}
-          onDeleteHousehold={onDeleteHousehold}
-          onAddHouseholdMember={onAddHouseholdMember}
-          onCreatePersonForHousehold={onCreatePersonForHousehold}
-          onUpdateMemberRelationship={onUpdateMemberRelationship}
-          onRemoveHouseholdMember={onRemoveHouseholdMember}
-          nav={nav}
-        />
-      )}
+      {householdModal && (() => {
+        // create mode → pass household=null (modal shows its create form).
+        // manage mode → resolve the specific household + its roster.
+        const isCreate = householdModal.mode === 'create';
+        const targetHousehold = isCreate ? null : (households||[]).find(h => h.id === householdModal.householdId) || null;
+        const targetRoster = targetHousehold
+          ? (householdMembers||[]).filter(m=>m.householdId===targetHousehold.id)
+              .map(m=>({membership:m, person:(people||[]).find(p=>p.id===m.personId)}))
+              .filter(x=>x.person).sort((a,b)=>a.person.name.localeCompare(b.person.name))
+          : [];
+        return (
+          <HouseholdModal
+            person={person}
+            household={targetHousehold}
+            roster={targetRoster}
+            allPeople={people}
+            households={households}
+            householdMembers={householdMembers}
+            orgs={orgs}
+            onClose={()=>setHouseholdModal(null)}
+            onCreateHousehold={onCreateHousehold}
+            onRenameHousehold={onRenameHousehold}
+            onDeleteHousehold={onDeleteHousehold}
+            onAddHouseholdMember={onAddHouseholdMember}
+            onCreatePersonForHousehold={onCreatePersonForHousehold}
+            onUpdateMemberRelationship={onUpdateMemberRelationship}
+            onRemoveHouseholdMember={onRemoveHouseholdMember}
+            nav={nav}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -4957,6 +5468,89 @@ function WeekView({ classes, orgs, notes, people, nav, backInfo, onAddClass, onU
   );
 }
 
+// ─── MONTH VIEW (global) ──────────────────────────────────────────────────────
+// A whole-practice month calendar — every org's classes in a classic 6×7 grid.
+// Sits under Week View in the nav. Pills are colour-coded by class kind and open
+// the class on click; days overflow to "+N more". Mirrors WeekView's header and
+// Monday-start convention, and the OrgDetail MonthCalendar's grid mechanics.
+function MonthView({ classes, orgs, nav, backInfo, onAddClass }) {
+  const t = today();
+  const [anchor, setAnchor] = useState(() => t); // any date inside the shown month
+  const a = new Date(anchor+'T12:00');
+  const year = a.getFullYear(), month = a.getMonth();
+  const monthLabel = a.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+
+  // 6 weeks × 7 days starting from the Monday on/before the 1st.
+  const gridStart = useMemo(() => startOfWeek(new Date(year, month, 1).toISOString().slice(0,10)), [year, month]);
+  const cells = useMemo(() => Array.from({length:42}, (_,i) => addDays(gridStart, i)), [gridStart]);
+
+  const byDate = useMemo(() => {
+    const map = {};
+    classes.forEach(c => { (map[c.date]||(map[c.date]=[])).push(c); });
+    Object.values(map).forEach(list => list.sort((x,y)=>(x.time||'').localeCompare(y.time||'')));
+    return map;
+  }, [classes]);
+  const monthCount = classes.filter(c => { const d=new Date(c.date+'T12:00'); return d.getFullYear()===year && d.getMonth()===month; }).length;
+
+  const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const prevMonth = () => setAnchor(new Date(year, month-1, 1).toISOString().slice(0,10));
+  const nextMonth = () => setAnchor(new Date(year, month+1, 1).toISOString().slice(0,10));
+
+  const Pill = ({ c }) => {
+    const cOrg = orgs.find(o => o.id === c.orgId);
+    const kk = classKindKey(c, cOrg);
+    const color = (KIND_META[kk] || { color:C.gold }).color;
+    const tip = [c.name, fmtTime(c.time)?`${fmtTime(c.time)} · ${c.duration||60} min`:null, c.location, cOrg?.name].filter(Boolean).join('\n');
+    return (
+      <div onClick={(e)=>{ e.stopPropagation(); nav('class_detail',{classId:c.id}); }} title={tip}
+        style={{background:color+'22',borderLeft:`2px solid ${color}`,borderRadius:3,padding:'1px 4px',marginBottom:2,cursor:'pointer',display:'flex',alignItems:'center',gap:4,overflow:'hidden'}}>
+        {c.time && <span style={{color,fontSize:9,fontWeight:600,flexShrink:0}}>{fmtTime(c.time)}</span>}
+        <span style={{color:C.text,fontSize:10,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{c.name}</span>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{padding:'32px 36px'}}>
+      <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={
+        <Btn small onClick={()=>onAddClass && onAddClass(t)}>+ Class</Btn>
+      }>Month View</PageHead>
+
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:18,flexWrap:'wrap'}}>
+        <button onClick={prevMonth} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:14,padding:'4px 10px',lineHeight:1,fontFamily:"'Jost',sans-serif"}}>‹</button>
+        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:20,color:C.text,fontWeight:600,minWidth:180}}>{monthLabel}</div>
+        <button onClick={nextMonth} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:14,padding:'4px 10px',lineHeight:1,fontFamily:"'Jost',sans-serif"}}>›</button>
+        <button onClick={()=>nav('week_view')} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:12,padding:'4px 11px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>Week view</button>
+        {(year!==new Date(t+'T12:00').getFullYear() || month!==new Date(t+'T12:00').getMonth()) && (
+          <button onClick={()=>setAnchor(t)} style={{background:C.goldBg,border:`1px solid ${C.gold}88`,color:C.gold,cursor:'pointer',borderRadius:6,fontSize:12,padding:'4px 11px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>This month</button>
+        )}
+        <div style={{flex:1}} />
+        <div style={{color:C.muted,fontSize:12}}>{monthCount} class{monthCount!==1?'es':''}</div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:1,marginBottom:4}}>
+        {DOW.map(d=><div key={d} style={{textAlign:'center',color:C.muted,fontSize:10,fontWeight:600,letterSpacing:'0.5px',padding:'2px 0'}}>{d}</div>)}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:5}}>
+        {cells.map(d=>{
+          const dd = new Date(d+'T12:00');
+          const inMonth = dd.getMonth()===month;
+          const isToday = d===t;
+          const dayClasses = byDate[d]||[];
+          return (
+            <div key={d} onClick={()=>onAddClass && onAddClass(d)}
+              style={{border:`1px solid ${isToday?C.gold+'88':C.border}`,borderRadius:6,minHeight:104,padding:6,background:isToday?C.goldBg:(inMonth?C.card:'transparent'),opacity:inMonth?1:0.4,cursor:'pointer'}}>
+              <div style={{color:isToday?C.gold:C.text,fontSize:12,fontWeight:isToday?600:400,marginBottom:4,textAlign:'right'}}>{dd.getDate()}</div>
+              {dayClasses.slice(0,4).map(c=><Pill key={c.id} c={c} />)}
+              {dayClasses.length>4 && <div style={{color:C.muted,fontSize:9,paddingLeft:2}}>+{dayClasses.length-4} more</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── PAYMENT EDITOR ───────────────────────────────────────────────────────────
 function PaymentEditor({ attendance: a, cls, packages, allAttendance, onSave, onCancel }) {
   const compatibleModels = (pk) => PKG_COMPATIBILITY[pk.type] || [];
@@ -5485,6 +6079,7 @@ export default function FeltBodyCRM() {
       case 'comms_log': label = 'Recent Activity'; break;
       case 'classes': label = 'All Classes'; break;
       case 'week_view': label = 'Week View'; break;
+      case 'month_view': label = 'Month View'; break;
       case 'forms_list': label = 'Forms'; break;
       case 'invoices': label = 'Invoices'; break;
       case 'people':
@@ -6148,12 +6743,17 @@ export default function FeltBodyCRM() {
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;
       case 'org_detail': {
         const org=orgs.find(o=>o.id===orgId); if(!org) return <Empty text="Not found" />;
-        return <OrgDetail org={org} people={people} classes={classes} invoices={invoices} nav={nav} backInfo={backInfo}
+        return <OrgDetail org={org} people={people} classes={classes} invoices={invoices} notes={notes} nav={nav} backInfo={backInfo}
           onEdit={()=>setModal({type:'edit_org',org})}
           onAddPerson={()=>setModal({type:'add_person',orgId,personType:org.type==='care_home'?'resident':'website_student'})}
           onAddClass={()=>setModal({type:'add_class',orgId})}
           onCreateInvoice={()=>setModal({type:'create_invoice',orgId})}
           onEditInvoice={inv=>setModal({type:'edit_invoice',inv})}
+          onToggleImportant={toggleNoteImportant}
+          onClearAction={clearNoteAction}
+          onReopenNote={reopenNote}
+          onDeleteNote={deleteNote}
+          onUpdateActionDate={updateNoteAction}
           onUpdateInvoiceStatus={setInvoiceStatus} />;
       }
       case 'people': return <PeopleList people={people} orgs={orgs} personType={personType} nav={nav} mode={mode} onAdd={()=>setModal({type:'add_person',personType: personType==='all'?'private_client':personType, ...(mode==='personal'?{orgId: orgs.find(o=>o.type==='personal')?.id}:{})})} onMerge={(a,b)=>setModal({type:'merge_people',personA:a,personB:b})} />;
@@ -6162,7 +6762,7 @@ export default function FeltBodyCRM() {
         const org=orgs.find(o=>o.id===person.orgId);
         const pn=notes.filter(n=>n.personId===person.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
         const pc=attendance.filter(a=>a.personId===person.id).map(a=>classes.find(c=>c.id===a.classId)).filter(Boolean).sort((a,b)=>b.date.localeCompare(a.date));
-        return <PersonDetail person={person} org={org} pNotes={pn} pClasses={pc} attendance={attendance} packages={packages} classes={classes} orgs={orgs} nav={nav} backInfo={backInfo} highlightNoteId={highlightNoteId}
+        return <PersonDetail person={person} org={org} pNotes={pn} pClasses={pc} attendance={attendance} packages={packages} classes={classes} notes={notes} orgs={orgs} nav={nav} backInfo={backInfo} highlightNoteId={highlightNoteId}
           people={people} households={households} householdMembers={householdMembers}
           onCreateHousehold={createHousehold}
           onRenameHousehold={renameHousehold}
@@ -6191,6 +6791,8 @@ export default function FeltBodyCRM() {
         onUpdateActionDate={updateNoteAction}
         onClearAction={clearNoteAction}
         onToggleImportant={toggleNoteImportant} />;
+      case 'month_view': return <MonthView classes={classes} orgs={orgs} nav={nav} backInfo={backInfo}
+        onAddClass={(date)=>setModal({type:'add_class', date})} />;
       case 'forms_list': return <FormsList forms={forms} classes={classes} onAdd={addForm} onUpdate={updateForm} onRemove={removeForm} onMove={moveForm} />;
       case 'class_detail': {
         const cls=classes.find(c=>c.id===classId); if(!cls) return <Empty text="Not found" />;
