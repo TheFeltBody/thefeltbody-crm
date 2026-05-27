@@ -156,6 +156,18 @@ const TYPE_ICONS = ['◇','⌂','◎','▦','⬡','◈','◉','⊙','◍','◫',
 const TypesContext = createContext({ orgTypes: ORG_META, personRoles: PERSON_ROLES });
 const useTypes = () => useContext(TypesContext);
 
+// Mobile UI context: lets any header/view access the hamburger toggle without
+// prop-drilling. Also exposes a per-view `expandAll` toggle state (Dashboard
+// accordion expand/contract) so MobileHeader can render a toggle button next
+// to the page title.
+const MobileUIContext = createContext({
+  onMobileNavOpen: () => {},
+  expandAll: false,
+  setExpandAll: () => {},
+  showExpandToggle: false,  // only true on views that have accordion sections
+});
+const useMobileUI = () => useContext(MobileUIContext);
+
 // Roles/types shown as quick-jump items in the sidebar's expanded section.
 // 'resident' is a real role used in badges/avatars but isn't a sidebar shortcut
 // (residents are reached via their care home org). Same for 'other' org category —
@@ -198,6 +210,46 @@ const buildPersonRoles = (custom=[]) => {
 };
 
 const uid = () => `${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+
+// Mobile detection: matches the 767px CSS breakpoint used by data-desktop-sidebar /
+// data-hamburger. Components that need to BRANCH STRUCTURALLY (not just style) on
+// mobile call this hook. CSS-only adjustments should keep using the existing
+// media queries.
+const useIsMobile = () => {
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const onChange = (e) => setIsMobile(e.matches);
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else mq.addListener(onChange);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', onChange);
+      else mq.removeListener(onChange);
+    };
+  }, []);
+  return isMobile;
+};
+
+// Tiny localStorage-backed state. Used for "remember last opened" UI state
+// (Dashboard mobile accordion section, mobile expand/contract toggle) where
+// persistence is convenience-only — fine if it's wiped, fine if it's per-device.
+// Wraps in try/catch because localStorage can throw in private-mode Safari.
+const useLocalStorage = (key, initial) => {
+  const [val, setVal] = useState(() => {
+    if (typeof window === 'undefined') return initial;
+    try {
+      const raw = window.localStorage.getItem(key);
+      return raw === null ? initial : JSON.parse(raw);
+    } catch { return initial; }
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem(key, JSON.stringify(val)); } catch {}
+  }, [key, val]);
+  return [val, setVal];
+};
+
 const fmt = d => d ? new Date(d+'T12:00').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) : '—';
 // Relative time for activity-feed rows. Takes a YYYY-MM-DD string and
 // resolves to "today", "yesterday", "N days ago", "last week", "N weeks
@@ -268,6 +320,10 @@ const birthdayInfo = (iso) => {
   return { age, days, label };
 };
 const initials = n => n.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+// First letter of each word in a label — used by the mobile RoleBadge so the
+// compact badges fit on narrow rows. "Private Client" → "PC", "TT Prospect" →
+// "TP" (digits/letters from each word's first character), "Student" → "S".
+const labelAbbrev = (label) => String(label || '').trim().split(/\s+/).map(w => w[0]).join('').toUpperCase();
 const today = () => new Date().toISOString().slice(0,10);
 const primaryRole = p => (p.roles && p.roles[0]) || 'other';
 const classKindKey = (cls, org) => {
@@ -685,10 +741,11 @@ const generateSeriesClasses = (series, count=12) => {
 };
 
 // ─── MICRO COMPONENTS ─────────────────────────────────────────────────────────
-const RoleBadge = ({ role }) => {
+const RoleBadge = ({ role, compact }) => {
   const { personRoles } = useTypes();
   const m = personRoles[role] || PERSON_ROLES[role] || { label:role, color:C.muted, bg:C.surf };
-  return <span style={{background:m.bg,color:m.color,fontSize:10,fontWeight:600,padding:'2px 8px',borderRadius:20,letterSpacing:'0.7px',textTransform:'uppercase',whiteSpace:'nowrap'}}>{m.label}</span>;
+  const text = compact ? labelAbbrev(m.label) : m.label;
+  return <span title={compact ? m.label : undefined} style={{background:m.bg,color:m.color,fontSize:10,fontWeight:600,padding:'2px 8px',borderRadius:20,letterSpacing:'0.7px',textTransform:'uppercase',whiteSpace:'nowrap'}}>{text}</span>;
 };
 const OrgBadge = ({ type }) => {
   const { orgTypes } = useTypes();
@@ -903,28 +960,93 @@ const Empty = ({ text, action, onAction }) => (
     {text}{action && <><span> </span><span style={{color:C.gold,cursor:'pointer'}} onClick={onAction}>{action}</span></>}
   </div>
 );
-const PageHead = ({ back, onBack, children, action, sticky }) => (
-  <div style={{
-    display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:28,
-    ...(sticky ? {
-      // Pin the header (back button + title + actions) to the top of the
-      // scroll container so it stays reachable on long pages — e.g. a contact
-      // with a deep notes history reached via a highlighted note. Negative
-      // top margin + matching padding absorbs the wrapper's top padding so the
-      // header sits flush at the top edge when stuck. zIndex keeps it above
-      // scrolling cards; the bg + border give it a clean edge.
-      position:'sticky', top:0, zIndex:5,
-      background:C.bg, marginTop:-32, paddingTop:18, paddingBottom:14,
-      borderBottom:`1px solid ${C.border}`,
-    } : {}),
-  }}>
-    <div style={{display:'flex',alignItems:'center',gap:12}}>
-      {back && <button onClick={onBack} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',padding:'5px 11px',borderRadius:6,fontSize:13}}>← {back}</button>}
-      <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:600,color:C.text,letterSpacing:'-0.5px',margin:0}}>{children}</h1>
+const PageHead = ({ back, onBack, children, action, sticky, subInfo }) => {
+  const isMobile = useIsMobile();
+  if (isMobile) {
+    return <MobileHeader back={back} onBack={onBack} action={action} subInfo={subInfo}>{children}</MobileHeader>;
+  }
+  return (
+    <div style={{
+      display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:28,
+      ...(sticky ? {
+        // Pin the header (back button + title + actions) to the top of the
+        // scroll container so it stays reachable on long pages — e.g. a contact
+        // with a deep notes history reached via a highlighted note. Negative
+        // top margin + matching padding absorbs the wrapper's top padding so the
+        // header sits flush at the top edge when stuck. zIndex keeps it above
+        // scrolling cards; the bg + border give it a clean edge.
+        position:'sticky', top:0, zIndex:5,
+        background:C.bg, marginTop:-32, paddingTop:18, paddingBottom:14,
+        borderBottom:`1px solid ${C.border}`,
+      } : {}),
+    }}>
+      <div style={{display:'flex',alignItems:'center',gap:12}}>
+        {back && <button onClick={onBack} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',padding:'5px 11px',borderRadius:6,fontSize:13}}>← {back}</button>}
+        <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:600,color:C.text,letterSpacing:'-0.5px',margin:0}}>{children}</h1>
+      </div>
+      <div style={{display:'flex',gap:8}}>{action}</div>
     </div>
-    <div style={{display:'flex',gap:8}}>{action}</div>
-  </div>
-);
+  );
+};
+
+// ─── MOBILE HEADER ────────────────────────────────────────────────────────────
+// Two-row sticky header used on all views when viewport ≤ 767px.
+//
+//   Row 1 (always present):
+//     [☰ hamburger] [Title] ............................... [⇕ expand toggle]
+//
+//   Row 2 (sub-header, only when there's something to show):
+//     [← back] ........................ [subInfo (e.g. date)] [actions]
+//
+// The expand toggle only renders when the current view registers
+// `showExpandToggle: true` via MobileUIContext (currently Dashboard only).
+// In contracted mode the accordion shows one open section at a time; in
+// expanded mode all sections open and the page scrolls normally.
+const MobileHeader = ({ back, onBack, children, action, subInfo }) => {
+  const { onMobileNavOpen, expandAll, setExpandAll, showExpandToggle } = useMobileUI();
+  const hasSubRow = back || subInfo || action;
+  return (
+    <div style={{
+      position:'sticky', top:0, zIndex:6,
+      background:C.bg,
+      marginTop:-12, marginLeft:-12, marginRight:-12, marginBottom:14,
+      borderBottom:`1px solid ${C.border}`,
+    }}>
+      {/* Row 1: hamburger + title + expand toggle */}
+      <div style={{display:'flex',alignItems:'center',gap:6,padding:'10px 14px 8px',minHeight:48}}>
+        <button onClick={onMobileNavOpen}
+          aria-label="Open navigation menu"
+          style={{background:'none',border:'none',color:C.text,cursor:'pointer',fontSize:22,padding:'4px 8px',lineHeight:1,flexShrink:0}}>
+          ☰
+        </button>
+        <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:600,color:C.text,letterSpacing:'-0.3px',margin:0,flex:1,minWidth:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+          {children}
+        </h1>
+        {showExpandToggle && (
+          <button onClick={()=>setExpandAll(v=>!v)}
+            title={expandAll ? 'Collapse — pin section titles to screen' : 'Expand — show all sections, scroll page'}
+            aria-label={expandAll ? 'Collapse all sections' : 'Expand all sections'}
+            style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:14,padding:'5px 10px',lineHeight:1,flexShrink:0,fontFamily:"'Jost',sans-serif"}}>
+            {expandAll ? '⤓' : '⤒'}
+          </button>
+        )}
+      </div>
+      {/* Row 2: sub-header — back / info / action */}
+      {hasSubRow && (
+        <div style={{display:'flex',alignItems:'center',gap:8,padding:'4px 14px 10px',borderTop:`1px solid ${C.border}44`,flexWrap:'wrap'}}>
+          {back ? (
+            <button onClick={onBack} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',padding:'4px 9px',borderRadius:6,fontSize:12,fontFamily:"'Jost',sans-serif",flexShrink:0}}>
+              ← {back}
+            </button>
+          ) : <div />}
+          <div style={{flex:1}} />
+          {subInfo && <div style={{color:C.muted,fontSize:12,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0}}>{subInfo}</div>}
+          {action && <div style={{display:'flex',gap:6,flexShrink:0}}>{action}</div>}
+        </div>
+      )}
+    </div>
+  );
+};
 const Tabs = ({ tabs, active, onChange }) => (
   <div style={{display:'flex',borderBottom:`1px solid ${C.border}`,marginBottom:20}}>
     {tabs.map(t=>(
@@ -2725,8 +2847,339 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
   const personOf = (id) => people.find(p=>p.id===id);
   const goToNote = (n) => nav('person_detail', { personId: n.personId, highlightNoteId: n.id });
 
+  // ─── Mobile accordion plumbing ─────────────────────────────────────────────
+  // Section keys are stable identifiers used for the "last opened" memory.
+  // The toggle in MobileHeader flips expandAll between contracted (one open,
+  // titles always visible) and expanded (all open, page scrolls).
+  const isMobile = useIsMobile();
+  const { expandAll } = useMobileUI();
+  const [openSection, setOpenSection] = useLocalStorage('fbc.dashboard.openSection', 'todo');
+  const recentItems = useMemo(() =>
+    [...notes, ...deriveActivity(attendance, classes, packages)]
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, 6),
+    [notes, attendance, classes, packages]
+  );
+
+  // The actual section body renderers — each one returns JSX, called by both
+  // mobile and desktop layouts. Pulled into named consts so the desktop side
+  // can flow them in order while mobile wraps each in an accordion panel.
+  const renderTodoBody = () => (
+    (todoCounts.all > 0 || todoCounts.completed > 0) ? (
+      <>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
+          {[
+            {key:'today', label:'Today', count:todoCounts.today},
+            {key:'week', label:'This Week', count:todoCounts.week},
+            {key:'month', label:'This Month', count:todoCounts.month},
+            {key:'all', label:'All', count:todoCounts.all},
+            {key:'completed', label:'Completed', count:todoCounts.completed},
+          ].map(p => (
+            <button key={p.key} onClick={()=>setTodoFilter(p.key)}
+              style={{
+                background: todoFilter===p.key ? C.goldBg : C.surf,
+                border: `1px solid ${todoFilter===p.key ? C.gold+'aa' : C.border}`,
+                color: todoFilter===p.key ? C.gold : C.muted,
+                cursor:'pointer', borderRadius:20, fontSize:11.5, padding:'3px 10px',
+                fontFamily:"'Jost',sans-serif",
+                fontWeight: todoFilter===p.key ? 600 : 400,
+                letterSpacing:'0.3px',
+              }}>
+              {p.label}{p.count>0?` · ${p.count}`:''}
+            </button>
+          ))}
+        </div>
+        {filteredTodos.length > 0 ? (
+          <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+            {filteredTodos.map((n,i)=>{
+              const p = personOf(n.personId);
+              const isCompleted = !!n.completed;
+              const overdue = !isCompleted && n.actionDate < t;
+              const dueToday = !isCompleted && n.actionDate === t;
+              const accent = isCompleted ? C.muted : (overdue ? C.red : dueToday ? C.gold : C.blue);
+              const rightLabel = isCompleted ? 'Completed' : (overdue?'Overdue':dueToday?'Today':'Upcoming');
+              const rightDate = isCompleted ? n.completedAt : n.actionDate;
+              return (
+                <div key={n.id} onClick={()=>goToNote(n)}
+                  style={{display:'flex',alignItems:'center',gap:14,padding:'12px 16px',borderBottom:i<filteredTodos.length-1?`1px solid ${C.border}`:'none',cursor:'pointer',background:isCompleted?C.bg:C.card,transition:'background 0.12s'}}
+                  onMouseEnter={e=>e.currentTarget.style.background=isCompleted?C.surf:C.active} onMouseLeave={e=>e.currentTarget.style.background=isCompleted?C.bg:C.card}>
+                  <div style={{width:6,height:36,borderRadius:3,background:accent,flexShrink:0,opacity:isCompleted?0.5:1}} />
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:2}}>
+                      {p && <div style={{color:isCompleted?C.muted:C.text,fontSize:14,fontWeight:500}}>{p.name}</div>}
+                      {n.important && !isCompleted && <span style={{color:C.gold,fontSize:9,fontWeight:700,letterSpacing:'0.5px'}}>⚑</span>}
+                    </div>
+                    <div style={{color:C.muted,fontSize:13,lineHeight:1.5,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',opacity:isCompleted?0.7:1}}>{n.text}</div>
+                  </div>
+                  <div style={{textAlign:'right',flexShrink:0}}>
+                    <div style={{color:accent,fontSize:11,fontWeight:600,letterSpacing:'0.4px',textTransform:'uppercase'}}>
+                      {rightLabel}
+                    </div>
+                    <div style={{color:C.muted,fontSize:12,marginTop:2}}>{rightDate ? fmt(rightDate) : '—'}</div>
+                  </div>
+                  {/* Quick complete/reopen toggle without leaving the dashboard */}
+                  <button onClick={(e)=>{ e.stopPropagation(); isCompleted ? (onReopenNote && onReopenNote(n.id)) : (onCompleteNote && onCompleteNote(n.id)); }}
+                    title={isCompleted ? 'Reopen' : 'Mark done'}
+                    style={{background:'none',border:`1px solid ${C.border}`,color:isCompleted?C.muted:C.green,cursor:'pointer',borderRadius:4,fontSize:13,padding:'4px 9px',fontFamily:"'Jost',sans-serif",flexShrink:0,lineHeight:1}}>
+                    {isCompleted ? '↺' : '✓'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{color:C.muted,fontSize:13,fontStyle:'italic',padding:'18px 6px'}}>
+            {todoFilter==='completed' ? 'Nothing completed yet.' : todoFilter==='today' ? 'Nothing on for today.' : 'Nothing in this range.'}
+          </div>
+        )}
+      </>
+    ) : (
+      <div style={{color:C.muted,fontSize:13,fontStyle:'italic',padding:'12px 0'}}>Nothing on the to-do list.</div>
+    )
+  );
+
+  const renderClassesBody = () => (
+    <>
+      {/* Date controls (the back/forward/today pickers) */}
+      <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:12,flexWrap:'wrap'}}>
+        <button onClick={()=>setSelectedDate(addDays(selectedDate,-1))}
+          style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:14,padding:'4px 9px',lineHeight:1,fontFamily:"'Jost',sans-serif"}}>‹</button>
+        <input type="date" value={selectedDate} onChange={e=>setSelectedDate(e.target.value)}
+          style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'5px 9px',fontFamily:"'Jost',sans-serif",outline:'none'}} />
+        <button onClick={()=>setSelectedDate(addDays(selectedDate,1))}
+          style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:14,padding:'4px 9px',lineHeight:1,fontFamily:"'Jost',sans-serif"}}>›</button>
+        {!isToday && (
+          <button onClick={()=>setSelectedDate(today())}
+            style={{background:C.goldBg,border:`1px solid ${C.gold}88`,color:C.gold,cursor:'pointer',borderRadius:6,fontSize:12,padding:'4px 11px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>Today</button>
+        )}
+      </div>
+      {onDay.length ? onDay.map(c=>{
+        const cOrg = orgs.find(o=>o.id===c.orgId);
+        const kk = classKindKey(c, cOrg);
+        const timeLbl = fmtTime(c.time);
+        return (
+          <div key={c.id} onClick={()=>nav('class_detail',{classId:c.id})} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'12px 16px',marginBottom:9,cursor:'pointer',transition:'border-color 0.15s'}}
+            onMouseEnter={e=>e.currentTarget.style.borderColor=C.gold+'66'} onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+            <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+              {timeLbl && <span style={{color:C.gold,fontSize:13,fontWeight:600,fontFamily:"'Jost',sans-serif",letterSpacing:'0.2px'}}>{timeLbl}</span>}
+              <div style={{color:C.text,fontSize:14,fontWeight:500}}>{c.name}</div>
+              <KindBadge kindKey={kk} small />
+              {c.seriesId&&<span style={{color:C.muted,fontSize:11,marginLeft:2}}>↻</span>}
+            </div>
+            <div style={{color:C.muted,fontSize:12,marginTop:3}}>{c.location}</div>
+          </div>
+        );
+      }) : <div style={{color:C.muted,fontSize:13,padding:'18px 0',fontStyle:'italic'}}>No classes on this day.</div>}
+    </>
+  );
+
+  const renderImportantNotesBody = () => (
+    <>
+      <div style={{color:C.muted,fontSize:11,letterSpacing:'0.4px',marginBottom:14}}>
+        {onDay.length ? `For people on this day's register` : `No classes on this day`}
+      </div>
+      {imp.length ? imp.map(n=>{
+        const p = personOf(n.personId);
+        return (
+          <div key={n.id} onClick={()=>goToNote(n)} style={{background:C.goldBg,borderLeft:`3px solid ${C.gold}`,borderRadius:'0 8px 8px 0',padding:'10px 14px',marginBottom:9,cursor:'pointer',transition:'background 0.15s'}}
+            onMouseEnter={e=>e.currentTarget.style.background='#23311a'} onMouseLeave={e=>e.currentTarget.style.background=C.goldBg}>
+            {p && <div style={{color:C.gold,fontSize:11,fontWeight:600,letterSpacing:'0.5px',marginBottom:3}}>{p.name}</div>}
+            <div style={{color:C.text,fontSize:13,lineHeight:1.6}}>{n.text}</div>
+            <div style={{color:C.muted,fontSize:12,marginTop:4}}>{fmt(n.date)}</div>
+          </div>
+        );
+      }) : <div style={{color:C.muted,fontSize:13,fontStyle:'italic',padding:'12px 0'}}>{onDay.length?'Nothing flagged for this day\'s people.':'—'}</div>}
+    </>
+  );
+
+  const renderRecentActivityBody = () => (
+    recentItems.length === 0
+      ? <div style={{color:C.muted,fontSize:13,fontStyle:'italic',padding:'12px 0'}}>No recent activity yet.</div>
+      : (
+        <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+          {recentItems.map((n, i) => {
+            const meta = INTERACTION_KINDS[n.kind] || INTERACTION_KINDS.note;
+            const p = personOf(n.personId);
+            const onClick = p
+              ? () => nav('person_detail', { personId: p.id, highlightNoteId: n.id })
+              : (n.classId ? () => nav('class_detail', { classId: n.classId }) : null);
+            const clickable = !!onClick;
+            const snip = String(n.text || '').replace(/\s+/g, ' ').trim();
+            const display = snip.length > 90 ? snip.slice(0, 90) + '…' : snip;
+            return (
+              <div key={n.id} onClick={onClick || undefined}
+                title={`${meta.label} · ${fmt(n.date)}${p?` · ${p.name}`:''}`}
+                style={{
+                  display:'flex',alignItems:'center',gap:12,padding:'10px 14px',
+                  borderBottom: i < recentItems.length - 1 ? `1px solid ${C.border}` : 'none',
+                  cursor: clickable ? 'pointer' : 'default',
+                  background: C.card, transition:'background 0.12s',
+                }}
+                onMouseEnter={e=>{ if(clickable) e.currentTarget.style.background = C.active; }}
+                onMouseLeave={e=>{ if(clickable) e.currentTarget.style.background = C.card; }}>
+                <div style={{
+                  width:24, height:24, borderRadius:6,
+                  background:meta.bg, border:`1px solid ${meta.color}55`,
+                  display:'flex',alignItems:'center',justifyContent:'center',
+                  flexShrink:0, fontSize:12, lineHeight:1,
+                }}>{meta.icon}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:2}}>
+                    <div style={{color:C.text,fontSize:13,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                      {p ? p.name : (n.fromEmail || n.toEmail || 'Unassigned')}
+                    </div>
+                    {n.subject && (
+                      <div style={{color:C.gold,fontSize:11,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',opacity:0.9}}>
+                        {n.subject}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{color:C.muted,fontSize:12,lineHeight:1.4,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                    {display || <span style={{fontStyle:'italic',opacity:0.7}}>—</span>}
+                  </div>
+                </div>
+                <div style={{color:C.muted,fontSize:11,flexShrink:0,whiteSpace:'nowrap'}}>
+                  {fmtRel(n.date)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )
+  );
+
+  // Sections array drives both layouts. Order is the same on desktop and mobile:
+  // To Do first, then Classes, Important Notes, Recent Activity. Each entry has
+  // a meta-label rendered next to the title (counts, dates) and an optional
+  // header action (e.g. "+ Class" on Classes).
+  const sections = [
+    {
+      key: 'todo',
+      title: 'To Do',
+      meta: `${filteredTodos.length} item${filteredTodos.length!==1?'s':''}`,
+      action: null,  // "+ Add To Do" coming in a follow-up batch (see memory #27)
+      body: renderTodoBody,
+    },
+    {
+      key: 'classes',
+      title: 'Classes',
+      meta: dateLabel || null,
+      action: (
+        <button onClick={()=>onAddClass && onAddClass(selectedDate)}
+          title={`Add class for ${fmt(selectedDate)}`}
+          style={{background:C.goldBg,border:`1px solid ${C.gold}88`,color:C.gold,cursor:'pointer',borderRadius:6,fontSize:12,padding:'4px 11px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',fontWeight:500}}>
+          + Class
+        </button>
+      ),
+      body: renderClassesBody,
+    },
+    {
+      key: 'important',
+      title: 'Important Notes',
+      meta: null,
+      action: null,
+      body: renderImportantNotesBody,
+    },
+    {
+      key: 'recent',
+      title: 'Recent activity',
+      meta: recentItems.length ? `last ${recentItems.length}` : null,
+      action: (
+        <button onClick={()=>nav('comms_log')}
+          style={{background:'none',border:'none',color:C.gold,cursor:'pointer',fontSize:12,padding:0,fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>
+          View all →
+        </button>
+      ),
+      body: renderRecentActivityBody,
+    },
+  ];
+
+  // SectionTitle: shared header row used by both layouts. On mobile it's also
+  // the accordion's tap target.
+  const SectionTitleBar = ({ s, isOpen, onToggle, mobile }) => (
+    <div onClick={mobile ? onToggle : undefined}
+      style={{
+        display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,
+        marginBottom: mobile ? 0 : 14,
+        padding: mobile ? '12px 14px' : 0,
+        background: mobile ? C.card : 'transparent',
+        border: mobile ? `1px solid ${C.border}` : 'none',
+        borderRadius: mobile ? 8 : 0,
+        cursor: mobile ? 'pointer' : 'default',
+        flexWrap:'wrap',
+      }}>
+      <div style={{display:'flex',alignItems:'center',gap:8,minWidth:0,flex:1}}>
+        {mobile && (
+          <span style={{color:C.muted,fontSize:13,width:14,display:'inline-block',transition:'transform 0.15s',transform:isOpen?'rotate(90deg)':'rotate(0deg)'}}>▸</span>
+        )}
+        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:mobile?17:19,color:C.gold,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+          {s.title}
+          {s.meta && <span style={{color:C.muted,fontSize:13,fontWeight:400,marginLeft:8,fontFamily:"'Jost',sans-serif"}}>· {s.meta}</span>}
+        </div>
+      </div>
+      {s.action && (
+        <div onClick={e=>e.stopPropagation()}>{s.action}</div>
+      )}
+    </div>
+  );
+
+  // ─── MOBILE LAYOUT ─────────────────────────────────────────────────────────
+  if (isMobile) {
+    // Contracted: section titles always pinned, ONE body expanded with internal
+    // scroll. Expanded: all sections open, page scrolls normally.
+    const showSectionBody = (key) => expandAll || openSection === key;
+    const onToggle = (key) => {
+      if (expandAll) return;  // ignore taps in expanded mode; whole point is they're all open
+      setOpenSection(key === openSection ? null : key);
+    };
+
+    if (expandAll) {
+      return (
+        <div style={{padding:'12px 12px 24px'}}>
+          <PageHead subInfo={fmt(today())}>Dashboard</PageHead>
+          <div style={{display:'flex',flexDirection:'column',gap:18}}>
+            {sections.map(s => (
+              <div key={s.key}>
+                <SectionTitleBar s={s} mobile={false} />
+                <div>{s.body()}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // Contracted accordion. Titles are flex items; the OPEN one flex-grows
+    // to fill the remaining viewport and scrolls internally.
+    return (
+      <div style={{padding:'12px 12px 0',display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
+        <PageHead subInfo={fmt(today())}>Dashboard</PageHead>
+        <div style={{display:'flex',flexDirection:'column',gap:8,flex:1,minHeight:0}}>
+          {sections.map(s => {
+            const isOpen = showSectionBody(s.key);
+            return (
+              <div key={s.key} style={{
+                display:'flex',flexDirection:'column',
+                flex: isOpen ? '1 1 auto' : '0 0 auto',
+                minHeight: 0,
+              }}>
+                <SectionTitleBar s={s} isOpen={isOpen} onToggle={()=>onToggle(s.key)} mobile />
+                {isOpen && (
+                  <div style={{flex:1,minHeight:0,overflowY:'auto',padding:'12px 4px 14px'}}>
+                    {s.body()}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // ─── DESKTOP LAYOUT ────────────────────────────────────────────────────────
   return (
-    <div style={{padding:'32px 36px',maxWidth:920}}>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px',maxWidth:920}}>
       <div style={{marginBottom:30}}>
         <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:32,fontWeight:600,color:C.text,margin:'0 0 4px'}}>Dashboard</h1>
         <div style={{color:C.muted,fontSize:14}}>{fmt(today())}</div>
@@ -2737,228 +3190,33 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
         <Stat label="To Do" value={todoCounts.all} sub={(()=>{ const o=notes.filter(n=>n.actionDate&&!n.completed&&n.actionDate<t).length; return o>0?`${o} overdue`:'all on track'; })()} />
         <Stat label="Outstanding" value={fmtMoney(outstanding)} sub={`${invoices.filter(i=>i.status!=='paid').length} invoice${invoices.filter(i=>i.status!=='paid').length!==1?'s':''}`} />
       </div>
+
+      {/* Section order: To Do → Classes → Important Notes → Recent Activity.
+          The bottom two render side-by-side at >=920px (Important / Classes
+          historically; now we keep the same two-column flow for compactness
+          but with To Do at the top spanning full width). */}
+      <div style={{marginBottom:32}}>
+        <SectionTitleBar s={sections[0]} mobile={false} />
+        {renderTodoBody()}
+      </div>
+
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:28,marginBottom:32}}>
         <div>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14,gap:10,flexWrap:'wrap'}}>
-            <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:19,color:C.gold,fontWeight:600}}>
-              Classes
-              {dateLabel && <span style={{color:C.muted,fontSize:13,fontWeight:400,marginLeft:8,fontFamily:"'Jost',sans-serif"}}>· {dateLabel}</span>}
-            </div>
-            <button onClick={()=>onAddClass && onAddClass(selectedDate)}
-              title={`Add class for ${fmt(selectedDate)}`}
-              style={{background:C.goldBg,border:`1px solid ${C.gold}88`,color:C.gold,cursor:'pointer',borderRadius:6,fontSize:12,padding:'4px 11px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',fontWeight:500}}>
-              + Class
-            </button>
-          </div>
-          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:12,flexWrap:'wrap'}}>
-            <button onClick={()=>setSelectedDate(addDays(selectedDate,-1))}
-              style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:14,padding:'4px 9px',lineHeight:1,fontFamily:"'Jost',sans-serif"}}>‹</button>
-            <input type="date" value={selectedDate} onChange={e=>setSelectedDate(e.target.value)}
-              style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'5px 9px',fontFamily:"'Jost',sans-serif",outline:'none'}} />
-            <button onClick={()=>setSelectedDate(addDays(selectedDate,1))}
-              style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:14,padding:'4px 9px',lineHeight:1,fontFamily:"'Jost',sans-serif"}}>›</button>
-            {!isToday && (
-              <button onClick={()=>setSelectedDate(today())}
-                style={{background:C.goldBg,border:`1px solid ${C.gold}88`,color:C.gold,cursor:'pointer',borderRadius:6,fontSize:12,padding:'4px 11px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>Today</button>
-            )}
-          </div>
-          {onDay.length ? onDay.map(c=>{
-            const cOrg = orgs.find(o=>o.id===c.orgId);
-            const kk = classKindKey(c, cOrg);
-            const timeLbl = fmtTime(c.time);
-            return (
-              <div key={c.id} onClick={()=>nav('class_detail',{classId:c.id})} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'12px 16px',marginBottom:9,cursor:'pointer',transition:'border-color 0.15s'}}
-                onMouseEnter={e=>e.currentTarget.style.borderColor=C.gold+'66'} onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-                <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                  {timeLbl && <span style={{color:C.gold,fontSize:13,fontWeight:600,fontFamily:"'Jost',sans-serif",letterSpacing:'0.2px'}}>{timeLbl}</span>}
-                  <div style={{color:C.text,fontSize:14,fontWeight:500}}>{c.name}</div>
-                  <KindBadge kindKey={kk} small />
-                  {c.seriesId&&<span style={{color:C.muted,fontSize:11,marginLeft:2}}>↻</span>}
-                </div>
-                <div style={{color:C.muted,fontSize:12,marginTop:3}}>{c.location}</div>
-              </div>
-            );
-          }) : <div style={{color:C.muted,fontSize:13,padding:'18px 0',fontStyle:'italic'}}>No classes on this day.</div>}
+          <SectionTitleBar s={sections[1]} mobile={false} />
+          {renderClassesBody()}
         </div>
         <div>
-          <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:19,color:C.gold,marginBottom:6,fontWeight:600}}>Important Notes</div>
-          <div style={{color:C.muted,fontSize:11,letterSpacing:'0.4px',marginBottom:14}}>
-            {onDay.length ? `For people on today's register` : `No classes on this day`}
-          </div>
-          {imp.length ? imp.map(n=>{
-            const p = personOf(n.personId);
-            return (
-              <div key={n.id} onClick={()=>goToNote(n)} style={{background:C.goldBg,borderLeft:`3px solid ${C.gold}`,borderRadius:'0 8px 8px 0',padding:'10px 14px',marginBottom:9,cursor:'pointer',transition:'background 0.15s'}}
-                onMouseEnter={e=>e.currentTarget.style.background='#23311a'} onMouseLeave={e=>e.currentTarget.style.background=C.goldBg}>
-                {p && <div style={{color:C.gold,fontSize:11,fontWeight:600,letterSpacing:'0.5px',marginBottom:3}}>{p.name}</div>}
-                <div style={{color:C.text,fontSize:13,lineHeight:1.6}}>{n.text}</div>
-                <div style={{color:C.muted,fontSize:12,marginTop:4}}>{fmt(n.date)}</div>
-              </div>
-            );
-          }) : <div style={{color:C.muted,fontSize:13,fontStyle:'italic',padding:'12px 0'}}>{onDay.length?'Nothing flagged for today\'s people.':'—'}</div>}
+          <SectionTitleBar s={sections[2]} mobile={false} />
+          {renderImportantNotesBody()}
         </div>
       </div>
 
-      {(todoCounts.all > 0 || todoCounts.completed > 0) && (
-        <div>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14,gap:10,flexWrap:'wrap'}}>
-            <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:19,color:C.gold,fontWeight:600}}>
-              To Do
-              <span style={{color:C.muted,fontSize:13,fontWeight:400,marginLeft:8,fontFamily:"'Jost',sans-serif"}}>· {filteredTodos.length} item{filteredTodos.length!==1?'s':''}</span>
-            </div>
-            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-              {[
-                {key:'today', label:'Today', count:todoCounts.today},
-                {key:'week', label:'This Week', count:todoCounts.week},
-                {key:'month', label:'This Month', count:todoCounts.month},
-                {key:'all', label:'All', count:todoCounts.all},
-                {key:'completed', label:'Completed', count:todoCounts.completed},
-              ].map(p => (
-                <button key={p.key} onClick={()=>setTodoFilter(p.key)}
-                  style={{
-                    background: todoFilter===p.key ? C.goldBg : C.surf,
-                    border: `1px solid ${todoFilter===p.key ? C.gold+'aa' : C.border}`,
-                    color: todoFilter===p.key ? C.gold : C.muted,
-                    cursor:'pointer', borderRadius:20, fontSize:11.5, padding:'3px 10px',
-                    fontFamily:"'Jost',sans-serif",
-                    fontWeight: todoFilter===p.key ? 600 : 400,
-                    letterSpacing:'0.3px',
-                  }}>
-                  {p.label}{p.count>0?` · ${p.count}`:''}
-                </button>
-              ))}
-            </div>
-          </div>
-          {filteredTodos.length > 0 ? (
-            <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
-              {filteredTodos.map((n,i)=>{
-                const p = personOf(n.personId);
-                const isCompleted = !!n.completed;
-                const overdue = !isCompleted && n.actionDate < t;
-                const dueToday = !isCompleted && n.actionDate === t;
-                const accent = isCompleted ? C.muted : (overdue ? C.red : dueToday ? C.gold : C.blue);
-                const rightLabel = isCompleted ? 'Completed' : (overdue?'Overdue':dueToday?'Today':'Upcoming');
-                const rightDate = isCompleted ? n.completedAt : n.actionDate;
-                return (
-                  <div key={n.id} onClick={()=>goToNote(n)}
-                    style={{display:'flex',alignItems:'center',gap:14,padding:'12px 16px',borderBottom:i<filteredTodos.length-1?`1px solid ${C.border}`:'none',cursor:'pointer',background:isCompleted?C.bg:C.card,transition:'background 0.12s'}}
-                    onMouseEnter={e=>e.currentTarget.style.background=isCompleted?C.surf:C.active} onMouseLeave={e=>e.currentTarget.style.background=isCompleted?C.bg:C.card}>
-                    <div style={{width:6,height:36,borderRadius:3,background:accent,flexShrink:0,opacity:isCompleted?0.5:1}} />
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:2}}>
-                        {p && <div style={{color:isCompleted?C.muted:C.text,fontSize:14,fontWeight:500}}>{p.name}</div>}
-                        {n.important && !isCompleted && <span style={{color:C.gold,fontSize:9,fontWeight:700,letterSpacing:'0.5px'}}>⚑</span>}
-                      </div>
-                      <div style={{color:C.muted,fontSize:13,lineHeight:1.5,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',opacity:isCompleted?0.7:1}}>{n.text}</div>
-                    </div>
-                    <div style={{textAlign:'right',flexShrink:0}}>
-                      <div style={{color:accent,fontSize:11,fontWeight:600,letterSpacing:'0.4px',textTransform:'uppercase'}}>
-                        {rightLabel}
-                      </div>
-                      <div style={{color:C.muted,fontSize:12,marginTop:2}}>{rightDate ? fmt(rightDate) : '—'}</div>
-                    </div>
-                    {/* Quick complete/reopen toggle without leaving the dashboard */}
-                    <button onClick={(e)=>{ e.stopPropagation(); isCompleted ? (onReopenNote && onReopenNote(n.id)) : (onCompleteNote && onCompleteNote(n.id)); }}
-                      title={isCompleted ? 'Reopen' : 'Mark done'}
-                      style={{background:'none',border:`1px solid ${C.border}`,color:isCompleted?C.muted:C.green,cursor:'pointer',borderRadius:4,fontSize:13,padding:'4px 9px',fontFamily:"'Jost',sans-serif",flexShrink:0,lineHeight:1}}>
-                      {isCompleted ? '↺' : '✓'}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div style={{color:C.muted,fontSize:13,fontStyle:'italic',padding:'18px 6px'}}>
-              {todoFilter==='completed' ? 'Nothing completed yet.' : todoFilter==='today' ? 'Nothing on for today.' : 'Nothing in this range.'}
-            </div>
-          )}
+      {recentItems.length > 0 && (
+        <div style={{marginTop:32}}>
+          <SectionTitleBar s={sections[3]} mobile={false} />
+          {renderRecentActivityBody()}
         </div>
       )}
-
-      {/* ─── Recent activity summary ──────────────────────────────────────────
-          Last few interactions across ALL contacts (notes, calls, emails,
-          form submissions, future bookings/payments). Compact teaser for the
-          full Comms Log — the "did anything happen?" glance. Hidden if the
-          notes array is empty (Dashboard real-estate is precious; nothing to
-          show is better than an empty box).
-
-          Path B note: this surfaces machine-ingested rows (inbound emails
-          from the log Worker, form submissions, future Stripe bookings)
-          alongside manually-typed notes, which is the point — silent rows
-          shouldn't pass under attention. */}
-      {(() => {
-        const recent = [...notes, ...deriveActivity(attendance, classes, packages)]
-          .sort((a, b) => new Date(b.date) - new Date(a.date))
-          .slice(0, 6);
-        if (recent.length === 0) return null;
-        return (
-          <div style={{marginTop:32}}>
-            <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginBottom:14,gap:10,flexWrap:'wrap'}}>
-              <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:19,color:C.gold,fontWeight:600}}>
-                Recent activity
-                <span style={{color:C.muted,fontSize:13,fontWeight:400,marginLeft:8,fontFamily:"'Jost',sans-serif"}}>
-                  · last {recent.length}
-                </span>
-              </div>
-              <button onClick={()=>nav('comms_log')}
-                style={{background:'none',border:'none',color:C.gold,cursor:'pointer',fontSize:12,padding:0,fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>
-                View all →
-              </button>
-            </div>
-            <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
-              {recent.map((n, i) => {
-                const meta = INTERACTION_KINDS[n.kind] || INTERACTION_KINDS.note;
-                const p = personOf(n.personId);
-                const onClick = p
-                  ? () => nav('person_detail', { personId: p.id, highlightNoteId: n.id })
-                  : (n.classId ? () => nav('class_detail', { classId: n.classId }) : null);
-                const clickable = !!onClick;
-                // Compact snippet — narrower than the full Comms Log row.
-                const snip = String(n.text || '').replace(/\s+/g, ' ').trim();
-                const display = snip.length > 90 ? snip.slice(0, 90) + '…' : snip;
-                return (
-                  <div key={n.id} onClick={onClick || undefined}
-                    title={`${meta.label} · ${fmt(n.date)}${p?` · ${p.name}`:''}`}
-                    style={{
-                      display:'flex',alignItems:'center',gap:12,padding:'10px 14px',
-                      borderBottom: i < recent.length - 1 ? `1px solid ${C.border}` : 'none',
-                      cursor: clickable ? 'pointer' : 'default',
-                      background: C.card, transition:'background 0.12s',
-                    }}
-                    onMouseEnter={e=>{ if(clickable) e.currentTarget.style.background = C.active; }}
-                    onMouseLeave={e=>{ if(clickable) e.currentTarget.style.background = C.card; }}>
-                    {/* Kind icon — single-character circle, no full label */}
-                    <div style={{
-                      width:24, height:24, borderRadius:6,
-                      background:meta.bg, border:`1px solid ${meta.color}55`,
-                      display:'flex',alignItems:'center',justifyContent:'center',
-                      flexShrink:0, fontSize:12, lineHeight:1,
-                    }}>{meta.icon}</div>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:2}}>
-                        <div style={{color:C.text,fontSize:13,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
-                          {p ? p.name : (n.fromEmail || n.toEmail || 'Unassigned')}
-                        </div>
-                        {n.subject && (
-                          <div style={{color:C.gold,fontSize:11,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',opacity:0.9}}>
-                            {n.subject}
-                          </div>
-                        )}
-                      </div>
-                      <div style={{color:C.muted,fontSize:12,lineHeight:1.4,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
-                        {display || <span style={{fontStyle:'italic',opacity:0.7}}>—</span>}
-                      </div>
-                    </div>
-                    <div style={{color:C.muted,fontSize:11,flexShrink:0,whiteSpace:'nowrap'}}>
-                      {fmtRel(n.date)}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })()}
     </div>
   );
 }
@@ -2973,6 +3231,7 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
 // Reads from the shared `notes` array (already in state from loadAll), so
 // no extra fetching is needed. The badge on the sidebar uses the same count.
 function InboxView({ notes, people, attendance, classes, onAssign, onDiscard }) {
+  const isMobile = useIsMobile();
   const { personRoles } = useTypes();
   const [pickerFor, setPickerFor] = useState(null);  // note row currently being assigned
 
@@ -2990,19 +3249,14 @@ function InboxView({ notes, people, attendance, classes, onAssign, onDiscard }) 
   };
 
   return (
-    <div style={{padding:'24px 32px',maxWidth:920}}>
-      <div style={{display:'flex',alignItems:'baseline',gap:14,marginBottom:6}}>
-        <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:600,color:C.text,margin:0}}>
-          Inbox
-        </h1>
-        <span style={{color:C.muted,fontSize:13}}>
-          {unlinked.length === 0 ? 'all clear' : `${unlinked.length} unlinked communication${unlinked.length===1?'':'s'}`}
-        </span>
-      </div>
-      <p style={{color:C.muted,fontSize:13,marginTop:4,marginBottom:24,maxWidth:560,lineHeight:1.5}}>
-        Communications whose sender doesn't match any existing contact land here.
-        Assign each one to a person (or discard if spam / irrelevant).
-      </p>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '24px 32px',maxWidth:920}}>
+      <PageHead subInfo={unlinked.length === 0 ? 'all clear' : `${unlinked.length} unlinked`}>Inbox</PageHead>
+      {!isMobile && (
+        <p style={{color:C.muted,fontSize:13,marginTop:-12,marginBottom:24,maxWidth:560,lineHeight:1.5}}>
+          Communications whose sender doesn't match any existing contact land here.
+          Assign each one to a person (or discard if spam / irrelevant).
+        </p>
+      )}
 
       {unlinked.length === 0 ? (
         <Empty text="No unlinked communications. Inbox is clear." />
@@ -3161,6 +3415,7 @@ function AssignToPersonModal({ note, people, attendance, classes, onClose, onAss
 // (computed via birthdayInfo), nearest first. Contacts without a DOB are listed
 // separately at the bottom as a gentle prompt to fill them in.
 function BirthdaysView({ people, orgs, nav }) {
+  const isMobile = useIsMobile();
   const personal = useMemo(() => people.filter(p => (p.roles||[]).includes('personal_contact')), [people]);
   const withDob = useMemo(() => {
     return personal
@@ -3173,14 +3428,13 @@ function BirthdaysView({ people, orgs, nav }) {
   const orgName = (id) => orgs.find(o => o.id === id)?.name || '';
 
   return (
-    <div style={{padding:'24px 32px',maxWidth:680}}>
-      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
-        <span style={{fontSize:22}}>🎂</span>
-        <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:26,fontWeight:600,color:C.text,margin:0}}>Birthdays</h1>
-      </div>
-      <p style={{color:C.muted,fontSize:13,marginTop:0,marginBottom:22,lineHeight:1.5}}>
-        Upcoming birthdays across your personal contacts — soonest first.
-      </p>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '24px 32px',maxWidth:680}}>
+      <PageHead>🎂 Birthdays</PageHead>
+      {!isMobile && (
+        <p style={{color:C.muted,fontSize:13,marginTop:-12,marginBottom:22,lineHeight:1.5}}>
+          Upcoming birthdays across your personal contacts — soonest first.
+        </p>
+      )}
 
       {withDob.length === 0 && withoutDob.length === 0 && (
         <Empty text="No personal contacts yet. Add some in Personal mode to track birthdays." />
@@ -3231,6 +3485,7 @@ function BirthdaysView({ people, orgs, nav }) {
 // here automatically. A chip lets the user hide transactional rows to focus
 // on human comms. Reads the shared `notes` array (kept fresh by 60s polling).
 function RecentActivityView({ notes, people, classes, orgs, attendance, packages, nav }) {
+  const isMobile = useIsMobile();
   const [kindFilter, setKindFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(null); // null | {type:'person'|'org', id}
@@ -3339,17 +3594,12 @@ function RecentActivityView({ notes, people, classes, orgs, attendance, packages
   const clearEntity = () => { setSelected(null); setKindFilter('all'); };
 
   return (
-    <div style={{padding:'24px 32px',maxWidth:920}}>
-      <div style={{display:'flex',alignItems:'baseline',gap:14,marginBottom:6}}>
-        <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:600,color:C.text,margin:0}}>
-          Recent Activity
-        </h1>
-        <span style={{color:C.muted,fontSize:13}}>
-          {rows.length === 0
-            ? (selected ? 'no activity' : 'nothing yet')
-            : (selected ? `${rows.length} item${rows.length!==1?'s':''}` : `latest ${rows.length}`)}
-        </span>
-      </div>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '24px 32px',maxWidth:920}}>
+      <PageHead subInfo={
+        rows.length === 0
+          ? (selected ? 'no activity' : 'nothing yet')
+          : (selected ? `${rows.length} item${rows.length!==1?'s':''}` : `latest ${rows.length}`)
+      }>Recent Activity</PageHead>
 
       {/* Search box (contacts + orgs). Selecting a result switches the page
           into entity mode; clearing returns to the global feed. */}
@@ -3575,11 +3825,15 @@ function SessionNoteRow({ c, notesList, open, onToggle, nav }) {
 // ─── ORG LIST / DETAIL ────────────────────────────────────────────────────────
 function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
   const { orgTypes } = useTypes();
+  const isMobile = useIsMobile();
   const isAll = orgType === 'all';
   const m = orgTypes[orgType] || ORG_META[orgType] || { label:'Organisation', color:C.muted, bg:C.surf };
   const list = isAll ? orgs.filter(o=>!isPersonalOrg(o)) : orgs.filter(o=>o.type===orgType);
   const heading = isAll ? 'All Organisations' : `${m.label}s`;
-  const addLabel = isAll ? 'Organisation' : m.label;
+  // On mobile we abbreviate the button to "+ Org" to fit narrow viewports.
+  const addLabel = isMobile
+    ? (isAll ? 'Org' : (m.label.split(/\s+/).slice(0,1)[0] || 'Org'))
+    : (isAll ? 'Organisation' : m.label);
   // Group by type when showing all, so the user can scan by category at a glance.
   const grouped = useMemo(() => {
     if(!isAll) return null;
@@ -3595,6 +3849,29 @@ function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
   const renderRow = (org) => {
     const orgMeta = orgTypes[org.type] || ORG_META[org.type] || m;
     const pc=people.filter(p=>p.orgId===org.id).length, cc=classes.filter(c=>c.orgId===org.id).length;
+
+    // Mobile layout: two-column row. Left = initials avatar (vertically centred).
+    // Right = stacked info, one field per visible row. Empty fields collapse
+    // out — except the people/classes count which is always shown so each card
+    // has a consistent footprint and the numbers are scannable.
+    if (isMobile) {
+      return (
+        <Row key={org.id} onClick={()=>nav('org_detail',{orgId:org.id})} style={{padding:'12px 14px',gap:12,alignItems:'flex-start'}}>
+          <div style={{width:44,height:44,borderRadius:8,background:orgMeta.bg,border:`1.5px solid ${orgMeta.color}`,display:'flex',alignItems:'center',justifyContent:'center',color:orgMeta.color,fontSize:15,fontWeight:600,flexShrink:0,marginTop:2}}>{initials(org.name)}</div>
+          <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',gap:3}}>
+            <div style={{color:C.text,fontSize:15,fontWeight:500,lineHeight:1.3}}>{org.name}</div>
+            {org.address && <div style={{color:C.muted,fontSize:12,lineHeight:1.4}}>{org.address}</div>}
+            {org.contactName && <div style={{color:C.muted,fontSize:12,lineHeight:1.4}}>{org.contactName}</div>}
+            <div style={{color:C.muted,fontSize:11,marginTop:2,letterSpacing:'0.3px'}}>
+              {pc} {pc===1?'person':'people'} · {cc} {cc===1?'class':'classes'}
+            </div>
+          </div>
+        </Row>
+      );
+    }
+
+    // Desktop layout (unchanged). Org badge dropped when grouped — the section
+    // header already labels the type.
     return (
       <Row key={org.id} onClick={()=>nav('org_detail',{orgId:org.id})}>
         <div style={{width:40,height:40,borderRadius:8,background:orgMeta.bg,border:`1.5px solid ${orgMeta.color}`,display:'flex',alignItems:'center',justifyContent:'center',color:orgMeta.color,fontSize:15,fontWeight:600,flexShrink:0}}>{initials(org.name)}</div>
@@ -3604,7 +3881,6 @@ function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
         </div>
         {org.contactName&&<div style={{color:C.muted,fontSize:13}}>{org.contactName}</div>}
         <div style={{display:'flex',gap:7,flexShrink:0,alignItems:'center'}}>
-          {isAll && <OrgBadge type={org.type} />}
           <span style={{background:C.surf,color:C.muted,fontSize:11,padding:'3px 10px',borderRadius:20}}>{pc} people</span>
           <span style={{background:C.surf,color:C.muted,fontSize:11,padding:'3px 10px',borderRadius:20}}>{cc} classes</span>
         </div>
@@ -3613,8 +3889,8 @@ function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
   };
 
   return (
-    <div style={{padding:'32px 36px'}}>
-      <PageHead action={<Btn onClick={onAdd}>+ Add {addLabel}</Btn>}>{heading}</PageHead>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
+      <PageHead action={<Btn small={isMobile} onClick={onAdd}>+ {isMobile ? addLabel : `Add ${addLabel}`}</Btn>}>{heading}</PageHead>
       {list.length ? (
         isAll ? (
           // Grouped view: one bordered block per type, with a header label.
@@ -3645,6 +3921,7 @@ function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
 }
 
 function OrgDetail({ org, people, classes, invoices, notes=[], nav, backInfo, onEdit, onAddPerson, onAddClass, onCreateInvoice, onEditInvoice, onUpdateInvoiceStatus, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate }) {
+  const isMobile = useIsMobile();
   const { orgTypes, personRoles } = useTypes();
   const [tab, setTab] = useState('people');
   const m = orgTypes[org.type] || ORG_META[org.type] || { label:'Organisation', color:C.muted, bg:C.surf };
@@ -3880,8 +4157,8 @@ function OrgDetail({ org, people, classes, invoices, notes=[], nav, backInfo, on
   const tabList = [{id:'people',label:`People (${op.length})`},{id:'classes',label:`Classes (${oc.length})`},{id:'notes',label:`Notes (${orgNotes.length})`}];
   if(showInvoices) tabList.push({id:'invoices',label:`Invoices (${oi.length})`});
   return (
-    <div style={{padding:'32px 36px'}}>
-      <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={<Btn variant="secondary" onClick={onEdit}>Edit</Btn>}>{org.name}</PageHead>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
+      <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={<Btn small={isMobile} variant="secondary" onClick={onEdit}>Edit</Btn>}>{org.name}</PageHead>
       <div style={{display:'grid',gridTemplateColumns:'260px 1fr',gap:24}}>
         <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:20,alignSelf:'start'}}>
           <OrgBadge type={org.type} />
@@ -4032,8 +4309,9 @@ function OrgDetail({ org, people, classes, invoices, notes=[], nav, backInfo, on
 }
 
 // ─── PEOPLE LIST / DETAIL ────────────────────────────────────────────────────
-function PeopleList({ people, orgs, personType, nav, onAdd, onMerge }) {
+function PeopleList({ people, orgs, personType, nav, onAdd, onMerge, households=[], householdMembers=[] }) {
   const { personRoles } = useTypes();
+  const isMobile = useIsMobile();
   const [q, setQ] = useState('');
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(new Set());
@@ -4048,47 +4326,102 @@ function PeopleList({ people, orgs, personType, nav, onAdd, onMerge }) {
     if (a && b) onMerge(a, b);
     exitSelect();
   };
+
+  // Pre-build personId → household-name lookup once. A person can be in
+  // several households (the multi-household feature); we show the first one
+  // here for the list summary — the detail page is where the full picture
+  // belongs.
+  const householdByPerson = useMemo(() => {
+    const map = new Map();
+    householdMembers.forEach(hm => {
+      if (!map.has(hm.personId)) {
+        const h = households.find(x => x.id === hm.householdId);
+        if (h) map.set(hm.personId, h.name);
+      }
+    });
+    return map;
+  }, [households, householdMembers]);
+
   const action = selectMode ? (
     <div style={{display:'flex',gap:8,alignItems:'center'}}>
       <span style={{color:C.muted,fontSize:12}}>{selected.size} selected{canMerge?'':' (pick 2 to merge)'}</span>
       <Btn variant="ghost" small onClick={exitSelect}>Cancel</Btn>
-      <Btn onClick={startMerge} disabled={!canMerge}>Merge selected</Btn>
+      <Btn small={isMobile} onClick={startMerge} disabled={!canMerge}>Merge{isMobile?'':' selected'}</Btn>
     </div>
   ) : (
     <div style={{display:'flex',gap:8}}>
-      <Btn variant="ghost" onClick={()=>setSelectMode(true)}>Select</Btn>
-      <Btn onClick={onAdd}>+ Add Person</Btn>
+      <Btn variant="ghost" small={isMobile} onClick={()=>setSelectMode(true)}>Select</Btn>
+      <Btn small={isMobile} onClick={onAdd}>+ {isMobile ? 'Person' : 'Add Person'}</Btn>
     </div>
   );
   return (
-    <div style={{padding:'32px 36px'}}>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
       <PageHead action={action}>{title}</PageHead>
-      <div style={{marginBottom:16}}><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search name or email..." style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:14,padding:'9px 14px',width:300,fontFamily:"'Jost',sans-serif",outline:'none'}} /></div>
-      {list.length?<div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
-        {list.map(p=>{
-          const org=orgs.find(o=>o.id===p.orgId);
-          const isSel = selected.has(p.id);
-          const onRowClick = selectMode ? (()=>toggleSel(p.id)) : (()=>nav('person_detail',{personId:p.id}));
-          return (
-            <Row key={p.id} onClick={onRowClick} style={selectMode && isSel ? {background:C.green+'18'} : undefined}>
-              {selectMode && (
-                <input type="checkbox" checked={isSel} onChange={()=>toggleSel(p.id)} onClick={e=>e.stopPropagation()}
-                  style={{marginRight:4,cursor:'pointer',width:16,height:16}} />
-              )}
-              <Avatar name={p.name} size={36} role={primaryRole(p)} />
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{color:C.text,fontSize:14,fontWeight:500}}>{p.name}</div>
-                <div style={{display:'flex',alignItems:'center',gap:10,marginTop:2,flexWrap:'wrap'}}>
-                  <span style={{color:C.muted,fontSize:12}}>{p.email||p.phone||'No contact details'}{org&&` · ${org.name}`}</span>
-                  <SourceTag source={p.source} />
+      <div style={{marginBottom:16}}>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search name or email..."
+          style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:14,padding:'9px 14px',width: isMobile ? '100%' : 300,fontFamily:"'Jost',sans-serif",outline:'none'}} />
+      </div>
+      {list.length ? (
+        <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+          {list.map(p=>{
+            const org = orgs.find(o=>o.id===p.orgId);
+            const householdName = householdByPerson.get(p.id);
+            const isSel = selected.has(p.id);
+            const onRowClick = selectMode ? (()=>toggleSel(p.id)) : (()=>nav('person_detail',{personId:p.id}));
+
+            // Mobile: stacked fields, one per line. Each line only renders if
+            // the underlying value exists. Role badges compact to first-letter
+            // initials so several still fit on a phone-width row.
+            if (isMobile) {
+              return (
+                <Row key={p.id} onClick={onRowClick} style={{padding:'12px 14px',gap:12,alignItems:'flex-start',...(selectMode && isSel ? {background:C.green+'18'} : {})}}>
+                  {selectMode && (
+                    <input type="checkbox" checked={isSel} onChange={()=>toggleSel(p.id)} onClick={e=>e.stopPropagation()}
+                      style={{marginTop:8,cursor:'pointer',width:16,height:16,flexShrink:0}} />
+                  )}
+                  <Avatar name={p.name} size={40} role={primaryRole(p)} />
+                  <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',gap:3}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                      <div style={{color:C.text,fontSize:14,fontWeight:500,lineHeight:1.3}}>{p.name}</div>
+                      <div style={{width:7,height:7,borderRadius:'50%',background:p.status==='active'?C.green:p.status==='interested'?C.gold:C.muted,flexShrink:0}} />
+                    </div>
+                    {p.email   && <div style={{color:C.muted,fontSize:12,lineHeight:1.4,wordBreak:'break-word'}}>{p.email}</div>}
+                    {p.phone   && <div style={{color:C.muted,fontSize:12,lineHeight:1.4}}>{p.phone}</div>}
+                    {p.address && <div style={{color:C.muted,fontSize:12,lineHeight:1.4}}>{p.address}</div>}
+                    {householdName && <div style={{color:C.muted,fontSize:12,lineHeight:1.4,fontStyle:'italic'}}>⌂ {householdName}</div>}
+                    {org && <div style={{color:C.muted,fontSize:12,lineHeight:1.4}}>{org.name}</div>}
+                    {p.roles && p.roles.length > 0 && (
+                      <div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:4}}>
+                        {p.roles.map(r=><RoleBadge key={r} role={r} compact />)}
+                      </div>
+                    )}
+                  </div>
+                </Row>
+              );
+            }
+
+            // Desktop layout: unchanged.
+            return (
+              <Row key={p.id} onClick={onRowClick} style={selectMode && isSel ? {background:C.green+'18'} : undefined}>
+                {selectMode && (
+                  <input type="checkbox" checked={isSel} onChange={()=>toggleSel(p.id)} onClick={e=>e.stopPropagation()}
+                    style={{marginRight:4,cursor:'pointer',width:16,height:16}} />
+                )}
+                <Avatar name={p.name} size={36} role={primaryRole(p)} />
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{color:C.text,fontSize:14,fontWeight:500}}>{p.name}</div>
+                  <div style={{display:'flex',alignItems:'center',gap:10,marginTop:2,flexWrap:'wrap'}}>
+                    <span style={{color:C.muted,fontSize:12}}>{p.email||p.phone||'No contact details'}{org&&` · ${org.name}`}</span>
+                    <SourceTag source={p.source} />
+                  </div>
                 </div>
-              </div>
-              <div style={{display:'flex',gap:4,flexWrap:'wrap',justifyContent:'flex-end',maxWidth:220}}>{p.roles.map(r=><RoleBadge key={r} role={r} />)}</div>
-              <div style={{width:8,height:8,borderRadius:'50%',background:p.status==='active'?C.green:p.status==='interested'?C.gold:C.muted,flexShrink:0}} />
-            </Row>
-          );
-        })}
-      </div>:<Empty text="No results" />}
+                <div style={{display:'flex',gap:4,flexWrap:'wrap',justifyContent:'flex-end',maxWidth:220}}>{p.roles.map(r=><RoleBadge key={r} role={r} />)}</div>
+                <div style={{width:8,height:8,borderRadius:'50%',background:p.status==='active'?C.green:p.status==='interested'?C.gold:C.muted,flexShrink:0}} />
+              </Row>
+            );
+          })}
+        </div>
+      ) : <Empty text="No results" />}
     </div>
   );
 }
@@ -4332,7 +4665,8 @@ function HouseholdModal({ person, household, roster, allPeople, households, hous
   );
 }
 
-function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], orgs, nav, backInfo, highlightNoteId, people, households, householdMembers, onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddNote, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
+function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], orgs, nav, backInfo, highlightNoteId, people, households, householdMembers, onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddNote, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {
+  const isMobile = useIsMobile();  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
   const [tab, setTab] = useState('notes');
@@ -4478,8 +4812,8 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
   }, [menuOpen]);
 
   return (
-    <div style={{padding:'32px 36px',maxWidth:940}}>
-      <PageHead sticky back={backInfo?.label} onBack={backInfo?.onBack} action={<><Btn onClick={onBook}>+ Book</Btn><Btn variant="secondary" onClick={onEdit}>Edit</Btn></>}>{person.name}</PageHead>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px',maxWidth:940}}>
+      <PageHead sticky back={backInfo?.label} onBack={backInfo?.onBack} action={<><Btn small={isMobile} onClick={onBook}>+ Book</Btn><Btn small={isMobile} variant="secondary" onClick={onEdit}>Edit</Btn></>}>{person.name}</PageHead>
       <div style={{display:'grid',gridTemplateColumns:'280px 1fr',gap:24}}>
         <div>
           <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:20,marginBottom:14}}>
@@ -4874,6 +5208,7 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
 
 // ─── CLASSES LIST / DETAIL ────────────────────────────────────────────────────
 function ClassList({ classes, orgs, series, attendance, nav, onAdd }) {
+  const isMobile = useIsMobile();
   // Default sort puts upcoming classes first (soonest at the top), then past ones in
   // reverse chronological order. Lots of classes get unwieldy fast — letting the user
   // toggle filters/groupings makes scanning manageable.
@@ -4967,10 +5302,10 @@ function ClassList({ classes, orgs, series, attendance, nav, onAdd }) {
   }), [classes, t]);
 
   return (
-    <div style={{padding:'32px 36px'}}>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
       <PageHead action={<>
         <Btn variant="secondary" small onClick={()=>nav('week_view')}>Week view</Btn>
-        <Btn onClick={onAdd}>+ Add Class</Btn>
+        <Btn small={isMobile} onClick={onAdd}>+ {isMobile ? 'Class' : 'Add Class'}</Btn>
       </>}>All Classes</PageHead>
 
       <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:18,flexWrap:'wrap'}}>
@@ -5036,7 +5371,8 @@ function ClassList({ classes, orgs, series, attendance, nav, onAdd }) {
   );
 }
 
-function ClassDetail({ cls, org, people, attendance, notes, series, forms, packages, nav, backInfo, onToggle, onAddNote, onAddToRegister, onEdit, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onUpdateClass, onSetPayment, onDeleteClass, onRemoveFromRegister }) {  const [expanded, setExpanded] = useState(null); // { type:'note'|'payment', personId }
+function ClassDetail({ cls, org, people, attendance, notes, series, forms, packages, nav, backInfo, onToggle, onAddNote, onAddToRegister, onEdit, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onUpdateClass, onSetPayment, onDeleteClass, onRemoveFromRegister }) {
+  const isMobile = useIsMobile();  const [expanded, setExpanded] = useState(null); // { type:'note'|'payment', personId }
   // Privacy mode for in-class teaching: by default we hide rates and payment amounts so
   // a client glancing at the screen doesn't see what we charge. Toggle in the header.
   const [showMoney, setShowMoney] = useState(false);
@@ -5072,10 +5408,10 @@ function ClassDetail({ cls, org, people, attendance, notes, series, forms, packa
   }, [reg, tracksPayment, packages]);
 
   return (
-    <div style={{padding:'32px 36px',maxWidth:920}}>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px',maxWidth:920}}>
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={<>
         <Btn variant="secondary" small onClick={()=>setShowMoney(v=>!v)} title={showMoney?'Hide payment info':'Show payment info'}>{showMoney?'Hide £':'Show £'}</Btn>
-        <Btn variant="secondary" onClick={onEdit}>Edit</Btn>
+        <Btn variant="secondary" small={isMobile} onClick={onEdit}>Edit</Btn>
       </>}>{cls.name}</PageHead>
       <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
         <KindBadge kindKey={kindKey} />
@@ -5195,6 +5531,7 @@ function ClassDetail({ cls, org, people, attendance, notes, series, forms, packa
 // their time-of-day; classes without a time appear in a stacked "all-day" row
 // at the top of each column. Action-by notes for the week appear underneath.
 function WeekView({ classes, orgs, notes, people, nav, backInfo, onAddClass, onUpdateActionDate, onClearAction, onToggleImportant }) {
+  const isMobile = useIsMobile();
   const t = today();
   // Anchor the week to Monday (UK convention).
   const initialAnchor = useMemo(() => startOfWeek(t), [t]);
@@ -5274,7 +5611,7 @@ function WeekView({ classes, orgs, notes, people, nav, backInfo, onAddClass, onU
   };
 
   return (
-    <div style={{padding:'32px 36px'}}>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={
         <Btn small onClick={()=>onAddClass && onAddClass(t)}>+ Class</Btn>
       }>Week View</PageHead>
@@ -5474,6 +5811,7 @@ function WeekView({ classes, orgs, notes, people, nav, backInfo, onAddClass, onU
 // the class on click; days overflow to "+N more". Mirrors WeekView's header and
 // Monday-start convention, and the OrgDetail MonthCalendar's grid mechanics.
 function MonthView({ classes, orgs, nav, backInfo, onAddClass }) {
+  const isMobile = useIsMobile();
   const t = today();
   const [anchor, setAnchor] = useState(() => t); // any date inside the shown month
   const a = new Date(anchor+'T12:00');
@@ -5492,15 +5830,35 @@ function MonthView({ classes, orgs, nav, backInfo, onAddClass }) {
   }, [classes]);
   const monthCount = classes.filter(c => { const d=new Date(c.date+'T12:00'); return d.getFullYear()===year && d.getMonth()===month; }).length;
 
-  const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const DOW = isMobile ? ['M','T','W','T','F','S','S'] : ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   const prevMonth = () => setAnchor(new Date(year, month-1, 1).toISOString().slice(0,10));
   const nextMonth = () => setAnchor(new Date(year, month+1, 1).toISOString().slice(0,10));
 
+  // Jump to that calendar week. Week-view doesn't take an anchor date arg as
+  // a routing param right now (it derives from `today()`), so on mobile-tap
+  // it'll snap to the current week. TODO: thread an `anchorDate` view param
+  // through WeekView so this is a true "show me this week" jump.
+  const goToWeek = () => nav('week_view');
+
+  // Pill renders differently on mobile (time-only, more compact) vs desktop
+  // (time + name). Both stop propagation so taps land on the pill, not the
+  // surrounding cell's add-class handler.
   const Pill = ({ c }) => {
     const cOrg = orgs.find(o => o.id === c.orgId);
     const kk = classKindKey(c, cOrg);
     const color = (KIND_META[kk] || { color:C.gold }).color;
     const tip = [c.name, fmtTime(c.time)?`${fmtTime(c.time)} · ${c.duration||60} min`:null, c.location, cOrg?.name].filter(Boolean).join('\n');
+    const timeLbl = fmtTime(c.time) || '—';
+    if (isMobile) {
+      // Time-only pill: just the start time, colour-coded by kind. Tight padding
+      // because mobile cells are narrow and we want several pills to fit.
+      return (
+        <div onClick={(e)=>{ e.stopPropagation(); nav('class_detail',{classId:c.id}); }} title={tip}
+          style={{background:color+'22',borderLeft:`2px solid ${color}`,borderRadius:3,padding:'1px 3px',marginBottom:2,cursor:'pointer',color,fontSize:10,fontWeight:600,letterSpacing:'0.2px',lineHeight:1.3,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>
+          {timeLbl}
+        </div>
+      );
+    }
     return (
       <div onClick={(e)=>{ e.stopPropagation(); nav('class_detail',{classId:c.id}); }} title={tip}
         style={{background:color+'22',borderLeft:`2px solid ${color}`,borderRadius:3,padding:'1px 4px',marginBottom:2,cursor:'pointer',display:'flex',alignItems:'center',gap:4,overflow:'hidden'}}>
@@ -5511,14 +5869,14 @@ function MonthView({ classes, orgs, nav, backInfo, onAddClass }) {
   };
 
   return (
-    <div style={{padding:'32px 36px'}}>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={
         <Btn small onClick={()=>onAddClass && onAddClass(t)}>+ Class</Btn>
       }>Month View</PageHead>
 
-      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:18,flexWrap:'wrap'}}>
+      <div style={{display:'flex',alignItems:'center',gap:isMobile?6:10,marginBottom:isMobile?12:18,flexWrap:'wrap'}}>
         <button onClick={prevMonth} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:14,padding:'4px 10px',lineHeight:1,fontFamily:"'Jost',sans-serif"}}>‹</button>
-        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:20,color:C.text,fontWeight:600,minWidth:180}}>{monthLabel}</div>
+        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:isMobile?17:20,color:C.text,fontWeight:600,minWidth:isMobile?140:180}}>{monthLabel}</div>
         <button onClick={nextMonth} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:14,padding:'4px 10px',lineHeight:1,fontFamily:"'Jost',sans-serif"}}>›</button>
         <button onClick={()=>nav('week_view')} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:12,padding:'4px 11px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>Week view</button>
         {(year!==new Date(t+'T12:00').getFullYear() || month!==new Date(t+'T12:00').getMonth()) && (
@@ -5529,20 +5887,46 @@ function MonthView({ classes, orgs, nav, backInfo, onAddClass }) {
       </div>
 
       <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:1,marginBottom:4}}>
-        {DOW.map(d=><div key={d} style={{textAlign:'center',color:C.muted,fontSize:10,fontWeight:600,letterSpacing:'0.5px',padding:'2px 0'}}>{d}</div>)}
+        {DOW.map((d,i)=><div key={i} style={{textAlign:'center',color:C.muted,fontSize:10,fontWeight:600,letterSpacing:'0.5px',padding:'2px 0'}}>{d}</div>)}
       </div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:5}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:isMobile?2:5}}>
         {cells.map(d=>{
           const dd = new Date(d+'T12:00');
           const inMonth = dd.getMonth()===month;
           const isToday = d===t;
           const dayClasses = byDate[d]||[];
+          const maxPills = isMobile ? 3 : 4;
           return (
             <div key={d} onClick={()=>onAddClass && onAddClass(d)}
-              style={{border:`1px solid ${isToday?C.gold+'88':C.border}`,borderRadius:6,minHeight:104,padding:6,background:isToday?C.goldBg:(inMonth?C.card:'transparent'),opacity:inMonth?1:0.4,cursor:'pointer'}}>
-              <div style={{color:isToday?C.gold:C.text,fontSize:12,fontWeight:isToday?600:400,marginBottom:4,textAlign:'right'}}>{dd.getDate()}</div>
-              {dayClasses.slice(0,4).map(c=><Pill key={c.id} c={c} />)}
-              {dayClasses.length>4 && <div style={{color:C.muted,fontSize:9,paddingLeft:2}}>+{dayClasses.length-4} more</div>}
+              style={{
+                border:`1px solid ${isToday?C.gold+'88':C.border}`,
+                borderRadius:6,
+                minHeight: isMobile ? 64 : 104,
+                padding: isMobile ? 3 : 6,
+                background:isToday?C.goldBg:(inMonth?C.card:'transparent'),
+                opacity:inMonth?1:0.4,
+                cursor:'pointer',
+              }}>
+              {/* Date number — tappable on mobile to jump to that calendar week.
+                  stopPropagation prevents the cell's add-class handler firing. */}
+              <div
+                onClick={isMobile ? (e)=>{ e.stopPropagation(); goToWeek(); } : undefined}
+                style={{
+                  color:isToday?C.gold:C.text,
+                  fontSize:12,
+                  fontWeight:isToday?600:400,
+                  marginBottom: isMobile ? 2 : 4,
+                  textAlign:'right',
+                  cursor: isMobile ? 'pointer' : 'inherit',
+                  // Subtle hint that the date is tappable on mobile.
+                  textDecoration: isMobile ? 'underline' : 'none',
+                  textDecorationStyle: isMobile ? 'dotted' : undefined,
+                  textDecorationColor: isMobile ? (isToday?C.gold:C.muted)+'66' : undefined,
+                }}>
+                {dd.getDate()}
+              </div>
+              {dayClasses.slice(0,maxPills).map(c=><Pill key={c.id} c={c} />)}
+              {dayClasses.length>maxPills && <div style={{color:C.muted,fontSize:9,paddingLeft:2}}>+{dayClasses.length-maxPills}</div>}
             </div>
           );
         })}
@@ -5712,6 +6096,7 @@ function ClassLog({ cls, forms, onUpdateClass, nav }) {
 
 // ─── FORMS LIST (canonical syllabus forms) ────────────────────────────────────
 function FormsList({ forms, classes, onAdd, onUpdate, onRemove, onMove }) {
+  const isMobile = useIsMobile();
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState('');
   const [editingId, setEditingId] = useState(null);
@@ -5732,8 +6117,8 @@ function FormsList({ forms, classes, onAdd, onUpdate, onRemove, onMove }) {
   };
 
   return (
-    <div style={{padding:'32px 36px',maxWidth:760}}>
-      <PageHead action={!adding && <Btn onClick={()=>setAdding(true)}>+ Add Form</Btn>}>Forms</PageHead>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px',maxWidth:760}}>
+      <PageHead action={!adding && <Btn small={isMobile} onClick={()=>setAdding(true)}>+ {isMobile ? 'Form' : 'Add Form'}</Btn>}>Forms</PageHead>
       <div style={{color:C.muted,fontSize:13,lineHeight:1.6,marginBottom:22,maxWidth:560}}>
         The canonical list of forms in The Felt Body syllabus. Use these to tag what you worked in each class. The list is yours to grow as the practice develops.
       </div>
@@ -5802,12 +6187,13 @@ function FormsList({ forms, classes, onAdd, onUpdate, onRemove, onMove }) {
 
 // ─── INVOICES LIST / DETAIL ────────────────────────────────────────────────────
 function InvoiceList({ invoices, orgs, nav, onAdd }) {
+  const isMobile = useIsMobile();
   const sorted=[...invoices].sort((a,b)=>b.issueDate.localeCompare(a.issueDate));
   const total = invoices.reduce((s,i)=>s+(i.total||0),0);
   const outstanding = invoices.filter(i=>i.status!=='paid').reduce((s,i)=>s+(i.total||0),0);
   return (
-    <div style={{padding:'32px 36px'}}>
-      <PageHead action={<Btn onClick={onAdd}>+ Create Invoice</Btn>}>Invoices</PageHead>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
+      <PageHead action={<Btn small={isMobile} onClick={onAdd}>+ {isMobile ? 'Invoice' : 'Create Invoice'}</Btn>}>Invoices</PageHead>
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:28}}>
         <Stat label="Total Invoiced" value={fmtMoney(total)} />
         <Stat label="Outstanding" value={fmtMoney(outstanding)} sub={`${invoices.filter(i=>i.status==='sent').length} sent, awaiting payment`} />
@@ -5834,14 +6220,15 @@ function InvoiceList({ invoices, orgs, nav, onAdd }) {
 }
 
 function InvoiceDetail({ inv, org, onEdit, onStatusChange, nav, backInfo }) {
+  const isMobile = useIsMobile();
   const sm=INV_STATUS[inv.status]||INV_STATUS.draft;
   const [showPrint, setShowPrint] = useState(false);
   return (
-    <div style={{padding:'32px 36px',maxWidth:760}}>
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px',maxWidth:760}}>
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={<>
         <Btn variant="secondary" small onClick={()=>downloadInvoiceHtml(inv, org)} title="Download as HTML — open in any browser to print or Save as PDF">↓ Download</Btn>
-        <Btn variant="secondary" onClick={()=>setShowPrint(true)}>Print / PDF</Btn>
-        <Btn variant="secondary" onClick={onEdit}>Edit</Btn>
+        <Btn variant="secondary" small={isMobile} onClick={()=>setShowPrint(true)}>Print / PDF</Btn>
+        <Btn variant="secondary" small={isMobile} onClick={onEdit}>Edit</Btn>
       </>}>{inv.invoiceNumber}</PageHead>
       {showPrint && <PrintInvoiceOverlay inv={inv} org={org} onClose={()=>setShowPrint(false)} />}
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:28}}>
@@ -5933,6 +6320,12 @@ export default function FeltBodyCRM() {
   const [settings, setSettings] = useState({});
   // Mobile nav state (Phase 1: basic hamburger button + modal nav for small screens)
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // Mobile accordion expand/contract toggle, persisted per-device so the user's
+  // last choice survives a refresh. Contracted (false) = section titles always
+  // visible, one open panel claims remaining viewport. Expanded (true) = all
+  // sections open, page scrolls. Only renders the toggle on views that opt in
+  // (currently Dashboard).
+  const [mobileExpandAll, setMobileExpandAll] = useLocalStorage('fbc.mobile.expandAll', false);
   const [modal, setModal] = useState(null);
   // Loading + error state for the initial bulk fetch
   const [loadStatus, setLoadStatus] = useState('loading');  // 'loading' | 'ready' | 'error'
@@ -6756,7 +7149,7 @@ export default function FeltBodyCRM() {
           onUpdateActionDate={updateNoteAction}
           onUpdateInvoiceStatus={setInvoiceStatus} />;
       }
-      case 'people': return <PeopleList people={people} orgs={orgs} personType={personType} nav={nav} mode={mode} onAdd={()=>setModal({type:'add_person',personType: personType==='all'?'private_client':personType, ...(mode==='personal'?{orgId: orgs.find(o=>o.type==='personal')?.id}:{})})} onMerge={(a,b)=>setModal({type:'merge_people',personA:a,personB:b})} />;
+      case 'people': return <PeopleList people={people} orgs={orgs} personType={personType} nav={nav} mode={mode} households={households} householdMembers={householdMembers} onAdd={()=>setModal({type:'add_person',personType: personType==='all'?'private_client':personType, ...(mode==='personal'?{orgId: orgs.find(o=>o.type==='personal')?.id}:{})})} onMerge={(a,b)=>setModal({type:'merge_people',personA:a,personB:b})} />;
       case 'person_detail': {
         const person=people.find(p=>p.id===personId); if(!person) return <Empty text="Not found" />;
         const org=orgs.find(o=>o.id===person.orgId);
@@ -6826,9 +7219,22 @@ export default function FeltBodyCRM() {
     }
   };
 
+  // showExpandToggle: only Dashboard currently has accordion sections that the
+  // toggle controls. Hold the list of qualifying views in one place so it's
+  // easy to add more later.
+  const mobileExpandToggleViews = new Set(['dashboard']);
+  const showExpandToggle = mobileExpandToggleViews.has(view.name);
+  const mobileUIValue = {
+    onMobileNavOpen: ()=>setMobileNavOpen(true),
+    expandAll: mobileExpandAll,
+    setExpandAll: setMobileExpandAll,
+    showExpandToggle,
+  };
+
   return (
     <TypesContext.Provider value={typesValue}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Jost:wght@300;400;500;600&display=swap');*{box-sizing:border-box}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#2a4a37;border-radius:2px}input,select,textarea{outline:none}input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.5)}@media(max-width:767px){[data-desktop-sidebar]{display:none !important}[data-chip-label]{display:none !important}}@media(min-width:768px){[data-hamburger]{display:none !important}}`}</style>
+    <MobileUIContext.Provider value={mobileUIValue}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Jost:wght@300;400;500;600&display=swap');*{box-sizing:border-box}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#2a4a37;border-radius:2px}input,select,textarea{outline:none}input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.5)}@media(max-width:767px){[data-desktop-sidebar]{display:none !important}[data-chip-label]{display:none !important}[data-desktop-only]{display:none !important}}@media(min-width:768px){[data-mobile-only]{display:none !important}}`}</style>
       <div style={{display:'flex',height:'100vh',overflow:'hidden',background:C.bg,fontFamily:"'Jost',sans-serif",color:C.text,position:'relative'}}>
         {/* Desktop sidebar: hidden on mobile via CSS media query */}
         <div data-desktop-sidebar>
@@ -6843,17 +7249,11 @@ export default function FeltBodyCRM() {
             onSignOut={signOut} mode={mode} onSwitchMode={switchMode} onAddPersonalOrg={()=>setModal({type:"add_org",orgType:"personal"})} />
         </div>
 
-        {/* Main content area with mobile hamburger button */}
+        {/* Main content area. The hamburger now lives inside MobileHeader (rendered
+            by each view via PageHead), so we no longer need a floating button here. */}
         <main style={{flex:1,display:'flex',flexDirection:'column',position:'relative',overflow:'hidden'}}>
-          {/* Hamburger button: hidden on desktop via CSS media query */}
-          <button data-hamburger onClick={()=>setMobileNavOpen(true)}
-            style={{background:'none',border:'none',color:C.text,cursor:'pointer',fontSize:20,padding:'16px 20px',position:'absolute',top:0,left:0,zIndex:10,height:52}}
-            aria-label="Open navigation menu"
-            title="Open navigation menu">
-            ☰
-          </button>
           {/* Render the current view */}
-          <div style={{flex:1,overflowY:'auto',overflowX:'hidden'}}>{renderView()}</div>
+          <div style={{flex:1,overflowY:'auto',overflowX:'hidden',minHeight:0}}>{renderView()}</div>
         </main>
 
         {/* Mobile nav modal (lightbox): shows nav in modal on small screens */}
@@ -6878,6 +7278,7 @@ export default function FeltBodyCRM() {
 
         {modal&&renderModal()}
       </div>
+    </MobileUIContext.Provider>
     </TypesContext.Provider>
   );
 }
