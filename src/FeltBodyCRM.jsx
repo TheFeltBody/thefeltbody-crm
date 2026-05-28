@@ -1057,6 +1057,31 @@ const Tabs = ({ tabs, active, onChange }) => (
   </div>
 );
 
+// Mobile variant of Tabs. Each tab carries an `icon`, a short `name`, and a
+// `count`. Unselected tabs show just icon + count to stay narrow; the selected
+// tab also shows its name. All tabs share the row equally (flex:1) so four sit
+// comfortably across a phone width. The bar is sticky so it stays reachable as
+// the tab body scrolls. `topOffset` accounts for any sticky PageHead above it.
+const MobileTabBar = ({ tabs, active, onChange, topOffset=0 }) => (
+  <div style={{position:'sticky',top:topOffset,zIndex:5,background:C.bg,display:'flex',gap:6,padding:'8px 0 10px',marginBottom:14,borderBottom:`1px solid ${C.border}`}}>
+    {tabs.map(t=>{
+      const on = active===t.id;
+      return (
+        <button key={t.id} onClick={()=>onChange(t.id)} title={t.name}
+          style={{flex:1,minWidth:0,display:'flex',alignItems:'center',justifyContent:'center',gap:5,
+            background:on?C.goldBg:'transparent',color:on?C.gold:C.muted,
+            border:`1px solid ${on?C.gold+'88':C.border}`,borderRadius:6,
+            padding:'7px 6px',cursor:'pointer',fontFamily:"'Jost',sans-serif",
+            fontSize:12,fontWeight:on?600:500,lineHeight:1,overflow:'hidden'}}>
+          <span style={{fontSize:13,lineHeight:1,flexShrink:0}}>{t.icon}</span>
+          {on && <span style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{t.name}</span>}
+          <span style={{opacity:0.7,fontSize:11,flexShrink:0}}>{t.count}</span>
+        </button>
+      );
+    })}
+  </div>
+);
+
 // ─── SEARCHABLE SELECT ────────────────────────────────────────────────────────
 function SearchSelect({ people, onSelect, attendance, classes, contextSeriesId, existing=[] }) {
   const [q, setQ] = useState('');
@@ -3923,7 +3948,8 @@ function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
 function OrgDetail({ org, people, classes, invoices, notes=[], nav, backInfo, onEdit, onAddPerson, onAddClass, onCreateInvoice, onEditInvoice, onUpdateInvoiceStatus, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate }) {
   const isMobile = useIsMobile();
   const { orgTypes, personRoles } = useTypes();
-  const [tab, setTab] = useState('people');
+  // Persisted so the org page reopens on the last-viewed tab (sticky, per-device).
+  const [tab, setTab] = useLocalStorage('felt.orgDetail.tab', 'people');
   const m = orgTypes[org.type] || ORG_META[org.type] || { label:'Organisation', color:C.muted, bg:C.surf };
   const op=people.filter(p=>p.orgId===org.id);
   const oc=classes.filter(c=>c.orgId===org.id).sort((a,b)=>b.date.localeCompare(a.date));
@@ -4156,13 +4182,34 @@ function OrgDetail({ org, people, classes, invoices, notes=[], nav, backInfo, on
 
   const tabList = [{id:'people',label:`People (${op.length})`},{id:'classes',label:`Classes (${oc.length})`},{id:'notes',label:`Notes (${orgNotes.length})`}];
   if(showInvoices) tabList.push({id:'invoices',label:`Invoices (${oi.length})`});
+  // Mobile tab metadata (icon + short name + count), in the same order as tabList.
+  const mobileTabs = [
+    {id:'people',  icon:'👤', name:'People',  count:op.length},
+    {id:'classes', icon:'📅', name:'Classes', count:oc.length},
+    {id:'notes',   icon:'💬', name:'Notes',   count:orgNotes.length},
+  ];
+  if(showInvoices) mobileTabs.push({id:'invoices', icon:'🧾', name:'Invoices', count:oi.length});
+  // Guard: a persisted tab may be invalid for this org (e.g. 'invoices' on an
+  // org that doesn't bill). Fall back to People so the body never renders blank.
+  useEffect(() => { if(!tabList.some(t=>t.id===tab)) setTab('people'); }, [tab, showInvoices]);
+  // Org Info card collapse — persisted per-device. Collapsed → header (badge +
+  // name) only; body hidden. Mirrors the contact card on PersonDetail.
+  const [infoOpen, setInfoOpen] = useLocalStorage('felt.orgDetail.infoOpen', true);
   return (
     <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={<Btn small={isMobile} variant="secondary" onClick={onEdit}>Edit</Btn>}>{org.name}</PageHead>
-      <div style={{display:'grid',gridTemplateColumns:'260px 1fr',gap:24}}>
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:20,alignSelf:'start'}}>
-          <OrgBadge type={org.type} />
-          <div style={{marginTop:16,display:'flex',flexDirection:'column',gap:12}}>
+      <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '260px 1fr',gap: isMobile ? 14 : 24}}>
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,alignSelf:'start',overflow:'hidden'}}>
+          <div onClick={()=>setInfoOpen(v=>!v)}
+            style={{position:'sticky',top: isMobile?97:0,zIndex:4,background:C.card,display:'flex',alignItems:'center',gap:10,padding:'14px 20px',cursor:'pointer',borderBottom: infoOpen?`1px solid ${C.border}`:'none'}}>
+            <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',gap:6,alignItems:'flex-start'}}>
+              <OrgBadge type={org.type} />
+              {!infoOpen && <div style={{color:C.text,fontSize:14,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{org.name}</div>}
+            </div>
+            <span aria-hidden="true" style={{color:C.muted,fontSize:12,flexShrink:0,transition:'transform 0.18s',transform:infoOpen?'rotate(0deg)':'rotate(-90deg)',display:'inline-block'}}>▾</span>
+          </div>
+          {infoOpen && <div style={{padding:'12px 20px 20px'}}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
             {org.contactName&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>CONTACT</div><div style={{color:C.text,fontSize:14}}>{org.contactName}</div></div>}
             {org.address&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>ADDRESS</div><div style={{color:C.text,fontSize:13}}>{org.address}</div></div>}
             {org.phone&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>PHONE</div><div style={{color:C.text,fontSize:13}}>{org.phone}</div></div>}
@@ -4170,9 +4217,14 @@ function OrgDetail({ org, people, classes, invoices, notes=[], nav, backInfo, on
             {org.website&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>WEBSITE</div><a href={/^https?:\/\//i.test(org.website)?org.website:`https://${org.website}`} target="_blank" rel="noopener noreferrer" style={{color:C.blue,fontSize:13,textDecoration:'none',wordBreak:'break-all'}}>{org.website}</a></div>}
           </div>
           {org.notes&&<div style={{borderTop:`1px solid ${C.border}`,marginTop:16,paddingTop:14,color:C.muted,fontSize:13,lineHeight:1.6}}>{org.notes}</div>}
+          </div>}
         </div>
         <div>
-          <Tabs tabs={tabList} active={tab} onChange={setTab} />
+          {isMobile ? (
+            <MobileTabBar topOffset={97} tabs={mobileTabs} active={tab} onChange={setTab} />
+          ) : (
+            <Tabs tabs={tabList} active={tab} onChange={setTab} />
+          )}
           {tab==='people'&&<>
             <div style={{display:'flex',justifyContent:'flex-end',marginBottom:12}}><Btn small onClick={onAddPerson}>+ Add Person</Btn></div>
             {op.length?<div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
@@ -4669,7 +4721,10 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
   const isMobile = useIsMobile();  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
-  const [tab, setTab] = useState('notes');
+  // Active right-column tab. Persisted so the page reopens on the last-viewed
+  // tab (sticky across navigations/sessions, per-device). On mobile a fourth
+  // 'bookings' tab joins the row; on desktop bookings live in the left column.
+  const [tab, setTab] = useLocalStorage('felt.personDetail.tab', 'notes');
   const [flashId, setFlashId] = useState(null);
   const [filterKind, setFilterKind] = useState('all');
   // Which booking rows are expanded to show their session note(s) inline.
@@ -4724,6 +4779,17 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
     : [];
   // Household modal state: null | { mode:'create' } | { mode:'manage', householdId }
   const [householdModal, setHouseholdModal] = useState(null);
+  // The household now lives as a line inside the contact card (both mobile and
+  // desktop): collapsed it shows just the name; tapping reveals the roster,
+  // the +household/Manage controls, and (when multiple) the household tabs.
+  const [householdExpanded, setHouseholdExpanded] = useState(false);
+  // Contact Info card collapse — persisted per-device so the card reopens in
+  // its last state. Collapsed → header (avatar + name) only; the body and the
+  // household line are hidden.
+  const [infoOpen, setInfoOpen] = useLocalStorage('felt.personDetail.infoOpen', true);
+  // 'bookings' is a mobile-only tab. If we land on desktop with it persisted,
+  // fall back so the right column isn't blank (bookings live in the left col).
+  useEffect(() => { if (!isMobile && tab === 'bookings') setTab('notes'); }, [isMobile, tab]);
   const pPkgs=packages.filter(pk=>pk.personId===person.id);
   // Payments tab data: three sources merged into one chronological list —
   //   • drop-in payments  (attendance.paymentStatus==='paid', has paidAmount)
@@ -4773,6 +4839,109 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
     return next;
   });
 
+  // Bookings list, shared between the desktop left-column card and the mobile
+  // tab. `scroll` caps height + scrolls (desktop card); off-mobile the tab body
+  // grows naturally. Logic is identical to the previous inline render.
+  const bookingsList = (scroll) => (
+    pClasses.length ? (
+      <div style={scroll ? {maxHeight:304,overflowY:'auto',paddingRight:4} : undefined}>
+        {pClasses.map(c=>{
+          const att=attendance.find(a=>a.classId===c.id&&a.personId===person.id);
+          // Light payment-status hint. Jesse is undecided on showing this —
+          // to remove it, delete the `payInfo`/`payHint` lines and the
+          // {payHint} span below; nothing else depends on them.
+          const ps = att?.paymentStatus || 'unpaid';
+          const payInfo = ps==='paid' ? {t:'paid', c:C.green} : ps==='package' ? {t:'pkg', c:C.blue} : {t:'unpaid', c:C.muted};
+          const payHint = <span style={{fontSize:10,color:payInfo.c,opacity:0.85,letterSpacing:'0.3px'}}>{payInfo.t}</span>;
+          const cn = classNotes(c);
+          const open = bookingNotesOpen.has(c.id);
+          return (<div key={c.id}>
+            <div onClick={()=>nav('class_detail',{classId:c.id})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:open?'none':`1px solid ${C.border}`,cursor:'pointer'}}><div><div style={{color:C.text,fontSize:13}}>{c.name}</div><div style={{color:C.muted,fontSize:11}}>{fmt(c.date)}</div></div><div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}><NoteIndicator count={cn.length} expanded={open} previewText={cn[0]?.text||''} onToggle={()=>toggleBookingNotes(c.id)} />{payHint}<div title={att?.attended?'Attended':'Did not attend'} style={{width:8,height:8,borderRadius:'50%',background:att?.attended?C.green:C.red}} /></div></div>
+            {open && cn.length>0 && (
+              <div style={{background:C.surf,borderBottom:`1px solid ${C.border}`,padding:'8px 10px 10px',marginBottom:0}} onClick={e=>e.stopPropagation()}>
+                {cn.map(n=>(
+                  <div key={n.id} style={{display:'flex',gap:7,padding:'4px 0',color:C.text,fontSize:12,lineHeight:1.55}}>
+                    <span style={{opacity:0.7,flexShrink:0}}>{n._reflection?'📔':(INTERACTION_KINDS[n.kind]||INTERACTION_KINDS.note).icon}</span>
+                    <span>{n.text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>);
+        })}
+      </div>
+    ) : <div style={{color:C.muted,fontSize:13}}>No bookings yet</div>
+  );
+
+  // Household block — rendered as a line inside the contact card, beneath the
+  // person notes, on both mobile and desktop. Collapsed: "HOUSEHOLD  <name>"
+  // with a chevron. Expanded in place: reveals +household/Manage controls, the
+  // household tab row (when in more than one), and the roster. Tapping the line
+  // toggles. The whole thing is hidden when the contact card is collapsed.
+  const householdBlock = () => (
+    <div style={{borderTop:`1px solid ${C.border}`,marginTop:14,paddingTop:12}}>
+      {/* Tappable summary line */}
+      <div onClick={()=>setHouseholdExpanded(v=>!v)}
+        style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,cursor:'pointer'}}>
+        <div style={{minWidth:0}}>
+          <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:3}}>{myHouseholds.length>1?'HOUSEHOLDS':'HOUSEHOLD'}</div>
+          <div style={{color:C.text,fontSize:14,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+            {activeHousehold ? (myHouseholds.length>1 ? `${myHouseholds.length} households` : activeHousehold.name) : <span style={{color:C.muted,fontWeight:400}}>Not in a household</span>}
+          </div>
+        </div>
+        <span aria-hidden="true" style={{color:C.muted,fontSize:11,flexShrink:0,transition:'transform 0.18s',transform:householdExpanded?'rotate(0deg)':'rotate(-90deg)',display:'inline-block'}}>▾</span>
+      </div>
+      {/* Expanded body */}
+      {householdExpanded && (
+        <div style={{marginTop:12}}>
+          {/* +household / Manage controls */}
+          <div style={{display:'flex',alignItems:'center',gap:12,justifyContent:'flex-end',marginBottom:10}}>
+            {myHouseholds.length>0 && <span style={{color:C.muted,fontSize:11,cursor:'pointer'}} onClick={(e)=>{e.stopPropagation();setHouseholdModal({mode:'create'});}} title="Create another household">+ household</span>}
+            {activeHousehold && <span style={{color:C.muted,fontSize:11,cursor:'pointer'}} onClick={(e)=>{e.stopPropagation();setHouseholdModal({mode:'manage',householdId:activeHousehold.id});}}>Manage</span>}
+          </div>
+          {/* Tab row — only when the contact is in more than one household */}
+          {myHouseholds.length>1 && (
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>
+              {myHouseholds.map(h=>{
+                const active=h.id===activeHousehold?.id;
+                return <button key={h.id} onClick={()=>setActiveHouseholdId(h.id)} style={{background:active?C.goldBg:'transparent',color:active?C.gold:C.muted,border:`1px solid ${active?C.gold+'88':C.border}`,borderRadius:4,fontSize:11,fontWeight:500,letterSpacing:'0.3px',padding:'4px 10px',cursor:'pointer',fontFamily:"'Jost',sans-serif",maxWidth:140,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{h.name}</button>;
+              })}
+            </div>
+          )}
+          {activeHousehold ? (
+            householdRoster.length > 1 ? (
+              <div style={{display:'flex',flexDirection:'column',gap:2}}>
+                {householdRoster.map(({membership, person:mp}) => {
+                  const isSelf = mp.id === person.id;
+                  const b = mp.dateOfBirth ? birthdayInfo(mp.dateOfBirth) : null;
+                  return (
+                    <div key={membership.id}
+                      onClick={isSelf ? undefined : ()=>nav('person_detail',{personId:mp.id})}
+                      style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'7px 0',borderBottom:`1px solid ${C.border}`,cursor:isSelf?'default':'pointer'}}>
+                      <div style={{minWidth:0}}>
+                        <div style={{color:isSelf?C.muted:C.blue,fontSize:13,fontWeight:isSelf?400:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                          {mp.name}{isSelf && <span style={{color:C.muted,fontSize:11,fontStyle:'italic'}}> · this contact</span>}
+                        </div>
+                        <div style={{color:C.muted,fontSize:11}}>
+                          {RELATIONSHIP_LABELS[membership.relationship] || 'Other'}
+                          {b && <span style={{color:b.days<=30?C.gold:C.muted,marginLeft:6}}>· {b.label}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{color:C.muted,fontSize:13}}>Just this contact so far. <span style={{color:C.blue,cursor:'pointer'}} onClick={()=>setHouseholdModal({mode:'manage',householdId:activeHousehold.id})}>Add someone →</span></div>
+            )
+          ) : (
+            <Btn small onClick={()=>setHouseholdModal({mode:'create'})}>+ Create household</Btn>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
   // When arriving with a highlightNoteId, switch to notes tab, scroll the note
   // into view, flash for ~1.6s. Uses block:'nearest' (not 'center') so we
   // scroll the *minimum* needed: a note already on-screen doesn't move, and a
@@ -4814,13 +4983,22 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
   return (
     <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px',maxWidth:940}}>
       <PageHead sticky back={backInfo?.label} onBack={backInfo?.onBack} action={<><Btn small={isMobile} onClick={onBook}>+ Book</Btn><Btn small={isMobile} variant="secondary" onClick={onEdit}>Edit</Btn></>}>{person.name}</PageHead>
-      <div style={{display:'grid',gridTemplateColumns:'280px 1fr',gap:24}}>
+      <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '280px 1fr',gap: isMobile ? 14 : 24}}>
         <div>
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:20,marginBottom:14}}>
-            <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}>
-              <Avatar name={person.name} size={50} role={primaryRole(person)} />
-              <div style={{flex:1}}><div style={{color:C.text,fontSize:16,fontWeight:500}}>{person.name}</div><div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:6}}>{person.roles.map(r=><RoleBadge key={r} role={r} />)}</div></div>
+          {/* Contact Info card — collapsible to a header (avatar + name). Header
+              is sticky so it stays reachable while the body/tabs scroll. The
+              household now lives inside this card as a line beneath the notes. */}
+          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,marginBottom:14,overflow:'hidden'}}>
+            <div onClick={()=>setInfoOpen(v=>!v)}
+              style={{position:'sticky',top: isMobile?97:0,zIndex:4,background:C.card,display:'flex',alignItems:'center',gap:12,padding:'16px 20px',cursor:'pointer',borderBottom: infoOpen?`1px solid ${C.border}`:'none'}}>
+              <Avatar name={person.name} size={infoOpen?50:38} role={primaryRole(person)} />
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{color:C.text,fontSize:16,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{person.name}</div>
+                {infoOpen && <div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:6}}>{person.roles.map(r=><RoleBadge key={r} role={r} />)}</div>}
+              </div>
+              <span aria-hidden="true" style={{color:C.muted,fontSize:12,flexShrink:0,transition:'transform 0.18s',transform:infoOpen?'rotate(0deg)':'rotate(-90deg)',display:'inline-block'}}>▾</span>
             </div>
+            {infoOpen && <div style={{padding:'12px 20px 20px'}}>
             <div style={{display:'flex',flexDirection:'column',gap:10}}>
               {(person.emails?.length > 0 || person.email) && <div>
                 <div style={{color:C.muted,fontSize:10,marginBottom:2}}>EMAIL{(person.emails?.length||0) > 1 ? 'S' : ''}</div>
@@ -4846,100 +5024,32 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
               <div><div style={{color:C.muted,fontSize:10,marginBottom:3}}>SOURCE</div><SourceTag source={person.source} /></div>
             </div>
             {person.notes&&<div style={{borderTop:`1px solid ${C.border}`,marginTop:14,paddingTop:12,color:C.muted,fontSize:13,lineHeight:1.6}}>{person.notes}</div>}
+            {/* HOUSEHOLD — in-card line, beneath notes, expandable in place. */}
+            {householdBlock()}
+            </div>}
           </div>
+          {/* Bookings — desktop only here; on mobile it's the 4th right-column tab. */}
+          {!isMobile && (
           <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'16px 20px'}}>
             <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:12}}>BOOKINGS</div>
-            {pClasses.length?(
-              // Cap at ~8 rows visible (~38px each); scroll for the rest.
-              <div style={{maxHeight:304,overflowY:'auto',paddingRight:4}}>
-                {pClasses.map(c=>{
-                  const att=attendance.find(a=>a.classId===c.id&&a.personId===person.id);
-                  // Light payment-status hint. Jesse is undecided on showing this —
-                  // to remove it, delete the `payInfo`/`payHint` lines and the
-                  // {payHint} span below; nothing else depends on them.
-                  const ps = att?.paymentStatus || 'unpaid';
-                  const payInfo = ps==='paid' ? {t:'paid', c:C.green} : ps==='package' ? {t:'pkg', c:C.blue} : {t:'unpaid', c:C.muted};
-                  const payHint = <span style={{fontSize:10,color:payInfo.c,opacity:0.85,letterSpacing:'0.3px'}}>{payInfo.t}</span>;
-                  const cn = classNotes(c);
-                  const open = bookingNotesOpen.has(c.id);
-                  return (<div key={c.id}>
-                    <div onClick={()=>nav('class_detail',{classId:c.id})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:open?'none':`1px solid ${C.border}`,cursor:'pointer'}}><div><div style={{color:C.text,fontSize:13}}>{c.name}</div><div style={{color:C.muted,fontSize:11}}>{fmt(c.date)}</div></div><div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}><NoteIndicator count={cn.length} expanded={open} previewText={cn[0]?.text||''} onToggle={()=>toggleBookingNotes(c.id)} />{payHint}<div title={att?.attended?'Attended':'Did not attend'} style={{width:8,height:8,borderRadius:'50%',background:att?.attended?C.green:C.red}} /></div></div>
-                    {open && cn.length>0 && (
-                      <div style={{background:C.surf,borderBottom:`1px solid ${C.border}`,padding:'8px 10px 10px',marginBottom:0}} onClick={e=>e.stopPropagation()}>
-                        {cn.map(n=>(
-                          <div key={n.id} style={{display:'flex',gap:7,padding:'4px 0',color:C.text,fontSize:12,lineHeight:1.55}}>
-                            <span style={{opacity:0.7,flexShrink:0}}>{n._reflection?'📔':(INTERACTION_KINDS[n.kind]||INTERACTION_KINDS.note).icon}</span>
-                            <span>{n.text}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>);
-                })}
-              </div>
-            ):<div style={{color:C.muted,fontSize:13}}>No bookings yet</div>}
+            {bookingsList(true)}
           </div>
-          {/* HOUSEHOLD card — a contact can belong to several households. When
-              there's more than one, a tab row switches between them; each shows
-              its own roster and per-household relationships. "+ household"
-              creates a new one (joining an existing household comes later).
-              Members are clickable through to their own PersonDetail. */}
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'16px 20px',marginTop:14}}>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
-              <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px'}}>{myHouseholds.length>1?'HOUSEHOLDS':'HOUSEHOLD'}</div>
-              <div style={{display:'flex',alignItems:'center',gap:12}}>
-                {myHouseholds.length>0 && <span style={{color:C.muted,fontSize:11,cursor:'pointer'}} onClick={()=>setHouseholdModal({mode:'create'})} title="Create another household">+ household</span>}
-                {activeHousehold && <span style={{color:C.muted,fontSize:11,cursor:'pointer'}} onClick={()=>setHouseholdModal({mode:'manage',householdId:activeHousehold.id})}>Manage</span>}
-              </div>
-            </div>
-            {/* Tab row — only when the contact is in more than one household */}
-            {myHouseholds.length>1 && (
-              <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>
-                {myHouseholds.map(h=>{
-                  const active=h.id===activeHousehold?.id;
-                  return <button key={h.id} onClick={()=>setActiveHouseholdId(h.id)} style={{background:active?C.goldBg:'transparent',color:active?C.gold:C.muted,border:`1px solid ${active?C.gold+'88':C.border}`,borderRadius:4,fontSize:11,fontWeight:500,letterSpacing:'0.3px',padding:'4px 10px',cursor:'pointer',fontFamily:"'Jost',sans-serif",maxWidth:140,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{h.name}</button>;
-                })}
-              </div>
-            )}
-            {activeHousehold ? (
-              <>
-                {myHouseholds.length<=1 && <div style={{color:C.text,fontSize:14,fontWeight:500,marginBottom:10}}>{activeHousehold.name}</div>}
-                {householdRoster.length > 1 ? (
-                  <div style={{display:'flex',flexDirection:'column',gap:2}}>
-                    {householdRoster.map(({membership, person:mp}) => {
-                      const isSelf = mp.id === person.id;
-                      const b = mp.dateOfBirth ? birthdayInfo(mp.dateOfBirth) : null;
-                      return (
-                        <div key={membership.id}
-                          onClick={isSelf ? undefined : ()=>nav('person_detail',{personId:mp.id})}
-                          style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'7px 0',borderBottom:`1px solid ${C.border}`,cursor:isSelf?'default':'pointer'}}>
-                          <div style={{minWidth:0}}>
-                            <div style={{color:isSelf?C.muted:C.blue,fontSize:13,fontWeight:isSelf?400:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
-                              {mp.name}{isSelf && <span style={{color:C.muted,fontSize:11,fontStyle:'italic'}}> · this contact</span>}
-                            </div>
-                            <div style={{color:C.muted,fontSize:11}}>
-                              {RELATIONSHIP_LABELS[membership.relationship] || 'Other'}
-                              {b && <span style={{color:b.days<=30?C.gold:C.muted,marginLeft:6}}>· {b.label}</span>}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div style={{color:C.muted,fontSize:13}}>Just this contact so far. <span style={{color:C.blue,cursor:'pointer'}} onClick={()=>setHouseholdModal({mode:'manage',householdId:activeHousehold.id})}>Add someone →</span></div>
-                )}
-              </>
-            ) : (
-              <div>
-                <div style={{color:C.muted,fontSize:13,marginBottom:10}}>Not in a household.</div>
-                <Btn small onClick={()=>setHouseholdModal({mode:'create'})}>+ Create household</Btn>
-              </div>
-            )}
-          </div>
+          )}
         </div>
         <div>
-          <Tabs tabs={[{id:'notes',label:`Comms (${pNotes.length})`},{id:'packages',label:`Packages (${pPkgs.length})`},{id:'payments',label:`Payments (${pPayments.length})`}]} active={tab} onChange={setTab} />
+          {isMobile ? (
+            <MobileTabBar topOffset={97} active={tab} onChange={setTab} tabs={[
+              {id:'notes',    icon:'💬', name:'Comms',    count:pNotes.length},
+              {id:'bookings', icon:'📅', name:'Bookings', count:pClasses.length},
+              {id:'packages', icon:'🎟', name:'Packages', count:pPkgs.length},
+              {id:'payments', icon:'💷', name:'Payments', count:pPayments.length},
+            ]} />
+          ) : (
+            <Tabs tabs={[{id:'notes',label:`Comms (${pNotes.length})`},{id:'packages',label:`Packages (${pPkgs.length})`},{id:'payments',label:`Payments (${pPayments.length})`}]} active={tab} onChange={setTab} />
+          )}
+          {tab==='bookings'&&isMobile&&<>
+            {bookingsList(false)}
+          </>}
           {tab==='notes'&&<>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16,gap:12,flexWrap:'wrap'}}>
               <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
