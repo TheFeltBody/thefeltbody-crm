@@ -1171,8 +1171,9 @@ function AddOrgForm({ existing, onSave, onClose, defaultType }) {
   );
 }
 
-function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOrgId, onEmailAdd, onEmailDelete, onEmailSetPrimary }) {
+function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOrgId, onEmailAdd, onEmailDelete, onEmailSetPrimary, onAddPersonRole, customPersonRoles: customRolesList=[] }) {
   const { personRoles } = useTypes();
+  const [addingRoleType, setAddingRoleType] = useState(false);
   const initRoles = existing?.roles || (defaultType?[defaultType]:['private_client']);
   // Strip `emails` and `email` from form state — managed separately
   const initForm = existing ? (() => { const {emails, email, ...rest} = existing; return rest; })()
@@ -1268,7 +1269,16 @@ function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOr
     <Modal title={existing?`Edit: ${existing.name}`:"Add Person"} onClose={onClose} wide>
       <FI label="NAME" value={f.name} onChange={s('name')} />
       <div style={{marginBottom:14}}>
-        <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:8}}>ROLES (select all that apply)</div>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+          <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px'}}>ROLES (select all that apply)</div>
+          {onAddPersonRole && !addingRoleType && <button onClick={()=>setAddingRoleType(true)} style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:11,padding:0,fontFamily:"'Jost',sans-serif"}}>+ New role type</button>}
+        </div>
+        {addingRoleType && onAddPersonRole && (
+          <AddTypeForm kind="person"
+            existingKeys={[...Object.keys(PERSON_ROLES), ...customRolesList.map(t=>t.key)]}
+            onSave={t => { onAddPersonRole(t).then(saved => { toggleRole(saved.key); }); }}
+            onClose={()=>setAddingRoleType(false)} />
+        )}
         <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
           {Object.entries(personRoles).map(([r,m])=>(
             <button key={r} onClick={()=>toggleRole(r)} style={{background:roles.includes(r)?m.bg:C.surf,border:`1px solid ${roles.includes(r)?m.color:C.border}`,color:roles.includes(r)?m.color:C.muted,cursor:'pointer',borderRadius:20,fontSize:11,fontWeight:600,padding:'4px 12px',textTransform:'uppercase',fontFamily:"'Jost',sans-serif"}}>{m.label}</button>
@@ -7107,12 +7117,14 @@ export default function FeltBodyCRM() {
     switch(modal.type){
       case 'add_org': return <AddOrgForm defaultType={modal.orgType==='all'?undefined:modal.orgType} onSave={addOrg} onClose={close} />;
       case 'edit_org': return <AddOrgForm existing={modal.org} onSave={o=>updateOrg(modal.org.id, o)} onClose={close} />;
-      case 'add_person': return <AddPersonForm orgs={orgs} defaultType={modal.personType} defaultOrgId={modal.orgId} onSave={addPerson} onClose={close} />;
+      case 'add_person': return <AddPersonForm orgs={orgs} defaultType={modal.personType} defaultOrgId={modal.orgId} onSave={addPerson} onClose={close} onAddPersonRole={addPersonRole} customPersonRoles={customPersonRoles} />;
       case 'edit_person': return <AddPersonForm existing={modal.person} orgs={orgs}
         onSave={p=>updatePerson(modal.person.id, p)}
         onEmailAdd={addPersonEmail}
         onEmailDelete={deletePersonEmail}
         onEmailSetPrimary={setPersonPrimaryEmail}
+        onAddPersonRole={addPersonRole}
+        customPersonRoles={customPersonRoles}
         onClose={close} />;
       case 'merge_people': return <MergePeopleForm personA={modal.personA} personB={modal.personB} orgs={orgs} onMerge={mergePeople} onClose={close} />;
       case 'edit_note': return <EditNoteForm note={modal.note} onSave={n=>updateNote(modal.note.id, n)} onClose={close} />;
@@ -7144,6 +7156,8 @@ export default function FeltBodyCRM() {
         // when AddPersonForm calls onClose(); the async work continues in the background
         // and updates state when it resolves.
         return <AddPersonForm orgs={orgs}
+          onAddPersonRole={addPersonRole}
+          customPersonRoles={customPersonRoles}
           onSave={async (p) => {
             try {
               const savedPerson = await data.people.create(p);
