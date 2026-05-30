@@ -2566,6 +2566,91 @@ function EditNoteForm({ note, onSave, onClose }) {
   );
 }
 
+// Compose-and-send modal for the CRM adhoc email feature. Plain-text v1: the
+// form-worker handles HTML escaping + \n -> <br>, and sends via Brevo with no
+// template (htmlContent direct). Errors from the worker (validation, missing
+// primary email, Brevo failure) surface inline so the user can fix and retry
+// without losing their draft. The outbound interaction is written server-side
+// and returned to the caller via onSend, which is expected to splice it into
+// the parent's notes state so it appears on PersonDetail immediately.
+function SendEmailModal({ person, onSend, onClose }) {
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const hasEmail = !!person.email;
+  const canSend = !busy && hasEmail && subject.trim() && body.trim();
+
+  const send = async () => {
+    if (!canSend) return;
+    setBusy(true); setErr(null);
+    try {
+      const res = await onSend({
+        personId: person.id,
+        subject: subject.trim(),
+        body, // server escapes + \n -> <br>; keep newlines intact
+      });
+      // Best-effort log failure: email *did* send, but the interaction row
+      // didn't write. Surface and still close — user can add a manual note.
+      if (res?.warning) alert(res.warning);
+      onClose();
+    } catch (e) {
+      setErr(e.message || String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={`Email ${person.name}`} onClose={busy ? ()=>{} : onClose} wide>
+      <div style={{color:C.muted,fontSize:11,marginBottom:14,letterSpacing:'0.3px'}}>
+        TO: {hasEmail
+          ? <span style={{color:C.text}}>{person.email}</span>
+          : <span style={{color:C.gold}}>⚠ No primary email — set one on this contact before sending</span>}
+      </div>
+      <input
+        type="text"
+        value={subject}
+        onChange={e=>setSubject(e.target.value)}
+        placeholder="Subject"
+        disabled={busy}
+        maxLength={200}
+        style={{
+          width:'100%',background:C.card,border:`1px solid ${C.border}`,
+          borderRadius:6,color:C.text,fontSize:14,padding:'8px 12px',
+          fontFamily:"'Jost',sans-serif",outline:'none',marginBottom:10,
+        }}
+      />
+      <textarea
+        value={body}
+        onChange={e=>setBody(e.target.value)}
+        rows={12}
+        placeholder="Write your message..."
+        disabled={busy}
+        style={{
+          width:'100%',background:C.card,border:`1px solid ${C.border}`,
+          borderRadius:6,color:C.text,fontSize:14,padding:'10px 12px',
+          fontFamily:"'Jost',sans-serif",resize:'vertical',outline:'none',
+          lineHeight:1.6,
+        }}
+      />
+      {err && (
+        <div style={{
+          marginTop:12,padding:'8px 12px',background:'#3a1f1f',
+          border:'1px solid #6b2e2e',borderRadius:6,color:'#e8a4a4',
+          fontSize:12,lineHeight:1.5,
+        }}>
+          {err}
+        </div>
+      )}
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:16}}>
+        <Btn variant="ghost" small onClick={onClose} disabled={busy}>Cancel</Btn>
+        <Btn small onClick={send} disabled={!canSend}>{busy ? 'Sending…' : 'Send email'}</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 // Hoisted out of Sidebar so its internal hover state survives Sidebar re-renders.
 // (Defining it inline made React see a "new" component type on every parent re-render
 // and unmount/remount, wiping local state including the hover toggle for the × button.)
@@ -4727,10 +4812,11 @@ function HouseholdModal({ person, household, roster, allPeople, households, hous
   );
 }
 
-function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], orgs, nav, backInfo, highlightNoteId, people, households, householdMembers, onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddNote, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {
+function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], orgs, nav, backInfo, highlightNoteId, people, households, householdMembers, onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddNote, onSendEmail, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {
   const isMobile = useIsMobile();  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
+  const [composeOpen, setComposeOpen] = useState(false);  // adhoc email compose modal
   // Active right-column tab. Persisted so the page reopens on the last-viewed
   // tab (sticky across navigations/sessions, per-device). On mobile a fourth
   // 'bookings' tab joins the row; on desktop bookings live in the left column.
@@ -4991,6 +5077,7 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
   }, [menuOpen]);
 
   return (
+    <>
     <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px',maxWidth:940}}>
       <PageHead sticky back={backInfo?.label} onBack={backInfo?.onBack} action={<><Btn small={isMobile} onClick={onBook}>+ Book</Btn><Btn small={isMobile} variant="secondary" onClick={onEdit}>Edit</Btn></>}>{person.name}</PageHead>
       <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '280px 1fr',gap: isMobile ? 14 : 24}}>
@@ -5098,7 +5185,11 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
                   the form for that kind. Closes on outside-click or Escape (see
                   useEffect above). Hidden while the form itself is open. */}
               {addKind === null && (
-                <div ref={menuRef} style={{position:'relative'}}>
+                <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                  <Btn small variant="ghost" onClick={()=>setComposeOpen(true)} title={person.email ? `Email ${person.email}` : 'No primary email — set one before sending'}>
+                    ✉ Send email
+                  </Btn>
+                  <div ref={menuRef} style={{position:'relative'}}>
                   <Btn small onClick={()=>setMenuOpen(v=>!v)}>
                     + Log <span style={{opacity:0.6,marginLeft:3,display:'inline-block',transition:'transform 0.15s',transform:menuOpen?'rotate(180deg)':'rotate(0deg)'}}>▾</span>
                   </Btn>
@@ -5134,6 +5225,7 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
                       ))}
                     </div>
                   )}
+                </div>
                 </div>
               )}
             </div>
@@ -5323,6 +5415,14 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
         );
       })()}
     </div>
+    {composeOpen && (
+      <SendEmailModal
+        person={person}
+        onSend={onSendEmail}
+        onClose={()=>setComposeOpen(false)}
+      />
+    )}
+    </>
   );
 }
 
@@ -6796,6 +6896,16 @@ export default function FeltBodyCRM() {
   const addNote = (n) => data.notes.create(n)
     .then(saved => setNotes(p => [...p, saved]))
     .catch(onError('Add note'));
+  // Adhoc outbound email. data.email.send goes via form-worker /send-email
+  // which writes the outbound interaction row server-side and returns it
+  // mapped to JSX shape, so we splice into local notes state immediately
+  // rather than waiting on the 60s poll. Throws propagate up to the
+  // SendEmailModal so it can render the error inline (without alert + close).
+  const sendEmail = async ({ personId, subject, body }) => {
+    const res = await data.email.send({ personId, subject, body });
+    if (res.note) setNotes(p => [...p, res.note]);
+    return res;
+  };
   const toggleNoteImportant = (id) => {
     // Optimistic: flip locally, then sync. Find current value for the patch.
     const cur = notes.find(n => n.id === id);
@@ -7289,6 +7399,7 @@ export default function FeltBodyCRM() {
           onUpdateMemberRelationship={updateMemberRelationship}
           onRemoveHouseholdMember={removeHouseholdMember}
           onAddNote={addNote}
+          onSendEmail={sendEmail}
           onToggleImportant={toggleNoteImportant}
           onClearAction={clearNoteAction}
           onReopenNote={reopenNote}
