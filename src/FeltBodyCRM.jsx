@@ -2714,7 +2714,7 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
     (view.name === 'week_view' || view.name === 'month_view' || view.name === 'classes' || view.name === 'class_detail' || view.name === 'forms_list') ? 'sessions' :
     (view.name === 'invoices' || view.name === 'invoice_detail') ? 'finance' :
     null;
-  const [openSection, setOpenSection] = useState(sectionForView || 'orgs');
+  const [openSection, setOpenSection] = useState(sectionForView || 'people');
   // When navigating into a section, open it (and close the others).
   useEffect(()=>{ if(sectionForView) setOpenSection(sectionForView); }, [sectionForView]);
   const toggleSection = (key) => setOpenSection(cur => cur === key ? null : key);
@@ -2841,6 +2841,7 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
             <Item name="people" params={{personType:'personal_contact'}} label="All Personal Contacts" icon="◉" indent />
           ) : (
             <>
+              <Item name="people" params={{personType:'recent'}} label="Recent Contacts" icon="◷" indent />
               <Item name="people" params={{personType:'all'}} label="All Contacts" icon="◉" indent />
               <Item name="people" params={{personType:'private_client'}} label="Private Clients" icon="▸" indent />
               <Item name="people" params={{personType:'website_student'}} label="Students" icon="▸" indent />
@@ -4296,7 +4297,7 @@ function OrgDetail({ org, people, classes, invoices, notes=[], nav, backInfo, on
       <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '260px 1fr',gap: isMobile ? 14 : 24}}>
         <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,alignSelf:'start',overflow:'hidden'}}>
           <div onClick={()=>setInfoOpen(v=>!v)}
-            style={{position:'sticky',top: isMobile?97:0,zIndex:4,background:C.card,display:'flex',alignItems:'center',gap:10,padding:'14px 20px',cursor:'pointer',borderBottom: infoOpen?`1px solid ${C.border}`:'none'}}>
+            style={{position: isMobile ? 'static' : 'sticky',top: isMobile?97:0,zIndex:4,background:C.card,display:'flex',alignItems:'center',gap:10,padding:'14px 20px',cursor:'pointer',borderBottom: infoOpen?`1px solid ${C.border}`:'none'}}>
             <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',gap:6,alignItems:'flex-start'}}>
               <OrgBadge type={org.type} />
               {!infoOpen && <div style={{color:C.text,fontSize:14,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{org.name}</div>}
@@ -4456,14 +4457,23 @@ function OrgDetail({ org, people, classes, invoices, notes=[], nav, backInfo, on
 }
 
 // ─── PEOPLE LIST / DETAIL ────────────────────────────────────────────────────
-function PeopleList({ people, orgs, personType, nav, onAdd, onMerge, households=[], householdMembers=[] }) {
+function PeopleList({ people, orgs, personType, nav, onAdd, onMerge, households=[], householdMembers=[], recentPersonIds=[] }) {
   const { personRoles } = useTypes();
   const isMobile = useIsMobile();
   const [q, setQ] = useState('');
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(new Set());
-  const list = people.filter(p=> personType==='all' ? !isPersonalOnly(p) : p.roles.includes(personType)).filter(p=>!q||p.name.toLowerCase().includes(q.toLowerCase())||(p.email||'').toLowerCase().includes(q.toLowerCase()));
-  const title = personType==='all'?'All Contacts':((personRoles[personType]||PERSON_ROLES[personType])?.label+'s'||personType);
+  // Recent Contacts mode: filter by the recents list and preserve its order
+  // (most-recently-viewed first). Dead ids are silently dropped via find().
+  // Other modes keep the existing role-based filter plus the personal-only hide.
+  const isRecent = personType === 'recent';
+  const baseList = isRecent
+    ? recentPersonIds.map(id => people.find(p => p.id === id)).filter(Boolean)
+    : people.filter(p => personType==='all' ? !isPersonalOnly(p) : p.roles.includes(personType));
+  const list = baseList.filter(p=>!q||p.name.toLowerCase().includes(q.toLowerCase())||(p.email||'').toLowerCase().includes(q.toLowerCase()));
+  const title = isRecent
+    ? 'Recent Contacts'
+    : (personType==='all' ? 'All Contacts' : ((personRoles[personType]||PERSON_ROLES[personType])?.label+'s' || personType));
   const toggleSel = (id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const exitSelect = () => { setSelectMode(false); setSelected(new Set()); };
   const canMerge = selected.size === 2;
@@ -4498,7 +4508,7 @@ function PeopleList({ people, orgs, personType, nav, onAdd, onMerge, households=
   ) : (
     <div style={{display:'flex',gap:8}}>
       <Btn variant="ghost" small={isMobile} onClick={()=>setSelectMode(true)}>Select</Btn>
-      <Btn small={isMobile} onClick={onAdd}>+ {isMobile ? 'Person' : 'Add Person'}</Btn>
+      {!isRecent && <Btn small={isMobile} onClick={onAdd}>+ {isMobile ? 'Person' : 'Add Person'}</Btn>}
     </div>
   );
   return (
@@ -4568,7 +4578,7 @@ function PeopleList({ people, orgs, personType, nav, onAdd, onMerge, households=
             );
           })}
         </div>
-      ) : <Empty text="No results" />}
+      ) : <Empty text={isRecent && !q ? 'No contacts viewed yet — open a contact to start building your recents list.' : 'No results'} />}
     </div>
   );
 }
@@ -5087,7 +5097,7 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
               household now lives inside this card as a line beneath the notes. */}
           <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,marginBottom:14,overflow:'hidden'}}>
             <div onClick={()=>setInfoOpen(v=>!v)}
-              style={{position:'sticky',top: isMobile?97:0,zIndex:4,background:C.card,display:'flex',alignItems:'center',gap:12,padding:'16px 20px',cursor:'pointer',borderBottom: infoOpen?`1px solid ${C.border}`:'none'}}>
+              style={{position: isMobile ? 'static' : 'sticky',top: isMobile?97:0,zIndex:4,background:C.card,display:'flex',alignItems:'center',gap:12,padding:'16px 20px',cursor:'pointer',borderBottom: infoOpen?`1px solid ${C.border}`:'none'}}>
               <Avatar name={person.name} size={infoOpen?50:38} role={primaryRole(person)} />
               <div style={{flex:1,minWidth:0}}>
                 <div style={{color:C.text,fontSize:16,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{person.name}</div>
@@ -5117,8 +5127,11 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
               {person.address&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>ADDRESS</div><div style={{color:C.text,fontSize:13}}>{person.address}</div></div>}
               {person.dateOfBirth&&(()=>{const b=birthdayInfo(person.dateOfBirth);return <div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>DATE OF BIRTH</div><div style={{color:C.text,fontSize:13}}>{person.dateOfBirth}{b&&<span style={{color:b.days<=30?C.gold:C.muted,fontSize:12,marginLeft:8}}>· {b.label}</span>}</div></div>;})()}
               {org&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>ORGANISATION</div><div style={{color:C.blue,fontSize:13,cursor:'pointer'}} onClick={()=>nav('org_detail',{orgId:org.id})}>{org.name}</div></div>}
-              <div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>STATUS</div><div style={{color:person.status==='active'?C.green:person.status==='interested'?C.gold:C.muted,fontSize:13,fontWeight:500}}>{person.status}</div></div>
-              <div><div style={{color:C.muted,fontSize:10,marginBottom:3}}>SOURCE</div><SourceTag source={person.source} /></div>
+              {/* STATUS & SOURCE: desktop only — on mobile they crowd out
+                  the genuinely useful contact details (email/phone). Still
+                  editable via the Edit screen on any device. */}
+              {!isMobile && <div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>STATUS</div><div style={{color:person.status==='active'?C.green:person.status==='interested'?C.gold:C.muted,fontSize:13,fontWeight:500}}>{person.status}</div></div>}
+              {!isMobile && <div><div style={{color:C.muted,fontSize:10,marginBottom:3}}>SOURCE</div><SourceTag source={person.source} /></div>}
             </div>
             {person.notes&&<div style={{borderTop:`1px solid ${C.border}`,marginTop:14,paddingTop:12,color:C.muted,fontSize:13,lineHeight:1.6}}>{person.notes}</div>}
             {/* HOUSEHOLD — in-card line, beneath notes, expandable in place. */}
@@ -6546,6 +6559,11 @@ export default function FeltBodyCRM() {
   // sections open, page scrolls. Only renders the toggle on views that opt in
   // (currently Dashboard).
   const [mobileExpandAll, setMobileExpandAll] = useLocalStorage('fbc.mobile.expandAll', false);
+  // Recent Contacts: last 20 personIds visited (most-recent first). Updated by
+  // a useEffect that watches view changes. Persisted per-device so the list
+  // survives refresh. Surfaced in the sidebar above "All Contacts", and as a
+  // view (PeopleList with personType='recent').
+  const [recentPersonIds, setRecentPersonIds] = useLocalStorage('fbc.recentPersonIds', []);
   const [modal, setModal] = useState(null);
   // Loading + error state for the initial bulk fetch
   const [loadStatus, setLoadStatus] = useState('loading');  // 'loading' | 'ready' | 'error'
@@ -6620,6 +6638,20 @@ export default function FeltBodyCRM() {
   // without re-creating the interval every time the modal opens/closes.
   const modalOpenRef = useRef(false);
   useEffect(() => { modalOpenRef.current = !!modal; }, [modal]);
+
+  // Recent Contacts tracker. When the user lands on a person_detail view,
+  // push that personId to the front of the recents list (dedupe, cap 20).
+  // Persisted via useLocalStorage above so the list survives refresh and is
+  // available on next load. Deletions/merges are handled passively: dead
+  // ids stay in the array but PeopleList silently drops them when rendering.
+  useEffect(() => {
+    if (view.name !== 'person_detail' || !view.personId) return;
+    const id = view.personId;
+    setRecentPersonIds(ids => {
+      if (ids[0] === id) return ids; // already most-recent, no-op
+      return [id, ...ids.filter(x => x !== id)].slice(0, 20);
+    });
+  }, [view.name, view.personId]);
 
   useEffect(() => {
     if (loadStatus !== 'ready') return;
@@ -6697,6 +6729,7 @@ export default function FeltBodyCRM() {
       case 'invoices': label = 'Invoices'; break;
       case 'people':
         if (prev.personType === 'all') label = 'All Contacts';
+        else if (prev.personType === 'recent') label = 'Recent Contacts';
         else {
           const role = personRoles[prev.personType] || PERSON_ROLES[prev.personType];
           label = role ? role.label + 's' : 'People';
@@ -7383,7 +7416,7 @@ export default function FeltBodyCRM() {
           onUpdateActionDate={updateNoteAction}
           onUpdateInvoiceStatus={setInvoiceStatus} />;
       }
-      case 'people': return <PeopleList people={people} orgs={orgs} personType={personType} nav={nav} mode={mode} households={households} householdMembers={householdMembers} onAdd={()=>setModal({type:'add_person',personType: personType==='all'?'private_client':personType, ...(mode==='personal'?{orgId: orgs.find(o=>o.type==='personal')?.id}:{})})} onMerge={(a,b)=>setModal({type:'merge_people',personA:a,personB:b})} />;
+      case 'people': return <PeopleList people={people} orgs={orgs} personType={personType} nav={nav} mode={mode} households={households} householdMembers={householdMembers} recentPersonIds={recentPersonIds} onAdd={()=>setModal({type:'add_person',personType: personType==='all'?'private_client':personType, ...(mode==='personal'?{orgId: orgs.find(o=>o.type==='personal')?.id}:{})})} onMerge={(a,b)=>setModal({type:'merge_people',personA:a,personB:b})} />;
       case 'person_detail': {
         const person=people.find(p=>p.id===personId); if(!person) return <Empty text="Not found" />;
         const org=orgs.find(o=>o.id===person.orgId);
