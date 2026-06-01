@@ -461,6 +461,24 @@ export const notes = {
   },
   delete: (id) => softDelete('interactions', id),
 
+  // Mark every unread message in a thread as read. Called when a thread is
+  // opened in ThreadsView. Single bulk update keyed on thread_id; only stamps
+  // rows that aren't already read (idempotent, avoids needless writes). No
+  // return — the UI splices read_at locally and doesn't need the rows back.
+  async markThreadRead(threadId) {
+    await supabase.from('interactions')
+      .update({ read_at: new Date().toISOString() })
+      .eq('thread_id', threadId)
+      .is('read_at', null).then(ok);
+  },
+  // Mark a single (unthreaded) email as read, by row id. Sibling of
+  // markThreadRead for solo emails that carry no thread_id.
+  async markRead(id) {
+    await supabase.from('interactions')
+      .update({ read_at: new Date().toISOString() })
+      .eq('id', id).then(ok);
+  },
+
   // List all non-deleted interactions. Mirrors the read shape in loadAll().
   // Used by the inbox poller (App component, ~60s interval) to surface new
   // rows ingested by the inbound Worker without requiring a full page refresh.

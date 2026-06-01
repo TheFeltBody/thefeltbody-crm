@@ -2703,6 +2703,20 @@ function SidebarCustomTypeItem({ active, indent, label, icon, count, onNav, onDe
 function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles, onAddOrgType, onAddPersonRole, orgs, people, onRemoveOrgType, onRemovePersonRole, onSignOut, mode='client', onSwitchMode, onAddPersonalOrg }) {
   const unpaidInvoices = invoices.filter(i=>i.status!=='paid').length;
   const inboxCount = notes.filter(n => !n.personId).length;
+  // Threads = emails from known contacts. Badge counts distinct threads
+  // (or solo emails) that contain at least one unread message.
+  const threadsUnread = (() => {
+    const seen = new Set();
+    let count = 0;
+    notes.forEach(n => {
+      if (n.kind !== 'email' || !n.personId || n.readAt) return;
+      const key = n.threadId || `solo:${n.id}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      count++;
+    });
+    return count;
+  })();
 
   // Accordion nav: at most one section group open at a time. Sections are
   // 'orgs' | 'people' | 'sessions' | 'finance'. Opening one closes the others.
@@ -2799,6 +2813,7 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
       </div>
       <Item name="dashboard" label="Dashboard" icon="◈" />
       {!isPersonal && <Item name="inbox" label="Inbox" icon="✉" badge={inboxCount} />}
+      {!isPersonal && <Item name="threads" label="Threads" icon="✦" badge={threadsUnread} />}
       {!isPersonal && <Item name="comms_log" label="Recent Activity" icon="◷" />}
       {isPersonal && <Item name="birthdays" label="Birthdays" icon="🎂" />}
 
@@ -2894,8 +2909,93 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
   );
 }
 
+// ─── QUICK TODO MODAL ─────────────────────────────────────────────────────────
+// Lightweight modal for adding a free-floating to-do from the Dashboard header.
+// Saves with source='todo' so it satisfies the interactions_anchored constraint
+// without needing a person or session anchor. Person picker is optional — if
+// filled, the to-do also appears on that contact's Comms tab.
+function QuickTodoModal({ people, onSave, onClose }) {
+  const [text, setText] = useState('');
+  const [actionDate, setActionDate] = useState(today());
+  const [personId, setPersonId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const canSave = !busy && text.trim();
+
+  const save = async () => {
+    if (!canSave) return;
+    setBusy(true);
+    try {
+      await onSave({
+        text: text.trim(),
+        actionDate: actionDate || null,
+        personId: personId || null,
+        kind: 'note',
+        source: 'todo',
+        date: today(),
+        important: false,
+      });
+      onClose();
+    } catch(e) {
+      setBusy(false);
+    }
+  };
+
+  const inputStyle = {
+    width: '100%', background: C.card, border: `1px solid ${C.border}`,
+    borderRadius: 6, color: C.text, fontSize: 14, padding: '8px 12px',
+    fontFamily: "'Jost',sans-serif", outline: 'none',
+  };
+
+  return (
+    <Modal title="Add To Do" onClose={busy ? ()=>{} : onClose}>
+      <textarea
+        autoFocus
+        value={text}
+        onChange={e => setText(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save(); }}
+        rows={3}
+        placeholder="What needs doing?"
+        disabled={busy}
+        style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.6, marginBottom: 12 }}
+      />
+      <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: '0 0 auto' }}>
+          <div style={{ color: C.muted, fontSize: 11, marginBottom: 4, letterSpacing: '0.3px' }}>DATE</div>
+          <input
+            type="date"
+            value={actionDate}
+            onChange={e => setActionDate(e.target.value)}
+            disabled={busy}
+            style={{ ...inputStyle, width: 'auto', fontSize: 13 }}
+          />
+        </div>
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <div style={{ color: C.muted, fontSize: 11, marginBottom: 4, letterSpacing: '0.3px' }}>LINK TO PERSON <span style={{ opacity: 0.5 }}>(optional)</span></div>
+          <select
+            value={personId}
+            onChange={e => setPersonId(e.target.value)}
+            disabled={busy}
+            style={{ ...inputStyle, fontSize: 13, cursor: 'pointer' }}
+          >
+            <option value="">— none —</option>
+            {[...people]
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <Btn variant="secondary" small onClick={onClose} disabled={busy}>Cancel</Btn>
+        <Btn small onClick={save} disabled={!canSave}>
+          {busy ? 'Saving…' : 'Add To Do'}
+        </Btn>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({ orgs, people, classes, attendance, notes, packages, invoices, nav, onAddClass, onCompleteNote, onReopenNote }) {
+function Dashboard({ orgs, people, classes, attendance, notes, packages, invoices, nav, onAddClass, onCompleteNote, onReopenNote, onAddTodo }) {
   const [selectedDate, setSelectedDate] = useState(today());
   const isToday = selectedDate === today();
   const dateLabel = (() => {
@@ -2937,6 +3037,7 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
   const monthEnd = useMemo(() => lastDayOfMonth(t), [t]);
 
   const [todoFilter, setTodoFilter] = useState('today'); // today | week | month | all | completed
+  const [showTodoModal, setShowTodoModal] = useState(false);
 
   const todoCounts = useMemo(() => {
     const active = notes.filter(n => n.actionDate && !n.completed);
@@ -3178,7 +3279,12 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
       key: 'todo',
       title: 'To Do',
       meta: `${filteredTodos.length} item${filteredTodos.length!==1?'s':''}`,
-      action: null,  // "+ Add To Do" coming in a follow-up batch (see memory #27)
+      action: (
+        <button onClick={() => setShowTodoModal(true)}
+          style={{background:C.goldBg,border:`1px solid ${C.gold}88`,color:C.gold,cursor:'pointer',borderRadius:6,fontSize:12,padding:'4px 11px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',fontWeight:500}}>
+          + Add To Do
+        </button>
+      ),
       body: renderTodoBody,
     },
     {
@@ -3256,6 +3362,7 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
 
     if (expandAll) {
       return (
+        <>
         <div style={{padding:'12px 12px 24px'}}>
           <PageHead subInfo={fmt(today())}>Dashboard</PageHead>
           <div style={{display:'flex',flexDirection:'column',gap:18}}>
@@ -3267,12 +3374,17 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
             ))}
           </div>
         </div>
+        {showTodoModal && (
+          <QuickTodoModal people={people} onSave={onAddTodo} onClose={() => setShowTodoModal(false)} />
+        )}
+        </>
       );
     }
 
     // Contracted accordion. Titles are flex items; the OPEN one flex-grows
     // to fill the remaining viewport and scrolls internally.
     return (
+      <>
       <div style={{padding:'12px 12px 0',display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
         <PageHead subInfo={fmt(today())}>Dashboard</PageHead>
         <div style={{display:'flex',flexDirection:'column',gap:8,flex:1,minHeight:0}}>
@@ -3295,11 +3407,16 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
           })}
         </div>
       </div>
+      {showTodoModal && (
+        <QuickTodoModal people={people} onSave={onAddTodo} onClose={() => setShowTodoModal(false)} />
+      )}
+      </>
     );
   }
 
   // ─── DESKTOP LAYOUT ────────────────────────────────────────────────────────
   return (
+  <>
     <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px',maxWidth:920}}>
       <div style={{marginBottom:30}}>
         <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:32,fontWeight:600,color:C.text,margin:'0 0 4px'}}>Dashboard</h1>
@@ -3339,10 +3456,18 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
         </div>
       )}
     </div>
+    {showTodoModal && (
+      <QuickTodoModal
+        people={people}
+        onSave={onAddTodo}
+        onClose={() => setShowTodoModal(false)}
+      />
+    )}
+  </>
   );
 }
 
-// ─── INBOX ────────────────────────────────────────────────────────────────────
+
 // Surfaces interactions with person_id IS NULL (Phase 8 Half A). Rows arrive
 // here when the inbound Worker, form submissions, or future Brevo webhooks
 // ingest a communication whose sender/recipient doesn't match any existing
@@ -3597,6 +3722,269 @@ function BirthdaysView({ people, orgs, nav }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── THREADS ──────────────────────────────────────────────────────────────────
+// Communications hub for KNOWN contacts. Every email to/from someone already
+// in the CRM (kind='email', person_id IS NOT NULL) lands here, grouped into
+// threads by thread_id. Distinct from the Inbox, which surfaces comms from
+// people NOT yet in the CRM (person_id IS NULL).
+//
+// The point: a clean place to see and work through real correspondence,
+// separate from the noise of a personal Gmail. Unread threads are flagged so
+// nothing passes without crossing Jesse's attention — automation files the
+// mail, but a human still sees it. Opening a thread marks every unread message
+// in it as read (read_at stamped server-side via onMarkThreadRead).
+//
+// "Thread" = all rows sharing a thread_id. Emails with no thread_id each form
+// their own single-message pseudo-thread (key `solo:<id>`). Reads the shared
+// `notes` array (kept fresh by the 60s poll) — no extra fetching.
+function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey }) {
+  const isMobile = useIsMobile();
+  const [selectedKey, setSelectedKey] = useState(initialThreadKey || null);
+  const [search, setSearch] = useState('');
+
+  const personById = useMemo(() => {
+    const m = {};
+    people.forEach(p => { m[p.id] = p; });
+    return m;
+  }, [people]);
+
+  // Build threads from email interactions belonging to known contacts.
+  // Each thread: { key, threadId|null, soloId|null, subject, messages[],
+  // personIds Set, latestDate, unreadCount }. Sorted newest-first by latest
+  // message date.
+  const threads = useMemo(() => {
+    const emails = notes.filter(n => n.kind === 'email' && n.personId);
+    const groups = new Map();
+    emails.forEach(n => {
+      const key = n.threadId ? `t:${n.threadId}` : `solo:${n.id}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          threadId: n.threadId || null,
+          soloId: n.threadId ? null : n.id,
+          messages: [],
+          personIds: new Set(),
+        });
+      }
+      const g = groups.get(key);
+      g.messages.push(n);
+      if (n.personId) g.personIds.add(n.personId);
+    });
+    const arr = [...groups.values()].map(g => {
+      // Chronological within the thread (oldest → newest).
+      g.messages.sort((a, b) => new Date(a.date) - new Date(b.date));
+      const withSubject = g.messages.find(m => m.subject);
+      g.subject = (withSubject && withSubject.subject) || '(no subject)';
+      g.latestDate = g.messages.reduce((mx, m) => m.date > mx ? m.date : mx, g.messages[0].date);
+      g.unreadCount = g.messages.filter(m => !m.readAt).length;
+      return g;
+    });
+    arr.sort((a, b) => new Date(b.latestDate) - new Date(a.latestDate));
+    return arr;
+  }, [notes]);
+
+  const participantNames = (t) =>
+    [...t.personIds].map(id => personById[id]?.name).filter(Boolean).join(', ') || 'Unknown contact';
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return threads;
+    return threads.filter(t =>
+      t.subject.toLowerCase().includes(q) ||
+      participantNames(t).toLowerCase().includes(q)
+    );
+  }, [threads, search]);
+
+  const selected = useMemo(
+    () => threads.find(t => t.key === selectedKey) || null,
+    [threads, selectedKey]
+  );
+
+  // Opening a thread marks it read. Run as an effect off the selected key so it
+  // fires once per open, not on every render. Only fires if there's something
+  // unread (avoids a pointless write when re-opening an already-read thread).
+  useEffect(() => {
+    if (selected && selected.unreadCount > 0) {
+      onMarkThreadRead(selected.threadId, selected.soloId);
+    }
+  }, [selectedKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── THREAD ROW (list item) ────────────────────────────────────────────────
+  const ThreadRow = ({ t, active }) => {
+    const unread = t.unreadCount > 0;
+    const names = participantNames(t);
+    const last = t.messages[t.messages.length - 1];
+    const snippet = String(last.text || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+    return (
+      <div onClick={() => setSelectedKey(t.key)}
+        style={{
+          padding: '12px 14px',
+          borderBottom: `1px solid ${C.border}`,
+          cursor: 'pointer',
+          background: active ? C.active : (unread ? C.goldBg : C.card),
+          borderLeft: `3px solid ${active ? C.gold : (unread ? C.gold + '88' : 'transparent')}`,
+          transition: 'background 0.12s',
+        }}
+        onMouseEnter={e => { if (!active) e.currentTarget.style.background = C.surf; }}
+        onMouseLeave={e => { if (!active) e.currentTarget.style.background = unread ? C.goldBg : C.card; }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          {unread && <span style={{ width: 7, height: 7, borderRadius: '50%', background: C.gold, flexShrink: 0 }} />}
+          <span style={{ color: C.text, fontSize: 13.5, fontWeight: unread ? 700 : 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0 }}>
+            {names}
+          </span>
+          {t.messages.length > 1 && (
+            <span style={{ color: C.muted, fontSize: 11, flexShrink: 0 }}>{t.messages.length}</span>
+          )}
+          <span style={{ color: C.muted, fontSize: 11, flexShrink: 0 }}>{fmtRel(t.latestDate)}</span>
+        </div>
+        <div style={{ color: unread ? C.gold : C.muted, fontSize: 12.5, fontWeight: unread ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: 2 }}>
+          {t.subject}
+        </div>
+        <div style={{ color: C.muted, fontSize: 12, lineHeight: 1.4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', opacity: 0.85 }}>
+          {snippet || <span style={{ fontStyle: 'italic', opacity: 0.7 }}>—</span>}
+        </div>
+      </div>
+    );
+  };
+
+  // ─── MESSAGE (in expanded thread) ──────────────────────────────────────────
+  const Message = ({ m }) => {
+    const inbound = m.direction === 'inbound';
+    const person = personById[m.personId];
+    const counterparty = inbound ? (m.fromEmail || '') : (m.toEmail || '');
+    return (
+      <div style={{
+        background: C.card,
+        border: `1px solid ${C.border}`,
+        borderLeft: `3px solid ${inbound ? C.blue : C.gold}`,
+        borderRadius: '0 8px 8px 0',
+        padding: '12px 16px',
+        marginBottom: 10,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 7, flexWrap: 'wrap' }}>
+          <span style={{
+            color: inbound ? C.blue : C.gold, fontSize: 10, fontWeight: 700,
+            letterSpacing: '0.6px', textTransform: 'uppercase',
+          }}>
+            {inbound ? '↓ Received' : '↑ Sent'}
+          </span>
+          {person && (
+            <span onClick={() => nav('person_detail', { personId: person.id })}
+              style={{ color: C.text, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
+              onMouseEnter={e => e.currentTarget.style.color = C.gold}
+              onMouseLeave={e => e.currentTarget.style.color = C.text}>
+              {person.name}
+            </span>
+          )}
+          {counterparty && <span style={{ color: C.muted, fontSize: 12 }}>{counterparty}</span>}
+          <span style={{ marginLeft: 'auto', color: C.muted, fontSize: 11 }}>{fmt(m.date)}</span>
+        </div>
+        {m.subject && (
+          <div style={{ color: C.gold, fontSize: 13, fontWeight: 500, marginBottom: 6, opacity: 0.9 }}>
+            {m.subject}
+          </div>
+        )}
+        <div style={{ color: C.text, fontSize: 13.5, lineHeight: 1.65, whiteSpace: 'pre-wrap', opacity: 0.92 }}>
+          {m.text || <span style={{ fontStyle: 'italic', opacity: 0.6 }}>(no body)</span>}
+        </div>
+      </div>
+    );
+  };
+
+  // ─── EXPANDED THREAD PANEL ──────────────────────────────────────────────────
+  const ThreadPanel = ({ t, onBack }) => {
+    const names = participantNames(t);
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+        <div style={{ padding: isMobile ? '12px 14px' : '4px 4px 16px', borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+          {onBack && (
+            <button onClick={onBack}
+              style={{ background: 'none', border: `1px solid ${C.border}`, color: C.muted, cursor: 'pointer', padding: '4px 10px', borderRadius: 6, fontSize: 12, fontFamily: "'Jost',sans-serif", marginBottom: 10 }}>
+              ← Threads
+            </button>
+          )}
+          <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 20, color: C.text, fontWeight: 600, marginBottom: 3 }}>
+            {t.subject}
+          </div>
+          <div style={{ color: C.muted, fontSize: 13 }}>
+            {names} · {t.messages.length} message{t.messages.length !== 1 ? 's' : ''}
+          </div>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: isMobile ? '14px' : '16px 4px' }}>
+          {t.messages.map(m => <Message key={m.id} m={m} />)}
+        </div>
+      </div>
+    );
+  };
+
+  const searchBar = (
+    <input
+      type="text"
+      value={search}
+      onChange={e => setSearch(e.target.value)}
+      placeholder="Search threads…"
+      style={{
+        width: '100%', background: C.card, border: `1px solid ${C.border}`,
+        borderRadius: 6, color: C.text, fontSize: 13, padding: '8px 12px',
+        fontFamily: "'Jost',sans-serif", outline: 'none', boxSizing: 'border-box',
+      }}
+    />
+  );
+
+  const listEl = (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <div style={{ padding: isMobile ? '0 0 12px' : '0 4px 12px', flexShrink: 0 }}>{searchBar}</div>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        {filtered.length === 0 ? (
+          <Empty text={threads.length === 0
+            ? 'No threads yet. Emails to and from your contacts will appear here once they start flowing in.'
+            : 'No threads match your search.'} />
+        ) : (
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
+            {filtered.map(t => <ThreadRow key={t.key} t={t} active={t.key === selectedKey} />)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  // ─── MOBILE: list OR panel (not both) ───────────────────────────────────────
+  if (isMobile) {
+    return (
+      <div style={{ padding: '12px 12px 0', display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+        {!selected && <PageHead subInfo={`${threads.length} thread${threads.length !== 1 ? 's' : ''}`}>Threads</PageHead>}
+        <div style={{ flex: 1, minHeight: 0 }}>
+          {selected
+            ? <ThreadPanel t={selected} onBack={() => setSelectedKey(null)} />
+            : listEl}
+        </div>
+      </div>
+    );
+  }
+
+  // ─── DESKTOP: two-panel (list | thread) ─────────────────────────────────────
+  return (
+    <div style={{ padding: '24px 32px', height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0, boxSizing: 'border-box' }}>
+      <div style={{ flexShrink: 0 }}>
+        <h1 style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 28, fontWeight: 600, color: C.text, letterSpacing: '-0.5px', margin: '0 0 4px' }}>Threads</h1>
+        <p style={{ color: C.muted, fontSize: 13, marginTop: 0, marginBottom: 18, maxWidth: 560, lineHeight: 1.5 }}>
+          Email correspondence with your contacts — a clean space to read and work through, separate from your personal inbox. Unread threads are flagged in gold.
+        </p>
+      </div>
+      <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '380px 1fr', gap: 24 }}>
+        <div style={{ minHeight: 0 }}>{listEl}</div>
+        <div style={{ minHeight: 0, borderLeft: `1px solid ${C.border}`, paddingLeft: 24 }}>
+          {selected
+            ? <ThreadPanel t={selected} />
+            : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 13, fontStyle: 'italic', opacity: 0.7 }}>
+                Select a thread to read it
+              </div>}
+        </div>
+      </div>
     </div>
   );
 }
@@ -6721,6 +7109,7 @@ export default function FeltBodyCRM() {
     switch (prev.name) {
       case 'dashboard': label = 'Dashboard'; break;
       case 'inbox': label = 'Inbox'; break;
+      case 'threads': label = 'Threads'; break;
       case 'comms_log': label = 'Recent Activity'; break;
       case 'classes': label = 'All Classes'; break;
       case 'week_view': label = 'Week View'; break;
@@ -6963,6 +7352,20 @@ export default function FeltBodyCRM() {
   const updateNoteAction = (id, newDate) => {
     setNotes(p => p.map(n => n.id === id ? { ...n, actionDate: newDate || null } : n));
     data.notes.patch(id, { actionDate: newDate || null }).catch(onError('Update action date'));
+  };
+  // Mark a thread (or a single unthreaded email) as read. Called by ThreadsView
+  // when a thread is opened. Optimistic-local + fire-and-forget, matching the
+  // other note handlers. For a real thread we stamp every unread row sharing
+  // the threadId; for a solo email (no threadId) we stamp just that row by id.
+  const markThreadRead = (threadId, soloId) => {
+    const stamp = new Date().toISOString();
+    if (threadId) {
+      setNotes(p => p.map(n => (n.threadId === threadId && !n.readAt) ? { ...n, readAt: stamp } : n));
+      data.notes.markThreadRead(threadId).catch(onError('Mark thread read'));
+    } else if (soloId) {
+      setNotes(p => p.map(n => n.id === soloId ? { ...n, readAt: stamp } : n));
+      data.notes.markRead(soloId).catch(onError('Mark read'));
+    }
   };
   // Full-form edit from EditNoteForm. The form returns a UI-shape note;
   // notes.patch now consumes the same shape (via notePatchToDb in mappers),
@@ -7393,12 +7796,14 @@ export default function FeltBodyCRM() {
         return <Dashboard orgs={orgs} people={people} classes={classes} attendance={attendance} notes={notes} packages={packages} invoices={invoices} nav={nav}
         onAddClass={(date)=>setModal({type:'add_class', date})}
         onCompleteNote={clearNoteAction}
-        onReopenNote={reopenNote} />;
+        onReopenNote={reopenNote}
+        onAddTodo={addNote} />;
       case 'inbox': return <InboxView notes={notes} people={people}
         attendance={attendance} classes={classes}
         onAssign={assignNoteToPerson}
         onDiscard={deleteNote} />;
       case 'comms_log': return <RecentActivityView notes={notes} people={people} classes={classes} orgs={orgs} attendance={attendance} packages={packages} nav={nav} />;
+      case 'threads': return <ThreadsView notes={notes} people={people} nav={nav} onMarkThreadRead={markThreadRead} initialThreadKey={view.threadKey} />;
       case 'birthdays': return <BirthdaysView people={people} orgs={orgs} nav={nav} />;
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;
       case 'org_detail': {

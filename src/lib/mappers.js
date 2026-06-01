@@ -283,6 +283,10 @@ export const noteFromDb = (row) => ({
   toEmail: row.to_email || '',
   rawHeaders: row.raw_headers || null,
   source: row.source || 'manual',
+  // Threads: null = unread (never opened in Threads view). Set server-side
+  // by notes.markThreadRead / notes.markRead. Backfilled to now() on migration
+  // for all pre-existing email rows so they don't flood as "unread" on deploy.
+  readAt: row.read_at || null,
 });
 
 export const noteToDb = (n) => ({
@@ -307,6 +311,7 @@ export const noteToDb = (n) => ({
   to_email: n.toEmail || null,
   raw_headers: n.rawHeaders || null,
   source: n.source || 'manual',     // DB default is 'manual'; belt-and-braces
+  read_at: n.readAt || null,        // Threads read-state; null = unread
 });
 
 // Partial-patch mapper: only translates keys actually present in `patch`.
@@ -337,6 +342,7 @@ export const notePatchToDb = (patch) => {
   if (patch.toEmail !== undefined) out.to_email = patch.toEmail || null;
   if (patch.rawHeaders !== undefined) out.raw_headers = patch.rawHeaders || null;
   if (patch.source !== undefined) out.source = patch.source;
+  if (patch.readAt !== undefined) out.read_at = patch.readAt || null;
   return out;
 };
 
