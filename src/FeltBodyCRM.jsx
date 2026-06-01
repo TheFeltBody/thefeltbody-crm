@@ -1118,9 +1118,9 @@ function SearchSelect({ people, onSelect, attendance, classes, contextSeriesId, 
 }
 
 // ─── MODAL SHELL ──────────────────────────────────────────────────────────────
-const Modal = ({ title, onClose, children, wide, xwide }) => (
-  <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.78)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100}}>
-    <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:12,padding:28,width:xwide?860:wide?580:480,maxHeight:'90vh',overflowY:'auto'}}>
+const Modal = ({ title, onClose, children, wide, xwide, topAlign }) => (
+  <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.78)',display:'flex',alignItems:topAlign?'flex-start':'center',justifyContent:'center',zIndex:100,overflowY:'auto'}}>
+    <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:12,padding:28,width:xwide?860:wide?580:480,maxHeight:topAlign?'none':'90vh',overflowY:topAlign?'visible':'auto',marginTop:topAlign?16:0}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:22}}>
         <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:600,color:C.text,margin:0}}>{title}</h2>
         <button onClick={onClose} style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:22,lineHeight:1}}>×</button>
@@ -1582,7 +1582,7 @@ function AddToRegisterForm({ onSave, onClose, people, classId, existing, attenda
   const [selected, setSelected] = useState(null);
   const available = people.filter(p=>p.status!=='inactive');
   return (
-    <Modal title="Add to Register" onClose={onClose} wide>
+    <Modal title="Add to Register" onClose={onClose} wide topAlign>
       <SearchSelect people={available} onSelect={p=>setSelected(p)} attendance={attendance} classes={classes} contextSeriesId={cls?.seriesId} existing={existing} />
       {selected && (
         <div style={{marginTop:14,background:C.active,border:`1px solid ${C.gold}55`,borderRadius:6,padding:'10px 14px',display:'flex',alignItems:'center',gap:12}}>
