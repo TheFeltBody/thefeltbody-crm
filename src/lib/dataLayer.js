@@ -32,6 +32,7 @@ import {
   householdMemberFromDb, householdMemberToDb,
   emailFromDb, emailToDb,
   settingFromDb,
+  projectFromDb, projectToDb,
 } from './mappers.js';;
 
 // Throw on any Supabase error so callers (and React error boundaries) see
@@ -71,6 +72,7 @@ export async function loadAll() {
     householdRows,
     householdMemberRows,
     settingRows,
+    projectRows,
   ] = await Promise.all([
     supabase.from('active_organisations').select('*').order('name').then(ok),
     supabase.from('active_people').select('*').order('name').then(ok),
@@ -95,6 +97,7 @@ export async function loadAll() {
     supabase.from('households').select('*').order('name').then(ok),
     supabase.from('household_members').select('*').order('created_at').then(ok),
     supabase.from('settings').select('*').then(ok),
+    supabase.from('projects').select('*').order('created_at', { ascending: false }).then(ok),
   ]);
 
   // Group person_roles by person_id -> array of role keys
@@ -142,6 +145,7 @@ export async function loadAll() {
     households: householdRows.map(householdFromDb),
     householdMembers: householdMemberRows.map(householdMemberFromDb),
     settings: settingsByKey,
+    projects: projectRows.map(projectFromDb),
   };
 }
 
@@ -561,6 +565,56 @@ export const notes = {
 
     return { note, addedEmail: emailFromDb(emailRow) };
   },
+};
+
+// ─── Projects ────────────────────────────────────────────────────────────────
+// Top-level "your work" entity. owner_id is set DB-side (column default
+// auth.uid()) so it's never written here. status is 'active' | 'done'.
+// V1 has no archive and no hard-delete UI — delete is a soft-delete via the
+// standard helper (projects has a deleted_at column? — NO: V1 schema has no
+// deleted_at on projects, so delete is a hard delete here. Kept minimal:
+// V1 spec is active|done only, no delete UI, so this is a safety hatch).
+export const projects = {
+  async create(p) {
+    const row = await supabase.from('projects').insert(projectToDb(p))
+      .select().single().then(ok);
+    return projectFromDb(row);
+  },
+  // Full update. Stamps completed_at on the active→done transition and clears
+  // it on done→active, so the caller only has to send { status }. Pass the
+  // current status as prevStatus so we can detect the transition without an
+  // extra read; if omitted we still set completed_at correctly for done and
+  // leave it alone otherwise.
+  async update(id, p, prevStatus = null) {
+    const patch = projectToDb(p);
+    if (p.status === 'done') {
+      // Stamp only when transitioning into done (or when no prevStatus given
+      // and completed_at wasn't already supplied).
+      if (prevStatus !== 'done' && !p.completedAt) {
+        patch.completed_at = new Date().toISOString();
+      }
+    } else if (p.status === 'active') {
+      patch.completed_at = null;  // reopened — clear the stamp
+    }
+    const row = await supabase.from('projects').update(patch)
+      .eq('id', id).select().single().then(ok);
+    return projectFromDb(row);
+  },
+  // Targeted status flip — convenience for the list-view toggle. Avoids
+  // round-tripping name/notes. Handles the completed_at stamp the same way.
+  async setStatus(id, status) {
+    const patch = { status };
+    patch.completed_at = status === 'done' ? new Date().toISOString() : null;
+    const row = await supabase.from('projects').update(patch)
+      .eq('id', id).select().single().then(ok);
+    return projectFromDb(row);
+  },
+  // Hard delete. No deleted_at column on projects in V1 (no soft-delete,
+  // no archive per spec). interactions.project_id is a nullable FK with no
+  // cascade, so deleting a project with linked todos would FK-error — the UI
+  // must not expose delete for non-empty projects (V1 has no delete UI at all;
+  // this exists for completeness / console use).
+  delete: (id) => supabase.from('projects').delete().eq('id', id).then(ok),
 };
 
 // ─── Packages ────────────────────────────────────────────────────────────────

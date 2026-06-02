@@ -262,6 +262,7 @@ export const noteFromDb = (row) => ({
   id: row.id,
   personId: row.person_id || null,
   classId: row.session_id || null,
+  projectId: row.project_id || null,
   text: row.text,
   important: row.important,
   date: row.date,
@@ -292,6 +293,7 @@ export const noteFromDb = (row) => ({
 export const noteToDb = (n) => ({
   person_id: n.personId || null,
   session_id: n.classId || null,
+  project_id: n.projectId || null,
   text: n.text,
   important: n.important ?? false,
   date: n.date,
@@ -323,6 +325,7 @@ export const notePatchToDb = (patch) => {
   const out = {};
   if (patch.personId !== undefined) out.person_id = patch.personId || null;
   if (patch.classId !== undefined) out.session_id = patch.classId || null;
+  if (patch.projectId !== undefined) out.project_id = patch.projectId || null;
   if (patch.text !== undefined) out.text = patch.text;
   if (patch.important !== undefined) out.important = patch.important;
   if (patch.date !== undefined) out.date = patch.date;
@@ -554,4 +557,25 @@ export const settingFromDb = (row) => ({
 export const settingToDb = (s) => ({
   key: s.key,
   value: s.value,
+});
+
+// ─── Projects ────────────────────────────────────────────────────────────────
+// Top-level "your work" entity. interactions.project_id links todos/notes to a
+// project. status is 'active' | 'done'; completed_at stamped app-side on the
+// active→done transition (see data.projects.update). owner_id is set DB-side by
+// the column default auth.uid(), so it's never written from the client.
+export const projectFromDb = (row) => ({
+  id: row.id,
+  name: row.name,
+  status: row.status || 'active',
+  notes: row.notes || '',
+  createdAt: row.created_at,
+  completedAt: row.completed_at || null,
+});
+
+export const projectToDb = (p) => ({
+  name: p.name,
+  status: p.status || 'active',
+  notes: p.notes || null,        // empty string → null on write
+  completed_at: p.completedAt || null,
 });
