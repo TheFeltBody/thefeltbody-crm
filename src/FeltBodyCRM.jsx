@@ -2573,11 +2573,27 @@ function EditNoteForm({ note, onSave, onClose }) {
 // without losing their draft. The outbound interaction is written server-side
 // and returned to the caller via onSend, which is expected to splice it into
 // the parent's notes state so it appears on PersonDetail immediately.
-function SendEmailModal({ person, onSend, onClose }) {
-  const [subject, setSubject] = useState('');
-  const [body, setBody] = useState('');
+function SendEmailModal({ person, onSend, onClose, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey }) {
+  // Draft persistence: if a draftKey is supplied (reply from a thread), the
+  // in-progress body survives closing/reopening the modal via localStorage.
+  // Subject is seeded from initialSubject (e.g. "Re: …") and not persisted —
+  // it's derived and cheap to regenerate.
+  const [subject, setSubject] = useState(initialSubject);
+  const [body, setBody] = useState(() => {
+    if (draftKey) {
+      try { const saved = localStorage.getItem(draftKey); if (saved != null) return saved; } catch {}
+    }
+    return initialBody;
+  });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+
+  // Persist body as it changes. Writes are cheap and the modal is short-lived,
+  // so no debounce. Cleared on successful send.
+  useEffect(() => {
+    if (!draftKey) return;
+    try { localStorage.setItem(draftKey, body); } catch {}
+  }, [body, draftKey]);
 
   const hasEmail = !!person.email;
   const canSend = !busy && hasEmail && subject.trim() && body.trim();
@@ -2590,10 +2606,13 @@ function SendEmailModal({ person, onSend, onClose }) {
         personId: person.id,
         subject: subject.trim(),
         body, // server escapes + \n -> <br>; keep newlines intact
+        threadId,   // undefined for fresh sends → server mints a new thread_id
+        inReplyTo,  // undefined for fresh sends → no In-Reply-To header
       });
       // Best-effort log failure: email *did* send, but the interaction row
       // didn't write. Surface and still close — user can add a manual note.
       if (res?.warning) alert(res.warning);
+      if (draftKey) { try { localStorage.removeItem(draftKey); } catch {} }
       onClose();
     } catch (e) {
       setErr(e.message || String(e));
@@ -3741,10 +3760,11 @@ function BirthdaysView({ people, orgs, nav }) {
 // "Thread" = all rows sharing a thread_id. Emails with no thread_id each form
 // their own single-message pseudo-thread (key `solo:<id>`). Reads the shared
 // `notes` array (kept fresh by the 60s poll) — no extra fetching.
-function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey }) {
+function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey, onSendEmail }) {
   const isMobile = useIsMobile();
   const [selectedKey, setSelectedKey] = useState(initialThreadKey || null);
   const [search, setSearch] = useState('');
+  const [replyTo, setReplyTo] = useState(null); // { person, threadId, inReplyTo, initialSubject, draftKey } | null
 
   const personById = useMemo(() => {
     const m = {};
@@ -3789,6 +3809,38 @@ function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey })
 
   const participantNames = (t) =>
     [...t.personIds].map(id => personById[id]?.name).filter(Boolean).join(', ') || 'Unknown contact';
+
+  // Build the reply context for a thread: resolve the single counterparty,
+  // derive a "Re: …" subject (stripping any existing Re: prefixes), carry the
+  // thread_id so the outbound row groups into this thread, and use the latest
+  // message's external_id as In-Reply-To so the recipient's client threads it.
+  // draftKey namespaces the in-progress body per thread (survives modal close).
+  const buildReply = (t) => {
+    const personId = [...t.personIds][0];
+    const person = personById[personId];
+    if (!person) return null;
+    const last = t.messages[t.messages.length - 1];
+    const baseSubject = (t.subject || '').replace(/^\s*(re:\s*)+/i, '').trim();
+    return {
+      person,
+      threadId: t.threadId || undefined,
+      inReplyTo: (last && last.externalId) || undefined,
+      initialSubject: baseSubject ? `Re: ${baseSubject}` : '',
+      draftKey: `felt.threads.draft.${t.key}`,
+    };
+  };
+
+  const replyModal = replyTo && (
+    <SendEmailModal
+      person={replyTo.person}
+      onSend={onSendEmail}
+      onClose={() => setReplyTo(null)}
+      initialSubject={replyTo.initialSubject}
+      threadId={replyTo.threadId}
+      inReplyTo={replyTo.inReplyTo}
+      draftKey={replyTo.draftKey}
+    />
+  );
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -3916,6 +3968,11 @@ function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey })
         </div>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: isMobile ? '14px' : '16px 4px' }}>
           {t.messages.map(m => <Message key={m.id} m={m} />)}
+          <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: 4, marginBottom: 12 }}>
+            <Btn small onClick={() => { const r = buildReply(t); if (r) setReplyTo(r); }}>
+              ↩ Reply
+            </Btn>
+          </div>
         </div>
       </div>
     );
@@ -3962,6 +4019,7 @@ function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey })
             ? <ThreadPanel t={selected} onBack={() => setSelectedKey(null)} />
             : listEl}
         </div>
+        {replyModal}
       </div>
     );
   }
@@ -3985,6 +4043,7 @@ function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey })
               </div>}
         </div>
       </div>
+      {replyModal}
     </div>
   );
 }
@@ -7323,8 +7382,8 @@ export default function FeltBodyCRM() {
   // mapped to JSX shape, so we splice into local notes state immediately
   // rather than waiting on the 60s poll. Throws propagate up to the
   // SendEmailModal so it can render the error inline (without alert + close).
-  const sendEmail = async ({ personId, subject, body }) => {
-    const res = await data.email.send({ personId, subject, body });
+  const sendEmail = async ({ personId, subject, body, threadId, inReplyTo }) => {
+    const res = await data.email.send({ personId, subject, body, threadId, inReplyTo });
     if (res.note) setNotes(p => [...p, res.note]);
     return res;
   };
@@ -7803,7 +7862,7 @@ export default function FeltBodyCRM() {
         onAssign={assignNoteToPerson}
         onDiscard={deleteNote} />;
       case 'comms_log': return <RecentActivityView notes={notes} people={people} classes={classes} orgs={orgs} attendance={attendance} packages={packages} nav={nav} />;
-      case 'threads': return <ThreadsView notes={notes} people={people} nav={nav} onMarkThreadRead={markThreadRead} initialThreadKey={view.threadKey} />;
+      case 'threads': return <ThreadsView notes={notes} people={people} nav={nav} onMarkThreadRead={markThreadRead} initialThreadKey={view.threadKey} onSendEmail={sendEmail} />;
       case 'birthdays': return <BirthdaysView people={people} orgs={orgs} nav={nav} />;
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;
       case 'org_detail': {

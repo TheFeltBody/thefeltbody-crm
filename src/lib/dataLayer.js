@@ -804,7 +804,7 @@ export const settings = {
 // Throws on auth/validation/send failure. Error message is suitable for direct
 // display in the compose modal.
 export const email = {
-  async send({ personId, subject, body }) {
+  async send({ personId, subject, body, threadId, inReplyTo }) {
     const session = (await supabase.auth.getSession()).data.session;
     if (!session) throw new Error('Not signed in — refresh and try again.');
 
@@ -814,7 +814,7 @@ export const email = {
         'Authorization': `Bearer ${session.access_token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ personId, subject, body }),
+      body: JSON.stringify({ personId, subject, body, threadId, inReplyTo }),
     });
 
     let parsed = {};
