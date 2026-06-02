@@ -2723,12 +2723,13 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
   const unpaidInvoices = invoices.filter(i=>i.status!=='paid').length;
   const inboxCount = notes.filter(n => !n.personId).length;
   // Threads = emails from known contacts. Badge counts distinct threads
-  // (or solo emails) that contain at least one unread message.
+  // (or solo emails) that contain at least one unread INBOUND message.
+  // Outbound messages don't count as unread — you sent them.
   const threadsUnread = (() => {
     const seen = new Set();
     let count = 0;
     notes.forEach(n => {
-      if (n.kind !== 'email' || !n.personId || n.readAt) return;
+      if (n.kind !== 'email' || !n.personId || n.readAt || n.direction === 'outbound') return;
       const key = n.threadId || `solo:${n.id}`;
       if (seen.has(key)) return;
       seen.add(key);
@@ -3795,16 +3796,33 @@ function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey, o
       if (n.personId) g.personIds.add(n.personId);
     });
     const arr = [...groups.values()].map(g => {
-      // Chronological within the thread (oldest → newest).
-      g.messages.sort((a, b) => new Date(a.date) - new Date(b.date));
+      // Chronological within the thread (oldest → newest). `date` is a
+      // YYYY-MM-DD column, so same-day messages tie — fall back to createdAt
+      // (insertion timestamp) for a stable, intuitive order. If createdAt is
+      // missing for an old row, treat it as 0 so it loses the tiebreak.
+      g.messages.sort((a, b) => {
+        const d = new Date(a.date) - new Date(b.date);
+        if (d !== 0) return d;
+        const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return ta - tb;
+      });
       const withSubject = g.messages.find(m => m.subject);
       g.subject = (withSubject && withSubject.subject) || '(no subject)';
       g.latestDate = g.messages.reduce((mx, m) => m.date > mx ? m.date : mx, g.messages[0].date);
-      g.unreadCount = g.messages.filter(m => !m.readAt).length;
+      // Unread count excludes outbound — you sent it, you've read it.
+      g.unreadCount = g.messages.filter(m => !m.readAt && m.direction !== 'outbound').length;
+      g.hasInbound = g.messages.some(m => m.direction === 'inbound');
       return g;
     });
-    arr.sort((a, b) => new Date(b.latestDate) - new Date(a.latestDate));
-    return arr;
+    // Threads = conversations. A cold outbound (compose from PersonDetail with
+    // a fresh subject) mints a new thread_id but is just "an email you sent" —
+    // not a conversation. Only show threads with at least one inbound message.
+    // A reply via the Reply button inherits the parent thread_id, so it lands
+    // in a thread that already has inbound messages and shows up correctly.
+    const conversations = arr.filter(g => g.hasInbound);
+    conversations.sort((a, b) => new Date(b.latestDate) - new Date(a.latestDate));
+    return conversations;
   }, [notes]);
 
   const participantNames = (t) =>

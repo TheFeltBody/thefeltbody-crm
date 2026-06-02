@@ -288,6 +288,11 @@ export const noteFromDb = (row) => ({
   // by notes.markThreadRead / notes.markRead. Backfilled to now() on migration
   // for all pre-existing email rows so they don't flood as "unread" on deploy.
   readAt: row.read_at || null,
+  // Insertion timestamp. Used as a tiebreaker in ThreadsView when multiple
+  // messages share the same `date` (YYYY-MM-DD) — without this, same-day
+  // messages render in arbitrary order. Useful generally for true
+  // chronological ordering when `date` granularity isn't enough.
+  createdAt: row.created_at || null,
 });
 
 export const noteToDb = (n) => ({
