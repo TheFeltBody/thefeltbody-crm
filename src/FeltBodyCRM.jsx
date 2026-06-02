@@ -14,6 +14,7 @@ const SEED = {
   notes: [],
   packages: [],
   invoices: [],
+  projects: [],
 };
 
 const C = {
@@ -2719,9 +2720,10 @@ function SidebarCustomTypeItem({ active, indent, label, icon, count, onNav, onDe
 }
 
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────────
-function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles, onAddOrgType, onAddPersonRole, orgs, people, onRemoveOrgType, onRemovePersonRole, onSignOut, mode='client', onSwitchMode, onAddPersonalOrg }) {
+function Sidebar({ view, nav, invoices, notes, projects=[], customOrgTypes, customPersonRoles, onAddOrgType, onAddPersonRole, orgs, people, onRemoveOrgType, onRemovePersonRole, onSignOut, mode='client', onSwitchMode, onAddPersonalOrg }) {
   const unpaidInvoices = invoices.filter(i=>i.status!=='paid').length;
   const inboxCount = notes.filter(n => !n.personId).length;
+  const activeProjects = projects.filter(p => p.status === 'active').length;
   // Threads = emails from known contacts. Badge counts distinct threads
   // (or solo emails) that contain at least one unread INBOUND message.
   // Outbound messages don't count as unread — you sent them.
@@ -2756,7 +2758,7 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const isPersonal = mode === 'personal';
 
-  const Item = ({ name, params={}, label, icon, indent, badge, onClick, isActive }) => {
+  const Item = ({ name, params={}, label, icon, indent, badge, count, onClick, isActive }) => {
     const active = isActive !== undefined ? isActive : (view.name===name && Object.entries(params).every(([k,v])=>view[k]===v));
     return (
       <div onClick={onClick || (()=>nav(name,params))} style={{display:'flex',alignItems:'center',gap:9,padding:`8px 20px 8px ${indent?28:20}px`,color:active?C.gold:C.muted,background:active?C.active:'transparent',cursor:'pointer',fontSize:13,fontWeight:active?500:400,borderLeft:`2px solid ${active?C.gold:'transparent'}`,transition:'all 0.12s'}}
@@ -2764,6 +2766,7 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
         onMouseLeave={e=>{if(!active){e.currentTarget.style.color=C.muted;e.currentTarget.style.background='transparent';}}}>
         <span style={{fontSize:12,opacity:0.7,width:14,flexShrink:0}}>{icon}</span>
         <span style={{flex:1}}>{label}</span>
+        {count>0&&<span style={{color:active?C.gold:C.muted,fontSize:11,opacity:0.8,fontWeight:500}}>{count}</span>}
         {badge>0&&<span style={{background:C.red,color:'#fff',fontSize:10,fontWeight:600,padding:'1px 7px',borderRadius:20,lineHeight:'16px'}}>{badge}</span>}
       </div>
     );
@@ -2835,6 +2838,7 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
       {!isPersonal && <Item name="inbox" label="Inbox" icon="✉" badge={inboxCount} />}
       {!isPersonal && <Item name="threads" label="Threads" icon="✦" badge={threadsUnread} />}
       {!isPersonal && <Item name="comms_log" label="Recent Activity" icon="◷" />}
+      {!isPersonal && <Item name="projects" label="Projects" icon="❖" count={activeProjects} isActive={view.name==='projects' || view.name==='project_detail'} />}
       {isPersonal && <Item name="birthdays" label="Birthdays" icon="🎂" />}
 
       <SectionToggle label="Organisations" sectionKey="orgs" />
@@ -2934,10 +2938,11 @@ function Sidebar({ view, nav, invoices, notes, customOrgTypes, customPersonRoles
 // Saves with source='todo' so it satisfies the interactions_anchored constraint
 // without needing a person or session anchor. Person picker is optional — if
 // filled, the to-do also appears on that contact's Comms tab.
-function QuickTodoModal({ people, onSave, onClose }) {
+function QuickTodoModal({ people, projects=[], onSave, onClose }) {
   const [text, setText] = useState('');
   const [actionDate, setActionDate] = useState(today());
   const [personId, setPersonId] = useState('');
+  const [projectId, setProjectId] = useState('');
   const [busy, setBusy] = useState(false);
   const canSave = !busy && text.trim();
 
@@ -2949,6 +2954,7 @@ function QuickTodoModal({ people, onSave, onClose }) {
         text: text.trim(),
         actionDate: actionDate || null,
         personId: personId || null,
+        projectId: projectId || null,
         kind: 'note',
         source: 'todo',
         date: today(),
@@ -3003,6 +3009,22 @@ function QuickTodoModal({ people, onSave, onClose }) {
               .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </div>
+        {projects.filter(p => p.status === 'active').length > 0 && (
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <div style={{ color: C.muted, fontSize: 11, marginBottom: 4, letterSpacing: '0.3px' }}>PROJECT <span style={{ opacity: 0.5 }}>(optional)</span></div>
+            <select
+              value={projectId}
+              onChange={e => setProjectId(e.target.value)}
+              disabled={busy}
+              style={{ ...inputStyle, fontSize: 13, cursor: 'pointer' }}
+            >
+              <option value="">— none —</option>
+              {[...projects].filter(p => p.status === 'active')
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+        )}
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
         <Btn variant="secondary" small onClick={onClose} disabled={busy}>Cancel</Btn>
@@ -3015,7 +3037,7 @@ function QuickTodoModal({ people, onSave, onClose }) {
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({ orgs, people, classes, attendance, notes, packages, invoices, nav, onAddClass, onCompleteNote, onReopenNote, onAddTodo }) {
+function Dashboard({ orgs, people, classes, attendance, notes, packages, invoices, projects=[], nav, onAddClass, onCompleteNote, onReopenNote, onAddTodo }) {
   const [selectedDate, setSelectedDate] = useState(today());
   const isToday = selectedDate === today();
   const dateLabel = (() => {
@@ -3395,7 +3417,7 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
           </div>
         </div>
         {showTodoModal && (
-          <QuickTodoModal people={people} onSave={onAddTodo} onClose={() => setShowTodoModal(false)} />
+          <QuickTodoModal people={people} projects={projects} onSave={onAddTodo} onClose={() => setShowTodoModal(false)} />
         )}
         </>
       );
@@ -3428,7 +3450,7 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
         </div>
       </div>
       {showTodoModal && (
-        <QuickTodoModal people={people} onSave={onAddTodo} onClose={() => setShowTodoModal(false)} />
+        <QuickTodoModal people={people} projects={projects} onSave={onAddTodo} onClose={() => setShowTodoModal(false)} />
       )}
       </>
     );
@@ -3479,6 +3501,7 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
     {showTodoModal && (
       <QuickTodoModal
         people={people}
+        projects={projects}
         onSave={onAddTodo}
         onClose={() => setShowTodoModal(false)}
       />
@@ -4070,7 +4093,7 @@ function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey, o
 // Phase 7 Stripe Worker will write kind='booking'/'payment' rows; they show
 // here automatically. A chip lets the user hide transactional rows to focus
 // on human comms. Reads the shared `notes` array (kept fresh by 60s polling).
-function RecentActivityView({ notes, people, classes, orgs, attendance, packages, nav }) {
+function RecentActivityView({ notes, people, classes, orgs, attendance, packages, projects=[], nav }) {
   const isMobile = useIsMobile();
   const [kindFilter, setKindFilter] = useState('all');
   const [query, setQuery] = useState('');
@@ -4079,6 +4102,7 @@ function RecentActivityView({ notes, people, classes, orgs, attendance, packages
 
   const personOf = (id) => people.find(p => p.id === id);
   const classOf  = (id) => classes.find(c => c.id === id);
+  const projectOf = (id) => projects.find(p => p.id === id);
 
   // Merge real interactions with derived booking/payment rows (see deriveActivity).
   // Derived rows are read-only (_derived:true) — synthesised from attendance +
@@ -4319,10 +4343,17 @@ function RecentActivityView({ notes, people, classes, orgs, attendance, packages
                       {cls.name} <span style={{color:C.muted,fontSize:11,fontWeight:400,marginLeft:4}}>· {fmt(cls.date)}</span>
                     </span>
                   ) : (
-                    <span style={{color:C.muted,fontSize:13,fontStyle:'italic'}}>Unassigned</span>
+                    <span style={{color:C.muted,fontSize:13,fontStyle:'italic'}}>{n.projectId && projectOf(n.projectId) ? 'Project to-do' : 'Unassigned'}</span>
                   )}
                   {counterparty && !person && (
                     <span style={{color:C.muted,fontSize:12}}>{counterparty}</span>
+                  )}
+                  {n.projectId && projectOf(n.projectId) && (
+                    <span onClick={(e)=>{ e.stopPropagation(); nav('project_detail',{projectId:n.projectId}); }}
+                      title="Go to project"
+                      style={{color:C.gold,fontSize:11,cursor:'pointer',border:`1px solid ${C.gold}55`,borderRadius:10,padding:'1px 8px',display:'inline-flex',alignItems:'center',gap:4}}>
+                      ▸ {projectOf(n.projectId).name}
+                    </span>
                   )}
                   <span style={{marginLeft:'auto',color:C.muted,fontSize:11}}>{fmtRel(n.date)}</span>
                 </div>
@@ -4345,7 +4376,283 @@ function RecentActivityView({ notes, people, classes, orgs, attendance, packages
   );
 }
 
-// ─── SESSION-NOTE INDICATOR ───────────────────────────────────────────────────
+// ─── PROJECTS ─────────────────────────────────────────────────────────────────
+// Top-level "your work" list. Projects hold todos via interactions.project_id.
+// V1: status is 'active' | 'done' only — no archive, no hard-delete UI. Add a
+// project inline; click through to ProjectDetail for its todos + notes.
+function ProjectsView({ projects, notes, nav, onAddProject, onSetStatus }) {
+  const isMobile = useIsMobile();
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [showDone, setShowDone] = useState(false);
+
+  const active = projects.filter(p => p.status === 'active')
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const done = projects.filter(p => p.status === 'done')
+    .sort((a, b) => new Date(b.completedAt || b.createdAt) - new Date(a.completedAt || a.createdAt));
+
+  // Open-todo count per project (todos = interactions with this project_id that
+  // aren't completed). Project todos are notes carrying projectId.
+  const openCount = (pid) => notes.filter(n => n.projectId === pid && !n.completed).length;
+
+  const save = async () => {
+    const name = newName.trim();
+    if (!name || busy) return;
+    setBusy(true);
+    try {
+      await onAddProject({ name, status: 'active', notes: '' });
+      setNewName(''); setAdding(false);
+    } finally { setBusy(false); }
+  };
+
+  const Card = ({ p }) => {
+    const open = openCount(p.id);
+    const isDone = p.status === 'done';
+    return (
+      <div onClick={() => nav('project_detail', { projectId: p.id })}
+        style={{
+          background:C.card, border:`1px solid ${C.border}`, borderRadius:8,
+          padding:'14px 16px', cursor:'pointer', transition:'background 0.12s',
+          display:'flex', alignItems:'center', gap:14,
+        }}
+        onMouseEnter={e=>e.currentTarget.style.background=C.active}
+        onMouseLeave={e=>e.currentTarget.style.background=C.card}>
+        <div style={{flex:1, minWidth:0}}>
+          <div style={{color:isDone?C.muted:C.text, fontSize:15, fontWeight:500, fontFamily:"'Cormorant Garamond',serif", textDecoration:isDone?'line-through':'none'}}>
+            {p.name}
+          </div>
+          <div style={{color:C.muted, fontSize:11.5, marginTop:3}}>
+            {isDone
+              ? `Completed ${fmt(p.completedAt) }`
+              : (open > 0 ? `${open} open to-do${open!==1?'s':''}` : 'No open to-dos')}
+          </div>
+        </div>
+        <div onClick={e=>e.stopPropagation()}>
+          {isDone ? (
+            <Btn variant="ghost" small onClick={()=>onSetStatus(p.id, 'active')}>Reopen</Btn>
+          ) : (
+            <Btn variant="secondary" small onClick={()=>onSetStatus(p.id, 'done')}>Mark done</Btn>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const inputStyle = {
+    flex:1, background:C.card, border:`1px solid ${C.border}`, borderRadius:6,
+    color:C.text, fontSize:14, padding:'8px 12px', fontFamily:"'Jost',sans-serif", outline:'none',
+  };
+
+  return (
+    <div style={{padding: isMobile ? '12px 12px 24px' : '24px 32px', maxWidth:760}}>
+      <PageHead subInfo={`${active.length} active`}
+        action={!adding && <Btn small onClick={()=>setAdding(true)}>+ New Project</Btn>}>
+        Projects
+      </PageHead>
+
+      {adding && (
+        <div style={{display:'flex', gap:8, marginBottom:18, alignItems:'center'}}>
+          <input autoFocus value={newName} disabled={busy}
+            onChange={e=>setNewName(e.target.value)}
+            onKeyDown={e=>{ if(e.key==='Enter') save(); if(e.key==='Escape'){ setAdding(false); setNewName(''); } }}
+            placeholder="Project name…" style={inputStyle}
+            onFocus={e=>e.currentTarget.style.borderColor=C.gold+'88'}
+            onBlur={e=>e.currentTarget.style.borderColor=C.border} />
+          <Btn small onClick={save} disabled={!newName.trim()||busy}>{busy?'Adding…':'Add'}</Btn>
+          <Btn variant="ghost" small onClick={()=>{ setAdding(false); setNewName(''); }} disabled={busy}>Cancel</Btn>
+        </div>
+      )}
+
+      {active.length === 0 && done.length === 0 ? (
+        <Empty text="No projects yet." action={adding ? undefined : '+ New Project'} onAction={()=>setAdding(true)} />
+      ) : (
+        <>
+          <div style={{display:'flex', flexDirection:'column', gap:10}}>
+            {active.map(p => <Card key={p.id} p={p} />)}
+            {active.length === 0 && (
+              <div style={{color:C.muted, fontSize:13, fontStyle:'italic', padding:'8px 2px'}}>No active projects.</div>
+            )}
+          </div>
+
+          {done.length > 0 && (
+            <div style={{marginTop:26}}>
+              <div onClick={()=>setShowDone(s=>!s)}
+                style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer', color:C.muted, fontSize:11, fontWeight:700, letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:12, userSelect:'none'}}>
+                <span style={{fontSize:9, transition:'transform 0.18s', transform:showDone?'rotate(0deg)':'rotate(-90deg)', display:'inline-flex'}}>▾</span>
+                Completed · {done.length}
+              </div>
+              {showDone && (
+                <div style={{display:'flex', flexDirection:'column', gap:10}}>
+                  {done.map(p => <Card key={p.id} p={p} />)}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── PROJECT DETAIL ─────────────────────────────────────────────────────────
+// One project: its name + status, its todos (notes carrying projectId), and a
+// free-text notes field. Todos can be added inline, completed, reopened, deleted.
+// A project todo may also be person-linked — we surface that contact's name.
+function ProjectDetail({ project, notes, people, nav, backInfo,
+  onAddTodo, onCompleteNote, onReopenNote, onDeleteNote, onUpdateActionDate, onSetStatus, onUpdateProject }) {
+  const isMobile = useIsMobile();
+  const [newTodo, setNewTodo] = useState('');
+  const [newDate, setNewDate] = useState(today());
+  const [busy, setBusy] = useState(false);
+  const [showCompleted, setShowCompleted] = useState(false);
+  // Notes field: local draft, save on blur if changed.
+  const [notesDraft, setNotesDraft] = useState(project.notes || '');
+  useEffect(()=>{ setNotesDraft(project.notes || ''); }, [project.id]);
+
+  const personOf = (id) => people.find(p => p.id === id);
+
+  const todos = notes.filter(n => n.projectId === project.id);
+  const openTodos = todos.filter(t => !t.completed)
+    .sort((a,b) => (a.actionDate||'9999').localeCompare(b.actionDate||'9999'));
+  const doneTodos = todos.filter(t => t.completed)
+    .sort((a,b) => (b.completedAt||b.date||'').localeCompare(a.completedAt||a.date||''));
+
+  const addTodo = async () => {
+    const text = newTodo.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    try {
+      await onAddTodo({
+        text, actionDate: newDate || null, projectId: project.id,
+        personId: null, kind: 'note', source: 'todo', date: today(), important: false,
+      });
+      setNewTodo(''); setNewDate(today());
+    } finally { setBusy(false); }
+  };
+
+  const saveNotes = () => {
+    if (notesDraft === (project.notes || '')) return;
+    onUpdateProject(project.id, { name: project.name, status: project.status, notes: notesDraft, completedAt: project.completedAt });
+  };
+
+  const isDone = project.status === 'done';
+  const inputStyle = {
+    background:C.card, border:`1px solid ${C.border}`, borderRadius:6,
+    color:C.text, fontSize:14, padding:'8px 12px', fontFamily:"'Jost',sans-serif", outline:'none',
+  };
+
+  const TodoRow = ({ t }) => {
+    const person = personOf(t.personId);
+    const overdue = !t.completed && t.actionDate && t.actionDate < today();
+    return (
+      <div style={{display:'flex', alignItems:'flex-start', gap:12, background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:'12px 14px'}}>
+        <div onClick={()=> t.completed ? onReopenNote(t.id) : onCompleteNote(t.id)}
+          title={t.completed?'Reopen':'Mark done'}
+          style={{
+            width:18, height:18, flexShrink:0, marginTop:1, borderRadius:4, cursor:'pointer',
+            border:`1.5px solid ${t.completed?C.green:C.muted}`, background:t.completed?C.green:'transparent',
+            color:'#0a1408', display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700,
+          }}>
+          {t.completed ? '✓' : ''}
+        </div>
+        <div style={{flex:1, minWidth:0}}>
+          <div style={{color:t.completed?C.muted:C.text, fontSize:13.5, lineHeight:1.5, textDecoration:t.completed?'line-through':'none'}}>
+            {t.text}
+          </div>
+          <div style={{display:'flex', gap:10, flexWrap:'wrap', marginTop:4, alignItems:'center'}}>
+            {t.actionDate && (
+              <span style={{color:overdue?C.red:C.muted, fontSize:11}}>
+                {overdue ? 'Overdue · ' : ''}{fmt(t.actionDate)}
+              </span>
+            )}
+            {person && (
+              <span onClick={()=>nav('person_detail',{personId:person.id})}
+                style={{color:C.gold, fontSize:11, cursor:'pointer'}}>
+                ◉ {person.name}
+              </span>
+            )}
+          </div>
+        </div>
+        <div style={{flexShrink:0}}>
+          <ConfirmBtn idleLabel="✕" armedLabel="Delete" variant="danger" small
+            title="Delete to-do" onConfirm={()=>onDeleteNote(t.id)} />
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{padding: isMobile ? '12px 12px 24px' : '24px 32px', maxWidth:760}}>
+      <PageHead back={backInfo ? backInfo.label : 'Projects'} onBack={()=>nav('projects')} sticky
+        subInfo={isDone ? 'completed' : `${openTodos.length} open`}
+        action={
+          isDone
+            ? <Btn variant="ghost" small onClick={()=>onSetStatus(project.id,'active')}>Reopen</Btn>
+            : <Btn variant="secondary" small onClick={()=>onSetStatus(project.id,'done')}>Mark done</Btn>
+        }>
+        {project.name}
+      </PageHead>
+
+      {/* Add a to-do */}
+      {!isDone && (
+        <div style={{display:'flex', gap:8, marginBottom:20, flexWrap:'wrap'}}>
+          <input value={newTodo} disabled={busy}
+            onChange={e=>setNewTodo(e.target.value)}
+            onKeyDown={e=>{ if(e.key==='Enter') addTodo(); }}
+            placeholder="Add a to-do…"
+            style={{...inputStyle, flex:'1 1 240px'}}
+            onFocus={e=>e.currentTarget.style.borderColor=C.gold+'88'}
+            onBlur={e=>e.currentTarget.style.borderColor=C.border} />
+          <input type="date" value={newDate} disabled={busy}
+            onChange={e=>setNewDate(e.target.value)}
+            style={{...inputStyle, fontSize:13, width:'auto'}} />
+          <Btn small onClick={addTodo} disabled={!newTodo.trim()||busy}>{busy?'Adding…':'Add'}</Btn>
+        </div>
+      )}
+
+      {/* Open todos */}
+      {openTodos.length === 0 && doneTodos.length === 0 ? (
+        <Empty text="No to-dos in this project yet." />
+      ) : (
+        <div style={{display:'flex', flexDirection:'column', gap:10}}>
+          {openTodos.map(t => <TodoRow key={t.id} t={t} />)}
+          {openTodos.length === 0 && !isDone && (
+            <div style={{color:C.muted, fontSize:13, fontStyle:'italic', padding:'4px 2px'}}>All to-dos complete.</div>
+          )}
+        </div>
+      )}
+
+      {/* Completed todos (collapsed) */}
+      {doneTodos.length > 0 && (
+        <div style={{marginTop:22}}>
+          <div onClick={()=>setShowCompleted(s=>!s)}
+            style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer', color:C.muted, fontSize:11, fontWeight:700, letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:12, userSelect:'none'}}>
+            <span style={{fontSize:9, transition:'transform 0.18s', transform:showCompleted?'rotate(0deg)':'rotate(-90deg)', display:'inline-flex'}}>▾</span>
+            Completed · {doneTodos.length}
+          </div>
+          {showCompleted && (
+            <div style={{display:'flex', flexDirection:'column', gap:10}}>
+              {doneTodos.map(t => <TodoRow key={t.id} t={t} />)}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Project notes */}
+      <div style={{marginTop:28}}>
+        <div style={{color:C.muted, fontSize:11, fontWeight:700, letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:10}}>Notes</div>
+        <textarea value={notesDraft}
+          onChange={e=>setNotesDraft(e.target.value)}
+          onBlur={saveNotes}
+          rows={5} placeholder="Anything worth keeping about this project…"
+          style={{...inputStyle, width:'100%', resize:'vertical', lineHeight:1.6}} />
+      </div>
+    </div>
+  );
+}
+
+
 // Small notepad icon shown on a booking/class row when that session has notes
 // attached. Desktop: hovering shows the note text in a floating tooltip.
 // Everywhere: clicking the icon calls onToggle so the parent row can expand
@@ -6999,6 +7306,9 @@ export default function FeltBodyCRM() {
   const [packages, setPackages] = useState(SEED.packages);
   const [invoices, setInvoices] = useState(SEED.invoices);
   const [forms, setForms] = useState(SEED.forms);
+  // Projects: top-level "your work" entity (distinct from contacts/orgs). Holds
+  // project todos via interactions.project_id. status is 'active' | 'done'.
+  const [projects, setProjects] = useState([]);
   // User-defined org categories (Insurance, Banks, etc.) and contact roles, persisted alongside data.
   const [customOrgTypes, setCustomOrgTypes] = useState([]);
   const [customPersonRoles, setCustomPersonRoles] = useState([]);
@@ -7062,6 +7372,7 @@ export default function FeltBodyCRM() {
         setHouseholds(all.households || []);
         setHouseholdMembers(all.householdMembers || []);
         setSettings(all.settings || {});
+        setProjects(all.projects || []);
         setLoadStatus('ready');
       } catch (e) {
         if (cancelled) return;
@@ -7188,6 +7499,12 @@ export default function FeltBodyCRM() {
       case 'inbox': label = 'Inbox'; break;
       case 'threads': label = 'Threads'; break;
       case 'comms_log': label = 'Recent Activity'; break;
+      case 'projects': label = 'Projects'; break;
+      case 'project_detail': {
+        const pr = projects.find(p => p.id === prev.projectId);
+        label = pr ? pr.name : 'Project';
+        break;
+      }
       case 'classes': label = 'All Classes'; break;
       case 'week_view': label = 'Week View'; break;
       case 'month_view': label = 'Month View'; break;
@@ -7462,6 +7779,28 @@ export default function FeltBodyCRM() {
     };
     setNotes(p => p.map(n => n.id === id ? { ...n, ...patch } : n));
     data.notes.patch(id, patch).catch(onError('Update note'));
+  };
+
+  // ─── Projects ──────────────────────────────────────────────────────────
+  // Server-confirmed create/update (return the saved row, splice into state).
+  // setProjectStatus is the list-view toggle; data.projects.setStatus stamps
+  // completed_at server-side. All three follow the orgs/people handler shape.
+  const addProject = (p) => data.projects.create(p)
+    .then(saved => { setProjects(prev => [saved, ...prev]); return saved; })
+    .catch(onError('Add project'));
+  const updateProject = (id, p) => {
+    const prev = projects.find(x => x.id === id);
+    return data.projects.update(id, p, prev?.status || null)
+      .then(saved => { setProjects(prevList => prevList.map(x => x.id === id ? saved : x)); return saved; })
+      .catch(onError('Update project'));
+  };
+  const setProjectStatus = (id, status) => {
+    // Optimistic flip; reconcile from the server-confirmed row.
+    setProjects(prev => prev.map(x => x.id === id
+      ? { ...x, status, completedAt: status === 'done' ? today() : null } : x));
+    data.projects.setStatus(id, status)
+      .then(saved => setProjects(prev => prev.map(x => x.id === id ? saved : x)))
+      .catch(onError('Update project status'));
   };
 
   // Inbox → assign an unlinked interaction to a real person. Two-step server
@@ -7870,7 +8209,7 @@ export default function FeltBodyCRM() {
     switch(name){
       case 'dashboard':
         if (mode === 'personal') return <BirthdaysView people={people} orgs={orgs} nav={nav} />;
-        return <Dashboard orgs={orgs} people={people} classes={classes} attendance={attendance} notes={notes} packages={packages} invoices={invoices} nav={nav}
+        return <Dashboard orgs={orgs} people={people} classes={classes} attendance={attendance} notes={notes} packages={packages} invoices={invoices} projects={projects} nav={nav}
         onAddClass={(date)=>setModal({type:'add_class', date})}
         onCompleteNote={clearNoteAction}
         onReopenNote={reopenNote}
@@ -7879,7 +8218,20 @@ export default function FeltBodyCRM() {
         attendance={attendance} classes={classes}
         onAssign={assignNoteToPerson}
         onDiscard={deleteNote} />;
-      case 'comms_log': return <RecentActivityView notes={notes} people={people} classes={classes} orgs={orgs} attendance={attendance} packages={packages} nav={nav} />;
+      case 'comms_log': return <RecentActivityView notes={notes} people={people} classes={classes} orgs={orgs} attendance={attendance} packages={packages} projects={projects} nav={nav} />;
+      case 'projects': return <ProjectsView projects={projects} notes={notes} nav={nav}
+        onAddProject={addProject} onSetStatus={setProjectStatus} />;
+      case 'project_detail': {
+        const project = projects.find(p => p.id === view.projectId); if(!project) return <Empty text="Not found" />;
+        return <ProjectDetail project={project} notes={notes} people={people} nav={nav} backInfo={backInfo}
+          onAddTodo={addNote}
+          onCompleteNote={clearNoteAction}
+          onReopenNote={reopenNote}
+          onDeleteNote={deleteNote}
+          onUpdateActionDate={updateNoteAction}
+          onSetStatus={setProjectStatus}
+          onUpdateProject={updateProject} />;
+      }
       case 'threads': return <ThreadsView notes={notes} people={people} nav={nav} onMarkThreadRead={markThreadRead} initialThreadKey={view.threadKey} onSendEmail={sendEmail} />;
       case 'birthdays': return <BirthdaysView people={people} orgs={orgs} nav={nav} />;
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;
@@ -7988,7 +8340,7 @@ export default function FeltBodyCRM() {
       <div style={{display:'flex',height:'100vh',overflow:'hidden',background:C.bg,fontFamily:"'Jost',sans-serif",color:C.text,position:'relative'}}>
         {/* Desktop sidebar: hidden on mobile via CSS media query */}
         <div data-desktop-sidebar>
-          <Sidebar view={view} nav={nav} invoices={invoices} notes={notes}
+          <Sidebar view={view} nav={nav} invoices={invoices} notes={notes} projects={projects}
             customOrgTypes={customOrgTypes}
             customPersonRoles={customPersonRoles}
             orgs={orgs} people={people}
@@ -8011,7 +8363,7 @@ export default function FeltBodyCRM() {
           <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.7)',zIndex:100,display:'flex',alignItems:'flex-start'}}>
             {/* Sidebar component in the modal */}
             <div style={{width:'min(80vw, 280px)',height:'100%',overflowY:'auto',background:C.sbg,boxShadow:'-2px 0 12px rgba(0,0,0,0.5)'}}>
-              <Sidebar view={view} nav={nav} invoices={invoices} notes={notes}
+              <Sidebar view={view} nav={nav} invoices={invoices} notes={notes} projects={projects}
                 customOrgTypes={customOrgTypes}
                 customPersonRoles={customPersonRoles}
                 orgs={orgs} people={people}
