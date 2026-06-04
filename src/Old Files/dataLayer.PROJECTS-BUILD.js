@@ -376,13 +376,6 @@ export const classes = {
     if (patch.orgId !== undefined) propagatePatch.org_id = patch.orgId || null;
     if (patch.rate !== undefined) propagatePatch.rate = parseFloat(patch.rate) || 0;
     if (patch.paymentModel !== undefined) propagatePatch.payment_model = patch.paymentModel || 'per_person';
-    if (patch.isBookable !== undefined) propagatePatch.is_bookable = patch.isBookable;
-    if (patch.capacity !== undefined) {
-      const cap = patch.capacity;
-      const n = (cap === '' || cap === null || cap === undefined) ? null : parseInt(cap);
-      propagatePatch.capacity = (n === null || isNaN(n)) ? null : n;
-    }
-    if (patch.publicBlurb !== undefined) propagatePatch.public_blurb = patch.publicBlurb || null;
 
     // Guard: if a caller passes an empty or fully-undefined patch, Supabase would
     // run a no-op update across every future row in the series. Bail early.
@@ -488,16 +481,6 @@ export const notes = {
     await supabase.from('interactions')
       .update({ read_at: new Date().toISOString() })
       .eq('id', id).then(ok);
-  },
-  // Bulk "mark all read" for the Web Activity surface. Stamps a set of rows by
-  // id in one update; only touches rows still unread (idempotent). No return —
-  // the UI splices read_at locally.
-  async markManyRead(ids) {
-    if (!ids || ids.length === 0) return;
-    await supabase.from('interactions')
-      .update({ read_at: new Date().toISOString() })
-      .in('id', ids)
-      .is('read_at', null).then(ok);
   },
 
   // List all non-deleted interactions. Mirrors the read shape in loadAll().
