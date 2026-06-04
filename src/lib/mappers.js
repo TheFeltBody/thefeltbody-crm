@@ -147,6 +147,12 @@ export const seriesFromDb = (row) => ({
   rate: Number(row.rate) || 0,
   rateType: row.rate_type || 'per_class',
   paymentModel: row.payment_model || 'per_person',
+  // Booking fields live on the series row so newly generated instances (incl.
+  // future "top up" runs) inherit them. classFromDb/classToDb still carry the
+  // per-session copies — these are the series-level source of truth.
+  isBookable: row.is_bookable ?? false,
+  capacity: row.capacity ?? '',          // '' keeps the number input controlled
+  publicBlurb: row.public_blurb || '',
 });
 
 export const seriesToDb = (s) => ({
@@ -160,6 +166,9 @@ export const seriesToDb = (s) => ({
   rate: parseFloat(s.rate) || 0,
   rate_type: s.rateType || 'per_class',
   payment_model: s.paymentModel || 'per_person',
+  is_bookable: s.isBookable ?? false,
+  capacity: numOrNull(s.capacity),       // NULL = uncapped
+  public_blurb: s.publicBlurb ? String(s.publicBlurb).trim() || null : null,
 });
 
 // ─── Sessions (UI: "classes") ────────────────────────────────────────────────
@@ -182,6 +191,9 @@ export const classFromDb = (row) => ({
   notes: row.notes || '',
   reflection: row.reflection || '',
   formsWorked: Array.isArray(row.forms_worked) ? row.forms_worked : [],
+  isBookable: row.is_bookable ?? false,
+  capacity: row.capacity ?? '',
+  publicBlurb: row.public_blurb || '',
 });
 
 export const classToDb = (c) => ({
@@ -197,6 +209,9 @@ export const classToDb = (c) => ({
   notes: c.notes || null,
   reflection: c.reflection || null,
   forms_worked: Array.isArray(c.formsWorked) ? c.formsWorked : [],
+  is_bookable: c.isBookable ?? false,
+  capacity: numOrNull(c.capacity),
+  public_blurb: c.publicBlurb ? String(c.publicBlurb).trim() || null : null,
 });
 
 // Partial-patch mapper: only translates keys that are actually present in `patch`.
@@ -220,6 +235,9 @@ export const classPatchToDb = (patch) => {
   if (patch.formsWorked !== undefined) {
     out.forms_worked = Array.isArray(patch.formsWorked) ? patch.formsWorked : [];
   }
+  if (patch.isBookable !== undefined) out.is_bookable = patch.isBookable;
+  if (patch.capacity !== undefined) out.capacity = numOrNull(patch.capacity);
+  if (patch.publicBlurb !== undefined) out.public_blurb = patch.publicBlurb || null;
   return out;
 };
 

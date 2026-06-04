@@ -376,6 +376,13 @@ export const classes = {
     if (patch.orgId !== undefined) propagatePatch.org_id = patch.orgId || null;
     if (patch.rate !== undefined) propagatePatch.rate = parseFloat(patch.rate) || 0;
     if (patch.paymentModel !== undefined) propagatePatch.payment_model = patch.paymentModel || 'per_person';
+    if (patch.isBookable !== undefined) propagatePatch.is_bookable = patch.isBookable;
+    if (patch.capacity !== undefined) {
+      const cap = patch.capacity;
+      const n = (cap === '' || cap === null || cap === undefined) ? null : parseInt(cap);
+      propagatePatch.capacity = (n === null || isNaN(n)) ? null : n;
+    }
+    if (patch.publicBlurb !== undefined) propagatePatch.public_blurb = patch.publicBlurb || null;
 
     // Guard: if a caller passes an empty or fully-undefined patch, Supabase would
     // run a no-op update across every future row in the series. Bail early.

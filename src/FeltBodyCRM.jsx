@@ -738,6 +738,9 @@ const generateSeriesClasses = (series, count=12) => {
     seriesId: series.id,
     rate: series.rate || 0,
     paymentModel: series.paymentModel || 'per_person',
+    isBookable: series.isBookable ?? false,
+    capacity: series.capacity ?? null,
+    publicBlurb: series.publicBlurb || '',
   }));
 };
 
@@ -1433,7 +1436,10 @@ function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDa
         recurrence: 'one_off',
         rate: bookingFor?.defaultSessionRate ?? '',
         repeatCount: 12,
-        paymentModel: defaultPaymentModel || ''
+        paymentModel: defaultPaymentModel || '',
+        isBookable: false,
+        capacity: '',
+        publicBlurb: ''
       });
   const s = k => v => setF(x=>({...x,[k]:v}));
   const isNew = !existing;
@@ -1539,6 +1545,25 @@ function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDa
       )}
       {isNew && !bookingFor && f.recurrence!=='one_off' && (
         <FI label="HOW MANY SESSIONS TO GENERATE" value={f.repeatCount} onChange={v=>s('repeatCount')(parseInt(v)||12)} type="number" />
+      )}
+      {!bookingFor && effectiveModel === 'per_person' && (
+        <div style={{marginTop:8,marginBottom:14,padding:'14px 16px',border:`1px solid ${C.border}`,borderRadius:6,background:C.surf}}>
+          <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',color:f.isBookable?C.gold:C.text,fontSize:14}}>
+            <input type="checkbox" checked={!!f.isBookable} onChange={e=>s('isBookable')(e.target.checked)} style={{accentColor:C.gold,width:16,height:16}} />
+            Publish to website (bookable on thefeltbody.com)
+          </label>
+          {f.isBookable && (
+            <div style={{marginTop:14}}>
+              <FI label="CAPACITY PER CLASS (blank = uncapped)" value={f.capacity} onChange={s('capacity')} type="number" />
+              <FI label="WEBSITE DESCRIPTION (optional)" value={f.publicBlurb} onChange={s('publicBlurb')} />
+              <div style={{color:C.muted,fontSize:11,marginTop:2}}>
+                The rate above (£{f.rate||0}) is shown to customers as the per-place price.
+                {isNew && f.recurrence && f.recurrence!=='one_off' && ' Applies to every class in this series.'}
+                {!isNew && f.recurrence==='linked' && ' Changes here apply to this one class; use “this and future” editing to publish the rest of the series.'}
+              </div>
+            </div>
+          )}
+        </div>
       )}
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
@@ -7895,10 +7920,14 @@ export default function FeltBodyCRM() {
     try {
       if (f.recurrence && f.recurrence !== 'one_off') {
         // Series: create the series row first, then bulk-insert the instances.
+        // Booking fields are stored ON the series row so generateSeriesClasses
+        // reads them straight off seriesRow — and so future "top up" runs
+        // inherit them without re-entry.
         const seriesRow = await data.series.create({
           name: f.name, recurrence: f.recurrence, location: f.location,
           orgId: f.orgId || null, startDate: f.date, time: f.time || '',
           duration, rate: parseFloat(f.rate) || 0, paymentModel,
+          isBookable: f.isBookable ?? false, capacity: f.capacity, publicBlurb: f.publicBlurb || '',
         });
         setSeries(p => [...p, seriesRow]);
         const instances = generateSeriesClasses(seriesRow, parseInt(f.repeatCount) || 12);
@@ -7909,6 +7938,7 @@ export default function FeltBodyCRM() {
           name: f.name, date: f.date, time: f.time || '', duration,
           location: f.location, orgId: f.orgId || null, seriesId: null,
           rate: parseFloat(f.rate) || 0, paymentModel,
+          isBookable: f.isBookable ?? false, capacity: f.capacity, publicBlurb: f.publicBlurb || '',
         });
         setClasses(p => [...p, created]);
       }
@@ -7931,6 +7961,9 @@ export default function FeltBodyCRM() {
           rate: parseFloat(updated.rate) || cls.rate,
           paymentModel: updated.paymentModel || cls.paymentModel,
           date: cls.date, seriesId: cls.seriesId,  // bulk update doesn't change date/series
+          isBookable: updated.isBookable ?? false,
+          capacity: updated.capacity,
+          publicBlurb: updated.publicBlurb || '',
         };
         const updatedRows = await data.classes.updateFutureInSeries(cls.seriesId, cls.date, patch);
         // Merge the patched fields back into local state for affected rows
@@ -7945,6 +7978,9 @@ export default function FeltBodyCRM() {
           recurrence: series.find(s => s.id === cls.seriesId)?.recurrence || 'weekly',
           startDate: series.find(s => s.id === cls.seriesId)?.startDate || cls.date,
           rateType: series.find(s => s.id === cls.seriesId)?.rateType || 'per_class',
+          isBookable: updated.isBookable ?? false,
+          capacity: updated.capacity,
+          publicBlurb: updated.publicBlurb || '',
         };
         const savedSeries = await data.series.update(cls.seriesId, seriesPatch);
         setSeries(p => p.map(s => s.id === cls.seriesId ? savedSeries : s));
