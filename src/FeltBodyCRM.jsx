@@ -2747,7 +2747,12 @@ function SidebarCustomTypeItem({ active, indent, label, icon, count, onNav, onDe
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 function Sidebar({ view, nav, invoices, notes, projects=[], customOrgTypes, customPersonRoles, onAddOrgType, onAddPersonRole, orgs, people, onRemoveOrgType, onRemovePersonRole, onSignOut, mode='client', onSwitchMode, onAddPersonalOrg }) {
   const unpaidInvoices = invoices.filter(i=>i.status!=='paid').length;
-  const inboxCount = notes.filter(n => !n.personId).length;
+  const inboxCount = notes.filter(n =>
+    (n.kind === 'email' || n.kind === 'form') &&
+    n.direction !== 'outbound' &&
+    n.source !== 'todo' &&
+    !n.personId && !n.projectId
+  ).length;
   const activeProjects = projects.filter(p => p.status === 'active').length;
   // Threads = emails from known contacts. Badge counts distinct threads
   // (or solo emails) that contain at least one unread INBOUND message.
@@ -2965,11 +2970,11 @@ function Sidebar({ view, nav, invoices, notes, projects=[], customOrgTypes, cust
 // filled, the to-do also appears on that contact's Comms tab.
 function QuickTodoModal({ people, projects=[], onSave, onClose }) {
   const [text, setText] = useState('');
-  const [actionDate, setActionDate] = useState(today());
+  const [actionDate, setActionDate] = useState('');
   const [personId, setPersonId] = useState('');
   const [projectId, setProjectId] = useState('');
   const [busy, setBusy] = useState(false);
-  const canSave = !busy && text.trim();
+  const canSave = !busy && text.trim() && (personId || projectId);
 
   const save = async () => {
     if (!canSave) return;
@@ -3021,7 +3026,7 @@ function QuickTodoModal({ people, projects=[], onSave, onClose }) {
           />
         </div>
         <div style={{ flex: 1, minWidth: 160 }}>
-          <div style={{ color: C.muted, fontSize: 11, marginBottom: 4, letterSpacing: '0.3px' }}>LINK TO PERSON <span style={{ opacity: 0.5 }}>(optional)</span></div>
+          <div style={{ color: C.muted, fontSize: 11, marginBottom: 4, letterSpacing: '0.3px' }}>LINK TO PERSON</div>
           <select
             value={personId}
             onChange={e => setPersonId(e.target.value)}
@@ -3036,7 +3041,7 @@ function QuickTodoModal({ people, projects=[], onSave, onClose }) {
         </div>
         {projects.filter(p => p.status === 'active').length > 0 && (
           <div style={{ flex: 1, minWidth: 160 }}>
-            <div style={{ color: C.muted, fontSize: 11, marginBottom: 4, letterSpacing: '0.3px' }}>PROJECT <span style={{ opacity: 0.5 }}>(optional)</span></div>
+            <div style={{ color: C.muted, fontSize: 11, marginBottom: 4, letterSpacing: '0.3px' }}>PROJECT</div>
             <select
               value={projectId}
               onChange={e => setProjectId(e.target.value)}
@@ -3051,6 +3056,11 @@ function QuickTodoModal({ people, projects=[], onSave, onClose }) {
           </div>
         )}
       </div>
+      {text.trim() && !personId && !projectId && (
+        <div style={{ color: C.muted, fontSize: 12, marginBottom: 10, fontStyle: 'italic' }}>
+          Link this to-do to a person or a project to save it.
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
         <Btn variant="secondary" small onClick={onClose} disabled={busy}>Cancel</Btn>
         <Btn small onClick={save} disabled={!canSave}>
@@ -3134,7 +3144,12 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
   const outstanding = invoices.filter(i=>i.status!=='paid').reduce((s,i)=>s+(i.total||0),0);
 
   const personOf = (id) => people.find(p=>p.id===id);
-  const goToNote = (n) => nav('person_detail', { personId: n.personId, highlightNoteId: n.id });
+  const projectOf = (id) => projects.find(p=>p.id===id);
+  const goToNote = (n) => {
+    if (n.projectId) return nav('project_detail', { projectId: n.projectId });
+    if (n.personId) return nav('person_detail', { personId: n.personId, highlightNoteId: n.id });
+    // Anchorless (shouldn't happen post-B2) — no destination, do nothing.
+  };
 
   // ─── Mobile accordion plumbing ─────────────────────────────────────────────
   // Section keys are stable identifiers used for the "last opened" memory.
@@ -3196,6 +3211,9 @@ function Dashboard({ orgs, people, classes, attendance, notes, packages, invoice
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:2}}>
                       {p && <div style={{color:isCompleted?C.muted:C.text,fontSize:14,fontWeight:500}}>{p.name}</div>}
+                      {!p && n.projectId && projectOf(n.projectId) && (
+                        <div style={{color:isCompleted?C.muted:C.gold,fontSize:13,fontWeight:500}}>▸ {projectOf(n.projectId).name}</div>
+                      )}
                       {n.important && !isCompleted && <span style={{color:C.gold,fontSize:9,fontWeight:700,letterSpacing:'0.5px'}}>⚑</span>}
                     </div>
                     <div style={{color:C.muted,fontSize:13,lineHeight:1.5,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',opacity:isCompleted?0.7:1}}>{n.text}</div>
@@ -3551,7 +3569,12 @@ function InboxView({ notes, people, attendance, classes, onAssign, onDiscard }) 
 
   const unlinked = useMemo(() =>
     notes
-      .filter(n => !n.personId)
+      .filter(n =>
+        (n.kind === 'email' || n.kind === 'form') &&
+        n.direction !== 'outbound' &&
+        n.source !== 'todo' &&
+        !n.personId && !n.projectId
+      )
       .sort((a, b) => new Date(b.date) - new Date(a.date)),
     [notes]);
 
@@ -4525,15 +4548,41 @@ function ProjectsView({ projects, notes, nav, onAddProject, onSetStatus }) {
 // free-text notes field. Todos can be added inline, completed, reopened, deleted.
 // A project todo may also be person-linked — we surface that contact's name.
 function ProjectDetail({ project, notes, people, nav, backInfo,
-  onAddTodo, onCompleteNote, onReopenNote, onDeleteNote, onUpdateActionDate, onSetStatus, onUpdateProject }) {
+  onAddTodo, onCompleteNote, onReopenNote, onDeleteNote, onUpdateActionDate, onUpdateNoteText, onSetStatus, onUpdateProject }) {
   const isMobile = useIsMobile();
   const [newTodo, setNewTodo] = useState('');
-  const [newDate, setNewDate] = useState(today());
+  const [newDate, setNewDate] = useState('');
   const [busy, setBusy] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
+  const todoInputRef = useRef(null);
+  // Name edit: local draft, save on blur/Enter if changed.
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(project.name || '');
+  useEffect(()=>{ setNameDraft(project.name || ''); setEditingName(false); }, [project.id]);
   // Notes field: local draft, save on blur if changed.
   const [notesDraft, setNotesDraft] = useState(project.notes || '');
   useEffect(()=>{ setNotesDraft(project.notes || ''); }, [project.id]);
+
+  const saveName = () => {
+    const name = nameDraft.trim();
+    setEditingName(false);
+    if (!name || name === project.name) { setNameDraft(project.name || ''); return; }
+    onUpdateProject(project.id, { name, status: project.status, notes: project.notes || '', completedAt: project.completedAt });
+  };
+
+  // Inline todo-text edit. State hoisted here (not inside TodoRow) so the row
+  // component stays stateless — defining a stateful component in render would
+  // remount it on every parent render and drop the edit mid-type.
+  const [editingTodoId, setEditingTodoId] = useState(null);
+  const [todoDraft, setTodoDraft] = useState('');
+  const startEditTodo = (t) => { setEditingTodoId(t.id); setTodoDraft(t.text); };
+  const saveEditTodo = () => {
+    const id = editingTodoId;
+    setEditingTodoId(null);
+    if (id && todoDraft.trim()) onUpdateNoteText(id, todoDraft);
+  };
+  // Inline todo-date edit: which row's date input is open.
+  const [editingDateId, setEditingDateId] = useState(null);
 
   const personOf = (id) => people.find(p => p.id === id);
 
@@ -4543,6 +4592,7 @@ function ProjectDetail({ project, notes, people, nav, backInfo,
   const doneTodos = todos.filter(t => t.completed)
     .sort((a,b) => (b.completedAt||b.date||'').localeCompare(a.completedAt||a.date||''));
 
+  const [justAdded, setJustAdded] = useState(false);
   const addTodo = async () => {
     const text = newTodo.trim();
     if (!text || busy) return;
@@ -4552,9 +4602,19 @@ function ProjectDetail({ project, notes, people, nav, backInfo,
         text, actionDate: newDate || null, projectId: project.id,
         personId: null, kind: 'note', source: 'todo', date: today(), important: false,
       });
-      setNewTodo(''); setNewDate(today());
+      setNewTodo(''); setNewDate('');
+      setJustAdded(true);
     } finally { setBusy(false); }
   };
+  // Refocus the add-todo input once it re-enables (it's disabled during the
+  // async add, so focusing inside addTodo is a no-op). Effect fires after busy
+  // clears and the input is interactive again.
+  useEffect(() => {
+    if (justAdded && !busy) {
+      todoInputRef.current?.focus();
+      setJustAdded(false);
+    }
+  }, [justAdded, busy]);
 
   const saveNotes = () => {
     if (notesDraft === (project.notes || '')) return;
@@ -4582,15 +4642,53 @@ function ProjectDetail({ project, notes, people, nav, backInfo,
           {t.completed ? '✓' : ''}
         </div>
         <div style={{flex:1, minWidth:0}}>
-          <div style={{color:t.completed?C.muted:C.text, fontSize:13.5, lineHeight:1.5, textDecoration:t.completed?'line-through':'none'}}>
-            {t.text}
-          </div>
+          {editingTodoId === t.id ? (
+            <input
+              autoFocus
+              value={todoDraft}
+              onChange={e=>setTodoDraft(e.target.value)}
+              onBlur={saveEditTodo}
+              onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); saveEditTodo(); } if(e.key==='Escape'){ setEditingTodoId(null); } }}
+              style={{
+                width:'100%', background:C.surf, border:`1px solid ${C.gold}88`, borderRadius:4,
+                color:C.text, fontSize:13.5, lineHeight:1.5, padding:'4px 8px',
+                fontFamily:"'Jost',sans-serif", outline:'none',
+              }}
+            />
+          ) : (
+            <div onClick={()=> !t.completed && startEditTodo(t)}
+              title={t.completed ? '' : 'Click to edit'}
+              style={{color:t.completed?C.muted:C.text, fontSize:13.5, lineHeight:1.5, textDecoration:t.completed?'line-through':'none', cursor:t.completed?'default':'text'}}>
+              {t.text}
+            </div>
+          )}
           <div style={{display:'flex', gap:10, flexWrap:'wrap', marginTop:4, alignItems:'center'}}>
-            {t.actionDate && (
-              <span style={{color:overdue?C.red:C.muted, fontSize:11}}>
+            {editingDateId === t.id ? (
+              <input
+                type="date"
+                autoFocus
+                defaultValue={t.actionDate || ''}
+                onChange={e=>{ onUpdateActionDate(t.id, e.target.value || null); }}
+                onBlur={()=>setEditingDateId(null)}
+                onKeyDown={e=>{ if(e.key==='Enter'||e.key==='Escape') setEditingDateId(null); }}
+                style={{
+                  background:C.surf, border:`1px solid ${C.gold}88`, borderRadius:4,
+                  color:C.text, fontSize:11, padding:'2px 6px', fontFamily:"'Jost',sans-serif", outline:'none',
+                }}
+              />
+            ) : t.actionDate ? (
+              <span onClick={()=> !t.completed && setEditingDateId(t.id)}
+                title={t.completed ? '' : 'Click to change date'}
+                style={{color:overdue?C.red:C.muted, fontSize:11, cursor:t.completed?'default':'pointer'}}>
                 {overdue ? 'Overdue · ' : ''}{fmt(t.actionDate)}
               </span>
-            )}
+            ) : !t.completed ? (
+              <span onClick={()=>setEditingDateId(t.id)}
+                title="Add a date"
+                style={{color:C.muted, fontSize:11, cursor:'pointer', opacity:0.65}}>
+                + date
+              </span>
+            ) : null}
             {person && (
               <span onClick={()=>nav('person_detail',{personId:person.id})}
                 style={{color:C.gold, fontSize:11, cursor:'pointer'}}>
@@ -4616,13 +4714,30 @@ function ProjectDetail({ project, notes, people, nav, backInfo,
             ? <Btn variant="ghost" small onClick={()=>onSetStatus(project.id,'active')}>Reopen</Btn>
             : <Btn variant="secondary" small onClick={()=>onSetStatus(project.id,'done')}>Mark done</Btn>
         }>
-        {project.name}
+        {editingName ? (
+          <input
+            autoFocus
+            value={nameDraft}
+            onChange={e=>setNameDraft(e.target.value)}
+            onBlur={saveName}
+            onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); saveName(); } if(e.key==='Escape'){ setNameDraft(project.name||''); setEditingName(false); } }}
+            style={{
+              background:'transparent', border:'none', borderBottom:`2px solid ${C.gold}88`,
+              color:'inherit', font:'inherit', outline:'none', padding:0, width:'100%', maxWidth:520,
+            }}
+          />
+        ) : (
+          <span onClick={()=>setEditingName(true)} title="Click to rename"
+            style={{cursor:'pointer'}}>
+            {project.name}
+          </span>
+        )}
       </PageHead>
 
       {/* Add a to-do */}
       {!isDone && (
         <div style={{display:'flex', gap:8, marginBottom:20, flexWrap:'wrap'}}>
-          <input value={newTodo} disabled={busy}
+          <input value={newTodo} disabled={busy} ref={todoInputRef}
             onChange={e=>setNewTodo(e.target.value)}
             onKeyDown={e=>{ if(e.key==='Enter') addTodo(); }}
             placeholder="Add a to-do…"
@@ -7772,6 +7887,14 @@ export default function FeltBodyCRM() {
     setNotes(p => p.map(n => n.id === id ? { ...n, actionDate: newDate || null } : n));
     data.notes.patch(id, { actionDate: newDate || null }).catch(onError('Update action date'));
   };
+  // Text-only edit (inline todo editing in ProjectDetail). Optimistic-local +
+  // fire-and-forget, matching updateNoteAction. No-op on empty.
+  const updateNoteText = (id, newText) => {
+    const text = (newText || '').trim();
+    if (!text) return;
+    setNotes(p => p.map(n => n.id === id ? { ...n, text } : n));
+    data.notes.patch(id, { text }).catch(onError('Update note text'));
+  };
   // Mark a thread (or a single unthreaded email) as read. Called by ThreadsView
   // when a thread is opened. Optimistic-local + fire-and-forget, matching the
   // other note handlers. For a real thread we stamp every unread row sharing
@@ -8265,6 +8388,7 @@ export default function FeltBodyCRM() {
           onReopenNote={reopenNote}
           onDeleteNote={deleteNote}
           onUpdateActionDate={updateNoteAction}
+          onUpdateNoteText={updateNoteText}
           onSetStatus={setProjectStatus}
           onUpdateProject={updateProject} />;
       }
