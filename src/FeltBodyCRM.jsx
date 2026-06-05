@@ -2505,6 +2505,15 @@ function NoteForm({ personId, classId, kind='note', existing, onSave, onCancel }
       if(needsDuration && durationMins !== '' && !isNaN(parseInt(durationMins,10))) {
         note.durationMins = parseInt(durationMins, 10);
       }
+      // Manually-logged inbound emails have no Message-ID (they didn't come
+      // through the email worker), so without this they'd save with a null
+      // thread_id and the Reply button would mint a fresh, unrelated thread —
+      // the reply wouldn't group with the original. Mint a synthetic thread_id
+      // here so the Reply path has a parent to inherit. 'manual:' prefix marks
+      // origin and won't collide with Brevo/inbound Message-IDs.
+      if(activeKind === 'email' && note.direction === 'inbound') {
+        note.threadId = `manual:${crypto.randomUUID()}`;
+      }
     }
 
     onSave(note);
