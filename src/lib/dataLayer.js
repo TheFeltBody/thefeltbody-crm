@@ -23,6 +23,7 @@ import {
   attendanceFromDb, attendanceToDb,
   noteFromDb, noteToDb, notePatchToDb,
   packageFromDb, packageToDb,
+  packageTemplateFromDb, packageTemplateToDb,
   invoiceFromDb, invoiceToDb, lineItemToDb,
   formFromDb, formToDb,
   customOrgTypeFromDb, customOrgTypeToDb,
@@ -73,6 +74,7 @@ export async function loadAll() {
     householdMemberRows,
     settingRows,
     projectRows,
+    packageTemplateRows,
   ] = await Promise.all([
     supabase.from('active_organisations').select('*').order('name').then(ok),
     supabase.from('active_people').select('*').order('name').then(ok),
@@ -98,6 +100,7 @@ export async function loadAll() {
     supabase.from('household_members').select('*').order('created_at').then(ok),
     supabase.from('settings').select('*').then(ok),
     supabase.from('projects').select('*').order('created_at', { ascending: false }).then(ok),
+    supabase.from('package_templates').select('*').order('position').then(ok),
   ]);
 
   // Group person_roles by person_id -> array of role keys
@@ -146,6 +149,7 @@ export async function loadAll() {
     householdMembers: householdMemberRows.map(householdMemberFromDb),
     settings: settingsByKey,
     projects: projectRows.map(projectFromDb),
+    packageTemplates: packageTemplateRows.map(packageTemplateFromDb),
   };
 }
 
@@ -659,6 +663,36 @@ export const packages = {
   // packages_with_usage view + soft-delete; row is gone for good.
   async hardDelete(id) {
     await supabase.from('packages').delete().eq('id', id).then(ok);
+    return id;
+  },
+};
+
+// ─── Package templates ───────────────────────────────────────────────────────
+// Canonical package definitions: prefill source for AddPackageForm and (Phase 7)
+// the Stripe webhook. owner_id is set DB-side (default auth.uid()), never
+// written here — mirrors projects. Archive via active=false rather than delete
+// so historical reporting (and any template_id FK added later) stays intact;
+// hardDelete exists for "created in error" cleanup.
+export const packageTemplates = {
+  async create(t) {
+    const row = await supabase.from('package_templates').insert(packageTemplateToDb(t))
+      .select().single().then(ok);
+    return packageTemplateFromDb(row);
+  },
+  async update(id, t) {
+    const row = await supabase.from('package_templates').update(packageTemplateToDb(t))
+      .eq('id', id).select().single().then(ok);
+    return packageTemplateFromDb(row);
+  },
+  // Archive / unarchive — the common "retire a template" action. Keeps the row
+  // so anything sold from it stays explainable.
+  async setActive(id, active) {
+    const row = await supabase.from('package_templates').update({ active })
+      .eq('id', id).select().single().then(ok);
+    return packageTemplateFromDb(row);
+  },
+  async hardDelete(id) {
+    await supabase.from('package_templates').delete().eq('id', id).then(ok);
     return id;
   },
 };

@@ -383,6 +383,9 @@ export const packageFromDb = (row) => ({
   amountPaid: Number(row.amount_paid) || 0,
   paidVia: row.paid_via || 'other',
   datePurchased: row.date_purchased,
+  // expires_at is a nullable DATE; '' keeps a date input controlled/blank.
+  // null = never expires.
+  expiresAt: row.expires_at || '',
   notes: row.notes || '',
   // From the view (will be undefined if loaded from base table):
   totalUsed: row.total_used,
@@ -398,7 +401,50 @@ export const packageToDb = (pk) => ({
   amount_paid: parseFloat(pk.amountPaid) || 0,
   paid_via: pk.paidVia || 'other',
   date_purchased: pk.datePurchased,
+  // empty string from the date input → null (Postgres DATE rejects '')
+  expires_at: pk.expiresAt ? String(pk.expiresAt).trim() || null : null,
   notes: pk.notes || null,
+});
+
+// ─── Package templates ───────────────────────────────────────────────────────
+// Canonical package definitions. Prefill source for AddPackageForm and (Phase 7)
+// the Stripe webhook. owner_id is set DB-side (column default auth.uid()), so
+// it's never written from the client — mirrors the projects pattern.
+//   - validityDays: integer | null  (null = package never expires)
+//   - defaultAmount: number | ''    (list-price prefill; '' when unset)
+//   - stripePriceId: string | ''    (populated in Phase 7)
+//   - active: bool                  (archived templates hidden from the picker)
+export const packageTemplateFromDb = (row) => ({
+  id: row.id,
+  type: row.type || 'class_package',
+  name: row.name,
+  totalSessions: row.total_sessions ?? 0,
+  defaultAmount: row.default_amount !== null && row.default_amount !== undefined
+    ? Number(row.default_amount)
+    : '',
+  paidVia: row.paid_via || 'stripe_tfb',
+  validityDays: row.validity_days ?? null,
+  notes: row.notes || '',
+  active: row.active ?? true,
+  stripePriceId: row.stripe_price_id || '',
+  position: row.position ?? 0,
+  createdAt: row.created_at,
+});
+
+export const packageTemplateToDb = (t) => ({
+  type: t.type || 'class_package',
+  name: t.name,
+  total_sessions: parseInt(t.totalSessions) || 0,
+  default_amount: numOrNull(t.defaultAmount),
+  paid_via: t.paidVia || 'stripe_tfb',
+  // validity_days: blank/0 from the input → null (never expires)
+  validity_days: (t.validityDays === '' || t.validityDays === null || t.validityDays === undefined)
+    ? null
+    : (parseInt(t.validityDays) || null),
+  notes: t.notes || null,
+  active: t.active ?? true,
+  stripe_price_id: t.stripePriceId ? String(t.stripePriceId).trim() || null : null,
+  position: t.position ?? 0,
 });
 
 // ─── Invoices + Line Items ───────────────────────────────────────────────────

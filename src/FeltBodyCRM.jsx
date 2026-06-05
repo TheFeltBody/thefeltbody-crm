@@ -367,6 +367,8 @@ const classRevenue = (cls, attendance, packages) => {
   return total;
 };
 const addDays = (dateStr, n) => { const d = new Date(dateStr+'T12:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); };
+// addMonths: calendar-month add (clamps to month length, e.g. Jan 31 +1mo → Feb 28).
+const addMonths = (dateStr, n) => { const d = new Date(dateStr+'T12:00'); const day=d.getDate(); d.setMonth(d.getMonth()+n); if(d.getDate()<day) d.setDate(0); return d.toISOString().slice(0,10); };
 // ─── Derived activity (bookings + payments) ───────────────────────────────────
 // Bookings and payments already live in the system as attendance rows and
 // packages — they are NOT separate interaction records. Rather than dual-writing
@@ -1661,17 +1663,60 @@ function AddToRegisterForm({ onSave, onClose, people, classId, existing, attenda
   );
 }
 
-function AddPackageForm({ onSave, onClose, personId }) {
-  const typeDefaults = {class_package:'10-Class Package',private_block:'Private Block x6',drop_in:'Drop-in Class',retreat:'Retreat Booking',workshop:'Workshop Booking',other:''};
-  const [f, setF] = useState({type:'class_package',name:'10-Class Package',totalSessions:10,sessionsUsed:0,amountPaid:'',paidVia:'stripe_tfb',datePurchased:today(),notes:''});
+function AddPackageForm({ onSave, onClose, personId, templates=[] }) {
+  // Active templates only, in display order. The picker REPLACES the old
+  // hardcoded typeDefaults; "— None —" leaves the form at manual defaults so an
+  // ad-hoc package can still be entered without a template.
+  const activeTemplates = templates.filter(t => t.active);
+  const BLANK = {type:'class_package',name:'',totalSessions:10,sessionsUsed:0,amountPaid:'',paidVia:'stripe_tfb',datePurchased:today(),expiresAt:'',notes:''};
+  const [templateId, setTemplateId] = useState('');
+  const [f, setF] = useState(BLANK);
   const s = k => v => setF(x=>({...x,[k]:v}));
+
+  // Selecting a template prefills every field from the template row. The chosen
+  // validity window is captured so the expiry recomputes if the purchase date is
+  // later edited; clearing the template stops that auto-recompute.
+  const [validityDays, setValidityDays] = useState(null);
+  const applyTemplate = (id) => {
+    setTemplateId(id);
+    if (!id) { setValidityDays(null); setF(BLANK); return; }
+    const t = activeTemplates.find(x => x.id === id);
+    if (!t) return;
+    setValidityDays(t.validityDays ?? null);
+    setF(x => ({
+      ...x,
+      type: t.type,
+      name: t.name,
+      totalSessions: t.totalSessions,
+      amountPaid: t.defaultAmount === '' ? '' : t.defaultAmount,
+      paidVia: t.paidVia || 'stripe_tfb',
+      // recompute expiry from the (current) purchase date + window
+      expiresAt: (t.validityDays && x.datePurchased) ? addDays(x.datePurchased, t.validityDays) : '',
+    }));
+  };
+
+  // Keep expiry in step with purchase date while a windowed template is active.
+  const onDatePurchased = (v) => {
+    setF(x => ({
+      ...x,
+      datePurchased: v,
+      expiresAt: (validityDays && v) ? addDays(v, validityDays) : x.expiresAt,
+    }));
+  };
+
+  const templateOpts = [
+    { v:'', l:'— None (manual) —' },
+    ...activeTemplates.map(t => ({ v:t.id, l:t.name })),
+  ];
+
   return (
     <Modal title="Add Package / Credits" onClose={onClose} wide>
-      <FI label="TYPE" value={f.type} onChange={v=>setF(x=>({...x,type:v,name:typeDefaults[v]||''}))} opts={Object.entries(PKG_TYPES).map(([v,m])=>({v,l:m.label}))} />
+      <FI label="TEMPLATE" value={templateId} onChange={applyTemplate} opts={templateOpts} />
+      <FI label="TYPE" value={f.type} onChange={s('type')} opts={Object.entries(PKG_TYPES).map(([v,m])=>({v,l:m.label}))} />
       <FI label="NAME / DESCRIPTION" value={f.name} onChange={s('name')} />
       {f.type!=='drop_in'&&(<div style={{display:'flex',gap:12}}><FI label="TOTAL SESSIONS" value={f.totalSessions} onChange={v=>s('totalSessions')(parseInt(v)||0)} type="number" half /><FI label="ALREADY USED" value={f.sessionsUsed} onChange={v=>s('sessionsUsed')(parseInt(v)||0)} type="number" half /></div>)}
       <div style={{display:'flex',gap:12}}><FI label="AMOUNT PAID (£)" value={f.amountPaid} onChange={s('amountPaid')} type="number" half /><FI label="PAID VIA" value={f.paidVia} onChange={s('paidVia')} opts={Object.entries(PAY_VIA).map(([v,l])=>({v,l}))} half /></div>
-      <FI label="DATE PURCHASED" value={f.datePurchased} onChange={s('datePurchased')} type="date" />
+      <div style={{display:'flex',gap:12}}><FI label="DATE PURCHASED" value={f.datePurchased} onChange={onDatePurchased} type="date" half /><FI label="EXPIRES (blank = never)" value={f.expiresAt} onChange={s('expiresAt')} type="date" half /></div>
       <FI label="NOTES" value={f.notes} onChange={s('notes')} rows={2} />
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
@@ -2072,6 +2117,7 @@ function EditPackageForm({ pkg, linkedCount, onSave, onDelete, onClose }) {
     amountPaid: pkg.amountPaid ?? '',
     paidVia: pkg.paidVia || 'other',
     datePurchased: pkg.datePurchased || today(),
+    expiresAt: pkg.expiresAt || '',
     notes: pkg.notes || '',
   });
   const [armed, setArmed] = useState(false);
@@ -2113,7 +2159,27 @@ function EditPackageForm({ pkg, linkedCount, onSave, onDelete, onClose }) {
         {offsetTooHigh && <div style={{color:C.red,fontSize:12,marginBottom:10}}>Manual offset can't exceed total minus linked sessions ({maxOffset}).</div>}
       </>)}
       <div style={{display:'flex',gap:12}}><FI label="AMOUNT PAID (£)" value={f.amountPaid} onChange={s('amountPaid')} type="number" half /><FI label="PAID VIA" value={f.paidVia} onChange={s('paidVia')} opts={Object.entries(PAY_VIA).map(([v,l])=>({v,l}))} half /></div>
-      <FI label="DATE PURCHASED" value={f.datePurchased} onChange={s('datePurchased')} type="date" />
+      <div style={{display:'flex',gap:12}}><FI label="DATE PURCHASED" value={f.datePurchased} onChange={s('datePurchased')} type="date" half /><FI label="EXPIRES (blank = never)" value={f.expiresAt} onChange={s('expiresAt')} type="date" half /></div>
+      {/* Quick-extend: bumps expires_at from its current value (or from today if
+          blank) by a fixed step. Just date math written back to the same field. */}
+      <div style={{display:'flex',alignItems:'center',gap:8,marginTop:-6,marginBottom:14,flexWrap:'wrap'}}>
+        <span style={{color:C.muted,fontSize:11,letterSpacing:'0.5px'}}>EXTEND</span>
+        {[{l:'+1 week',fn:d=>addDays(d,7)},{l:'+1 month',fn:d=>addMonths(d,1)},{l:'+3 months',fn:d=>addMonths(d,3)}].map(b=>(
+          <button key={b.l} type="button"
+            onClick={()=>s('expiresAt')(b.fn(f.expiresAt||today()))}
+            style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:4,fontSize:11,padding:'3px 9px',fontFamily:"'Jost',sans-serif"}}
+            onMouseEnter={e=>{e.currentTarget.style.color=C.gold;e.currentTarget.style.borderColor=C.gold+'88';}}
+            onMouseLeave={e=>{e.currentTarget.style.color=C.muted;e.currentTarget.style.borderColor=C.border;}}>
+            {b.l}
+          </button>
+        ))}
+        {f.expiresAt && (
+          <button type="button" onClick={()=>s('expiresAt')('')}
+            style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:11,fontFamily:"'Jost',sans-serif",textDecoration:'underline',opacity:0.7}}>
+            clear
+          </button>
+        )}
+      </div>
       <FI label="NOTES" value={f.notes} onChange={s('notes')} rows={2} />
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginTop:4}}>
         <div>
@@ -2148,7 +2214,44 @@ function EditPackageForm({ pkg, linkedCount, onSave, onDelete, onClose }) {
   );
 }
 
-// Recommend a class kind for booking based on the person's primary role
+// PackageTemplateForm — add/edit a package template. Same core fields as a
+// package MINUS per-purchase data (sessionsUsed, amountPaid-as-actual, dates).
+// Instead: default_amount (list price prefill), validity_days (expiry window in
+// days; blank = never expires), active, stripe_price_id (Phase 7).
+function PackageTemplateForm({ existing, onSave, onClose }) {
+  const [f, setF] = useState(existing || {
+    type:'class_package', name:'', totalSessions:10, defaultAmount:'',
+    paidVia:'stripe_tfb', validityDays:'', notes:'', active:true, stripePriceId:'',
+  });
+  const s = k => v => setF(x=>({...x,[k]:v}));
+  const valid = f.name.trim().length > 0;
+  return (
+    <Modal title={existing?`Edit Template: ${existing.name}`:"Add Package Template"} onClose={onClose} wide>
+      <FI label="TYPE" value={f.type} onChange={s('type')} opts={Object.entries(PKG_TYPES).map(([v,m])=>({v,l:m.label}))} />
+      <FI label="NAME / DESCRIPTION" value={f.name} onChange={s('name')} />
+      {f.type!=='drop_in' && (
+        <FI label="TOTAL SESSIONS" value={f.totalSessions} onChange={v=>s('totalSessions')(parseInt(v)||0)} type="number" />
+      )}
+      <div style={{display:'flex',gap:12}}>
+        <FI label="DEFAULT PRICE (£)" value={f.defaultAmount} onChange={s('defaultAmount')} type="number" half />
+        <FI label="DEFAULT PAID VIA" value={f.paidVia} onChange={s('paidVia')} opts={Object.entries(PAY_VIA).map(([v,l])=>({v,l}))} half />
+      </div>
+      <FI label="VALIDITY (DAYS — blank = never expires)" value={f.validityDays} onChange={v=>s('validityDays')(v===''?'':(parseInt(v)||''))} type="number" />
+      <FI label="NOTES" value={f.notes} onChange={s('notes')} rows={2} />
+      {/* Stripe price ID — populated in Phase 7. Shown now so templates can be
+          wired ahead of the webhook; safe to leave blank. */}
+      <FI label="STRIPE PRICE ID (Phase 7 — optional)" value={f.stripePriceId} onChange={s('stripePriceId')} />
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14,cursor:'pointer'}} onClick={()=>s('active')(!f.active)}>
+        <span style={{width:16,height:16,borderRadius:4,border:`1px solid ${f.active?C.gold:C.border}`,background:f.active?C.gold:'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:C.bg,fontSize:11,fontWeight:700}}>{f.active?'✓':''}</span>
+        <span style={{color:C.text,fontSize:13}}>Active (shown in the package picker)</span>
+      </div>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
+        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn onClick={()=>{if(valid){onSave({...f,totalSessions:parseInt(f.totalSessions)||0});onClose();}}} disabled={!valid}>{existing?'Save Changes':'Add Template'}</Btn>
+      </div>
+    </Modal>
+  );
+}
 const recommendedKindForPerson = (person) => {
   const role = (person.roles || [])[0];
   if(role === 'resident') return 'care_class';
@@ -2995,6 +3098,7 @@ function Sidebar({ view, nav, invoices, notes, projects=[], customOrgTypes, cust
       )}
 
       {!isPersonal && <Item name="comms_log" label="Recent Activity" icon="◷" />}
+      {!isPersonal && <Item name="package_templates" label="Package Templates" icon="❒" />}
 
       {/* Pushed to the bottom; flex:column on the parent + marginTop:auto on this wrapper */}
       <div style={{marginTop:'auto',padding:'14px 20px',borderTop:`1px solid ${C.border}`}}>
@@ -4721,6 +4825,86 @@ function ProjectsView({ projects, notes, nav, onAddProject, onSetStatus }) {
   );
 }
 
+// ─── PACKAGE TEMPLATES VIEW ──────────────────────────────────────────────────
+// Manage canonical package definitions. These prefill AddPackageForm and (Phase
+// 7) drive the Stripe webhook. Templates are copy-at-purchase: editing one never
+// touches packages already sold from it. Archive (active=false) hides a template
+// from the picker while keeping it for history; hard-delete is for mistakes.
+function PackageTemplatesView({ templates, nav, onAdd, onEdit, onSetActive, onDelete }) {
+  const isMobile = useIsMobile();
+  const [showArchived, setShowArchived] = useState(false);
+  const active = templates.filter(t => t.active).sort((a,b)=>(a.position-b.position)||a.name.localeCompare(b.name));
+  const archived = templates.filter(t => !t.active).sort((a,b)=>a.name.localeCompare(b.name));
+
+  const Card = ({ t }) => {
+    const color = PKG_TYPES[t.type]?.color || C.muted;
+    const [armed, setArmed] = useState(false);
+    return (
+      <div style={{background:C.card,border:`1px solid ${t.active?color+'55':C.border}`,borderRadius:8,padding:'14px 16px',display:'flex',alignItems:'center',gap:14}}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{color:C.text,fontSize:15,fontWeight:500}}>{t.name}</div>
+          <div style={{color:C.muted,fontSize:11.5,marginTop:3}}>
+            {PKG_TYPES[t.type]?.label}
+            {t.type!=='drop_in' && ` · ${t.totalSessions} sessions`}
+            {t.defaultAmount!=='' && ` · £${t.defaultAmount}`}
+            {` · ${t.validityDays ? `expires after ${t.validityDays} days` : 'never expires'}`}
+            {t.stripePriceId && ' · Stripe linked'}
+          </div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
+          <Btn variant="ghost" small onClick={()=>onEdit(t.id)}>Edit</Btn>
+          {t.active
+            ? <Btn variant="secondary" small onClick={()=>onSetActive(t.id, false)}>Archive</Btn>
+            : <Btn variant="secondary" small onClick={()=>onSetActive(t.id, true)}>Restore</Btn>}
+          {armed ? (
+            <button onClick={()=>onDelete(t.id)}
+              style={{background:C.red,border:'none',color:'#fff',cursor:'pointer',borderRadius:4,fontSize:11,padding:'4px 9px',fontFamily:"'Jost',sans-serif",fontWeight:500}}>
+              Confirm
+            </button>
+          ) : (
+            <button onClick={()=>setArmed(true)}
+              style={{background:'none',border:`1px solid ${C.red}66`,color:C.red,cursor:'pointer',borderRadius:4,fontSize:11,padding:'4px 9px',fontFamily:"'Jost',sans-serif"}}>
+              Delete
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{padding: isMobile ? '12px 12px 24px' : '24px 32px', maxWidth:760}}>
+      <PageHead subInfo={`${active.length} active`}
+        action={<Btn small onClick={onAdd}>+ New Template</Btn>}>
+        Package Templates
+      </PageHead>
+
+      {templates.length === 0 ? (
+        <Empty text="No templates yet." action="+ New Template" onAction={onAdd} />
+      ) : (
+        <>
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {active.map(t => <Card key={t.id} t={t} />)}
+            {active.length === 0 && <div style={{color:C.muted,fontSize:13,fontStyle:'italic',padding:'8px 2px'}}>No active templates.</div>}
+          </div>
+          {archived.length > 0 && (
+            <div style={{marginTop:24}}>
+              <div onClick={()=>setShowArchived(s=>!s)} style={{color:C.muted,fontSize:12,cursor:'pointer',marginBottom:10,letterSpacing:'0.5px',userSelect:'none'}}>
+                {showArchived?'▾':'▸'} Archived ({archived.length})
+              </div>
+              {showArchived && (
+                <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                  {archived.map(t => <Card key={t.id} t={t} />)}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── PROJECT DETAIL ─────────────────────────────────────────────────────────
 // One project: its name + status, its todos (notes carrying projectId), and a
 // free-text notes field. Todos can be added inline, completed, reopened, deleted.
@@ -6358,7 +6542,7 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
                       Edit button stops propagation so it doesn't also toggle. */}
                   <div onClick={()=>togglePkg(pk.id)} style={{cursor:'pointer'}}>
                     <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:pk.type!=='drop_in'?10:0,gap:12}}>
-                      <div><div style={{color:C.text,fontSize:15,fontWeight:500}}>{pk.name}</div><div style={{color:C.muted,fontSize:12,marginTop:2}}>{PKG_TYPES[pk.type]?.label} · {fmt(pk.datePurchased)}</div></div>
+                      <div><div style={{color:C.text,fontSize:15,fontWeight:500}}>{pk.name}</div><div style={{color:C.muted,fontSize:12,marginTop:2}}>{PKG_TYPES[pk.type]?.label} · {fmt(pk.datePurchased)}{pk.expiresAt && <> · <span style={{color: pk.expiresAt < today() ? C.red : C.muted}}>{pk.expiresAt < today() ? 'expired' : 'expires'} {fmt(pk.expiresAt)}</span></>}</div></div>
                       <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
                         <div style={{textAlign:'right'}}><div style={{color:C.gold,fontSize:14,fontWeight:500}}>£{pk.amountPaid}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{PAY_VIA[pk.paidVia]||pk.paidVia}</div></div>
                         <button onClick={(e)=>{e.stopPropagation();onEditPackage(pk.id);}}
@@ -7622,6 +7806,9 @@ export default function FeltBodyCRM() {
   const [attendance, setAttendance] = useState(SEED.attendance);
   const [notes, setNotes] = useState(SEED.notes);
   const [packages, setPackages] = useState(SEED.packages);
+  // Package templates: canonical package definitions used to prefill AddPackageForm
+  // and (Phase 7) the Stripe webhook. Managed via PackageTemplatesView.
+  const [packageTemplates, setPackageTemplates] = useState([]);
   const [invoices, setInvoices] = useState(SEED.invoices);
   const [forms, setForms] = useState(SEED.forms);
   // Projects: top-level "your work" entity (distinct from contacts/orgs). Holds
@@ -7691,6 +7878,7 @@ export default function FeltBodyCRM() {
         setHouseholdMembers(all.householdMembers || []);
         setSettings(all.settings || {});
         setProjects(all.projects || []);
+        setPackageTemplates(all.packageTemplates || []);
         setLoadStatus('ready');
       } catch (e) {
         if (cancelled) return;
@@ -7817,6 +8005,7 @@ export default function FeltBodyCRM() {
       case 'inbox': label = 'Inbox'; break;
       case 'threads': label = 'Threads'; break;
       case 'comms_log': label = 'Recent Activity'; break;
+      case 'package_templates': label = 'Package Templates'; break;
       case 'web_activity': label = 'Web Activity'; break;
       case 'projects': label = 'Projects'; break;
       case 'project_detail': {
@@ -8363,6 +8552,22 @@ export default function FeltBodyCRM() {
     data.packages.setSessionsUsed(id, next).catch(onError('Update package'));
   };
 
+  // ── Package templates
+  const addTemplate = (t) => data.packageTemplates.create(t)
+    .then(saved => setPackageTemplates(p => [...p, saved]))
+    .catch(onError('Add template'));
+  const updateTemplate = (id, t) => data.packageTemplates.update(id, t)
+    .then(saved => setPackageTemplates(p => p.map(x => x.id === id ? saved : x)))
+    .catch(onError('Update template'));
+  const setTemplateActive = (id, active) => {
+    setPackageTemplates(p => p.map(x => x.id === id ? { ...x, active } : x));
+    data.packageTemplates.setActive(id, active).catch(onError('Update template'));
+  };
+  const deleteTemplate = (id) => {
+    setPackageTemplates(p => p.filter(x => x.id !== id));
+    data.packageTemplates.hardDelete(id).catch(onError('Delete template'));
+  };
+
   // ── Invoices
   const addInvoice = (inv) => data.invoices.create(inv)
     .then(saved => setInvoices(p => [...p, saved]))
@@ -8486,7 +8691,7 @@ export default function FeltBodyCRM() {
           }}
           onClose={close} />;
       }
-      case 'add_package': return <AddPackageForm personId={modal.personId} onSave={addPackage} onClose={close} />;
+      case 'add_package': return <AddPackageForm personId={modal.personId} onSave={addPackage} onClose={close} templates={packageTemplates} />;
       case 'edit_package': {
         const pk = packages.find(x => x.id === modal.packageId);
         if(!pk) return null;
@@ -8497,6 +8702,12 @@ export default function FeltBodyCRM() {
           onSave={u => updatePackage(pk.id, u)}
           onDelete={() => deletePackage(pk.id)}
           onClose={close} />;
+      }
+      case 'add_template': return <PackageTemplateForm onSave={addTemplate} onClose={close} />;
+      case 'edit_template': {
+        const t = packageTemplates.find(x => x.id === modal.templateId);
+        if(!t) return null;
+        return <PackageTemplateForm existing={t} onSave={u => updateTemplate(t.id, u)} onClose={close} />;
       }
       case 'book': {
         const person = people.find(p => p.id === modal.personId);
@@ -8574,6 +8785,11 @@ export default function FeltBodyCRM() {
         onAssign={assignNoteToPerson}
         onDiscard={deleteNote} />;
       case 'comms_log': return <RecentActivityView notes={notes} people={people} classes={classes} orgs={orgs} attendance={attendance} packages={packages} projects={projects} nav={nav} />;
+      case 'package_templates': return <PackageTemplatesView templates={packageTemplates} nav={nav}
+        onAdd={()=>setModal({type:'add_template'})}
+        onEdit={(id)=>setModal({type:'edit_template',templateId:id})}
+        onSetActive={setTemplateActive}
+        onDelete={deleteTemplate} />;
       case 'web_activity': return <WebActivityView notes={notes} people={people} nav={nav}
         onMarkRead={markWebEventRead} onMarkAllRead={markAllWebEventsRead} />;
       case 'projects': return <ProjectsView projects={projects} notes={notes} nav={nav}
