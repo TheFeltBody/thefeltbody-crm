@@ -1611,6 +1611,24 @@ function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onClose, orgs }) {
         <FI label="RATE (£)" value={f.rate||''} onChange={s('rate')} type="number" half />
       </div>
       <FI label="PAYMENT MODEL" value={f.paymentModel||'per_person'} onChange={s('paymentModel')} opts={Object.entries(PAYMENT_MODELS).map(([v,m])=>({v,l:m.label}))} />
+      {(f.paymentModel||'per_person') === 'per_person' && (
+        <div style={{marginTop:8,marginBottom:14,padding:'14px 16px',border:`1px solid ${C.border}`,borderRadius:6,background:C.surf}}>
+          <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',color:f.isBookable?C.gold:C.text,fontSize:14}}>
+            <input type="checkbox" checked={!!f.isBookable} onChange={e=>s('isBookable')(e.target.checked)} style={{accentColor:C.gold,width:16,height:16}} />
+            Publish to website (bookable on thefeltbody.com)
+          </label>
+          {f.isBookable && (
+            <div style={{marginTop:14}}>
+              <FI label="CAPACITY PER CLASS (blank = uncapped)" value={f.capacity ?? ''} onChange={s('capacity')} type="number" />
+              <FI label="WEBSITE DESCRIPTION (optional)" value={f.publicBlurb ?? ''} onChange={s('publicBlurb')} />
+              <div style={{color:C.muted,fontSize:11,marginTop:2}}>
+                The rate above (£{f.rate||0}) is shown to customers as the per-place price.
+                “Update this class only” publishes just this date; “Update this &amp; future” publishes every class from here on.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
         <Btn variant="secondary" onClick={()=>{onSaveFuture(f);onClose();}}>Update this & future</Btn>
