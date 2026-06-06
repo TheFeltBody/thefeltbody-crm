@@ -759,8 +759,6 @@ const generateSeriesClasses = (series, count=12) => {
     isBookable: series.isBookable ?? false,
     capacity: series.capacity ?? null,
     publicBlurb: series.publicBlurb || '',
-    joinUrl: series.joinUrl || '',
-    bookingInfo: series.bookingInfo || '',
   }));
 };
 
@@ -1459,9 +1457,7 @@ function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDa
         paymentModel: defaultPaymentModel || '',
         isBookable: false,
         capacity: '',
-        publicBlurb: '',
-        joinUrl: '',
-        bookingInfo: ''
+        publicBlurb: ''
       });
   const s = k => v => setF(x=>({...x,[k]:v}));
   const isNew = !existing;
@@ -1578,11 +1574,6 @@ function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDa
             <div style={{marginTop:14}}>
               <FI label="CAPACITY PER CLASS (blank = uncapped)" value={f.capacity} onChange={s('capacity')} type="number" />
               <FI label="WEBSITE DESCRIPTION (optional)" value={f.publicBlurb} onChange={s('publicBlurb')} />
-              <FI label="JOINING LINK (Zoom / Meet / map — optional)" value={f.joinUrl ?? ''} onChange={s('joinUrl')} placeholder="https://…" />
-              <FI label="JOINING NOTES (optional)" value={f.bookingInfo ?? ''} onChange={s('bookingInfo')} />
-              <div style={{color:C.muted,fontSize:11,marginTop:2}}>
-                The joining link appears as a button in the booking confirmation email; notes appear beneath it.
-              </div>
               <div style={{color:C.muted,fontSize:11,marginTop:2}}>
                 The rate above (£{f.rate||0}) is shown to customers as the per-place price.
                 {isNew && f.recurrence && f.recurrence!=='one_off' && ' Applies to every class in this series.'}
@@ -1632,8 +1623,6 @@ function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onClose, orgs }) {
             <div style={{marginTop:14}}>
               <FI label="CAPACITY PER CLASS (blank = uncapped)" value={f.capacity ?? ''} onChange={s('capacity')} type="number" />
               <FI label="WEBSITE DESCRIPTION (optional)" value={f.publicBlurb ?? ''} onChange={s('publicBlurb')} />
-              <FI label="JOINING LINK (Zoom / Meet / map — optional)" value={f.joinUrl ?? ''} onChange={s('joinUrl')} placeholder="https://…" />
-              <FI label="JOINING NOTES (optional)" value={f.bookingInfo ?? ''} onChange={s('bookingInfo')} />
               <div style={{color:C.muted,fontSize:11,marginTop:2}}>
                 The rate above (£{f.rate||0}) is shown to customers as the per-place price.
                 “Update this class only” publishes just this date; “Update this &amp; future” publishes every class from here on.
@@ -8447,7 +8436,6 @@ export default function FeltBodyCRM() {
           orgId: f.orgId || null, startDate: f.date, time: f.time || '',
           duration, rate: parseFloat(f.rate) || 0, paymentModel,
           isBookable: f.isBookable ?? false, capacity: f.capacity, publicBlurb: f.publicBlurb || '',
-          joinUrl: f.joinUrl || '', bookingInfo: f.bookingInfo || '',
         });
         setSeries(p => [...p, seriesRow]);
         const instances = generateSeriesClasses(seriesRow, parseInt(f.repeatCount) || 12);
@@ -8459,7 +8447,6 @@ export default function FeltBodyCRM() {
           location: f.location, orgId: f.orgId || null, seriesId: null,
           rate: parseFloat(f.rate) || 0, paymentModel,
           isBookable: f.isBookable ?? false, capacity: f.capacity, publicBlurb: f.publicBlurb || '',
-          joinUrl: f.joinUrl || '', bookingInfo: f.bookingInfo || '',
         });
         setClasses(p => [...p, created]);
       }
@@ -8485,8 +8472,6 @@ export default function FeltBodyCRM() {
           isBookable: updated.isBookable ?? false,
           capacity: updated.capacity,
           publicBlurb: updated.publicBlurb || '',
-          joinUrl: updated.joinUrl || '',
-          bookingInfo: updated.bookingInfo || '',
         };
         const updatedRows = await data.classes.updateFutureInSeries(cls.seriesId, cls.date, patch);
         // Merge the patched fields back into local state for affected rows
@@ -8504,8 +8489,6 @@ export default function FeltBodyCRM() {
           isBookable: updated.isBookable ?? false,
           capacity: updated.capacity,
           publicBlurb: updated.publicBlurb || '',
-          joinUrl: updated.joinUrl || '',
-          bookingInfo: updated.bookingInfo || '',
         };
         const savedSeries = await data.series.update(cls.seriesId, seriesPatch);
         setSeries(p => p.map(s => s.id === cls.seriesId ? savedSeries : s));

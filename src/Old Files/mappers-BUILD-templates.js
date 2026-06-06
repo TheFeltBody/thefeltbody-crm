@@ -153,8 +153,6 @@ export const seriesFromDb = (row) => ({
   isBookable: row.is_bookable ?? false,
   capacity: row.capacity ?? '',          // '' keeps the number input controlled
   publicBlurb: row.public_blurb || '',
-  joinUrl: row.join_url || '',
-  bookingInfo: row.booking_info || '',
 });
 
 export const seriesToDb = (s) => ({
@@ -171,8 +169,6 @@ export const seriesToDb = (s) => ({
   is_bookable: s.isBookable ?? false,
   capacity: numOrNull(s.capacity),       // NULL = uncapped
   public_blurb: s.publicBlurb ? String(s.publicBlurb).trim() || null : null,
-  join_url: s.joinUrl ? String(s.joinUrl).trim() || null : null,
-  booking_info: s.bookingInfo ? String(s.bookingInfo).trim() || null : null,
 });
 
 // ─── Sessions (UI: "classes") ────────────────────────────────────────────────
@@ -198,8 +194,6 @@ export const classFromDb = (row) => ({
   isBookable: row.is_bookable ?? false,
   capacity: row.capacity ?? '',
   publicBlurb: row.public_blurb || '',
-  joinUrl: row.join_url || '',
-  bookingInfo: row.booking_info || '',
 });
 
 export const classToDb = (c) => ({
@@ -218,8 +212,6 @@ export const classToDb = (c) => ({
   is_bookable: c.isBookable ?? false,
   capacity: numOrNull(c.capacity),
   public_blurb: c.publicBlurb ? String(c.publicBlurb).trim() || null : null,
-  join_url: c.joinUrl ? String(c.joinUrl).trim() || null : null,
-  booking_info: c.bookingInfo ? String(c.bookingInfo).trim() || null : null,
 });
 
 // Partial-patch mapper: only translates keys that are actually present in `patch`.
@@ -246,8 +238,6 @@ export const classPatchToDb = (patch) => {
   if (patch.isBookable !== undefined) out.is_bookable = patch.isBookable;
   if (patch.capacity !== undefined) out.capacity = numOrNull(patch.capacity);
   if (patch.publicBlurb !== undefined) out.public_blurb = patch.publicBlurb || null;
-  if (patch.joinUrl !== undefined) out.join_url = patch.joinUrl ? String(patch.joinUrl).trim() || null : null;
-  if (patch.bookingInfo !== undefined) out.booking_info = patch.bookingInfo ? String(patch.bookingInfo).trim() || null : null;
   return out;
 };
 
