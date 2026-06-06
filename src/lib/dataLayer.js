@@ -387,6 +387,8 @@ export const classes = {
       propagatePatch.capacity = (n === null || isNaN(n)) ? null : n;
     }
     if (patch.publicBlurb !== undefined) propagatePatch.public_blurb = patch.publicBlurb || null;
+    if (patch.joinUrl !== undefined) propagatePatch.join_url = patch.joinUrl ? String(patch.joinUrl).trim() || null : null;
+    if (patch.bookingInfo !== undefined) propagatePatch.booking_info = patch.bookingInfo ? String(patch.bookingInfo).trim() || null : null;
 
     // Guard: if a caller passes an empty or fully-undefined patch, Supabase would
     // run a no-op update across every future row in the series. Bail early.
