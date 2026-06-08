@@ -352,8 +352,13 @@ const packageRemaining = (pk, attendance) => {
 // Types that don't show a session-count / depletion UI:
 //   drop_in = single session (no countdown), monthly_unlimited = never depletes.
 const isCountlessPkg = (type) => type === 'drop_in' || type === 'monthly_unlimited';
-const packagePerSessionValue = (pk) => {
-  if(!pk || !pk.totalSessions || pk.totalSessions <= 0) return 0;
+const packagePerSessionValue = (pk, attendance) => {
+  if(!pk) return 0;
+  if(pk.type === 'monthly_unlimited') {
+    const used = (attendance || []).filter(a => a.packageId === pk.id && a.paymentStatus === 'package').length;
+    return used > 0 ? (pk.amountPaid || 0) / used : 0;
+  }
+  if(!pk.totalSessions || pk.totalSessions <= 0) return 0;
   return (pk.amountPaid || 0) / pk.totalSessions;
 };
 // Revenue a single class has generated — sum of drop-in payments + pro-rated package value.
@@ -367,7 +372,7 @@ const classRevenue = (cls, attendance, packages) => {
       total += a.paidAmount || 0;
     } else if(a.paymentStatus === 'package' && a.packageId) {
       const pk = packages.find(p => p.id === a.packageId);
-      if(pk) total += packagePerSessionValue(pk);
+      if(pk) total += packagePerSessionValue(pk, attendance);
     }
   });
   return total;
@@ -6924,7 +6929,7 @@ function ClassDetail({ cls, org, people, attendance, notes, series, forms, packa
   const isMobile = useIsMobile();  const [expanded, setExpanded] = useState(null); // { type:'note'|'payment', personId }
   // Privacy mode for in-class teaching: by default we hide rates and payment amounts so
   // a client glancing at the screen doesn't see what we charge. Toggle in the header.
-  const [showMoney, setShowMoney] = useState(false);
+  const [showMoney, setShowMoney] = useLocalStorage('fbc.classDetail.showMoney', false);
   const reg = attendance.filter(a=>a.classId===cls.id).map(a=>({...a,person:people.find(p=>p.id===a.personId)})).filter(a=>a.person);
   const ser = series.find(s=>s.id===cls.seriesId);
   const kindKey = classKindKey(cls, org);
@@ -6948,13 +6953,13 @@ function ClassDetail({ cls, org, people, attendance, notes, series, forms, packa
       } else if(st === 'package') {
         viaPackage++;
         const pk = packages.find(p => p.id === r.packageId);
-        if(pk) totalPkgValue += packagePerSessionValue(pk);
+        if(pk) totalPkgValue += packagePerSessionValue(pk, attendance);
       } else {
         unpaid++;
       }
     });
     return { unpaid, paid, viaPackage, totalCash, totalPkgValue, totalRevenue: totalCash + totalPkgValue };
-  }, [reg, tracksPayment, packages]);
+  }, [reg, tracksPayment, packages, attendance]);
 
   return (
     <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px',maxWidth:920}}>
@@ -7840,7 +7845,7 @@ export default function FeltBodyCRM() {
   // UI lens only — one data store. Personal contacts carry the personal_contact
   // role; personal orgs are type 'personal'. Switching mode filters what's shown
   // and pre-tags new records, but does not partition the data.
-  const [mode, setMode] = useState('client');
+  const [mode, setMode] = useLocalStorage('fbc.mode', 'client');
   const [orgs, setOrgs] = useState(SEED.orgs);
   const [people, setPeople] = useState(SEED.people);
   const [series, setSeries] = useState(SEED.series);
