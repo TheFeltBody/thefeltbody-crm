@@ -4392,12 +4392,30 @@ function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey, o
           </div>
         </div>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: isMobile ? '14px' : '16px 4px' }}>
-          {t.messages.map(m => <Message key={m.id} m={m} />)}
-          <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: 4, marginBottom: 12 }}>
-            <Btn small onClick={() => { const r = buildReply(t); if (r) setReplyTo(r); }}>
-              ↩ Reply
-            </Btn>
-          </div>
+          {(() => {
+            // Newest message first, then the Reply button directly underneath
+            // it, then the older messages below. `.slice()` so we don't mutate
+            // the shared thread array. createdAt tiebreaker keeps same-day
+            // messages ordered correctly (otherwise equal `date` values render
+            // in arbitrary order).
+            const ordered = t.messages.slice().sort((a, b) => {
+              const d = new Date(b.date) - new Date(a.date);
+              if (d !== 0) return d;
+              return new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date);
+            });
+            const [newest, ...older] = ordered;
+            return (
+              <>
+                {newest && <Message key={newest.id} m={newest} />}
+                <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: 4, marginBottom: 12 }}>
+                  <Btn small onClick={() => { const r = buildReply(t); if (r) setReplyTo(r); }}>
+                    ↩ Reply
+                  </Btn>
+                </div>
+                {older.map(m => <Message key={m.id} m={m} />)}
+              </>
+            );
+          })()}
         </div>
       </div>
     );
@@ -6570,9 +6588,6 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
   // its last state. Collapsed → header (avatar + name) only; the body and the
   // household line are hidden.
   const [infoOpen, setInfoOpen] = useLocalStorage('felt.personDetail.infoOpen', true);
-  // 'bookings' is a mobile-only tab. If we land on desktop with it persisted,
-  // fall back so the right column isn't blank (bookings live in the left col).
-  useEffect(() => { if (!isMobile && tab === 'bookings') setTab('notes'); }, [isMobile, tab]);
   const pPkgs=packages.filter(pk=>pk.personId===person.id);
   // Payments tab data: three sources merged into one chronological list —
   //   • drop-in payments  (attendance.paymentStatus==='paid', has paidAmount)
@@ -6817,13 +6832,9 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
           </div>
           <ContactDatesCard anchor={{personId: person.id}} contactDates={contactDates}
             onAdd={onAddContactDate} onUpdate={onUpdateContactDate} onRemove={onRemoveContactDate} />
-          {/* Bookings — desktop only here; on mobile it's the 4th right-column tab. */}
-          {!isMobile && (
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'16px 20px'}}>
-            <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:12}}>BOOKINGS</div>
-            {bookingsList(true)}
-          </div>
-          )}
+          {/* Bookings now lives in the right-column tab row on both mobile and
+              desktop (Comms · Bookings · Packages · Payments). The old desktop
+              left-column card was removed to avoid duplication. */}
         </div>
         <div>
           {isMobile ? (
@@ -6834,9 +6845,9 @@ function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, cla
               {id:'payments', icon:'💷', name:'Payments', count:pPayments.length},
             ]} />
           ) : (
-            <Tabs tabs={[{id:'notes',label:`Comms (${pNotes.length})`},{id:'packages',label:`Packages (${pPkgs.length})`},{id:'payments',label:`Payments (${pPayments.length})`}]} active={tab} onChange={setTab} />
+            <Tabs tabs={[{id:'notes',label:`Comms (${pNotes.length})`},{id:'bookings',label:`Bookings (${pClasses.length})`},{id:'packages',label:`Packages (${pPkgs.length})`},{id:'payments',label:`Payments (${pPayments.length})`}]} active={tab} onChange={setTab} />
           )}
-          {tab==='bookings'&&isMobile&&<>
+          {tab==='bookings'&&<>
             {bookingsList(false)}
           </>}
           {tab==='notes'&&<>
