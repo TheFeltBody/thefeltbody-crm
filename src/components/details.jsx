@@ -50,6 +50,27 @@ export function ProjectDetail({ project, notes, people, nav, backInfo,
   const doneTodos = todos.filter(t => t.completed)
     .sort((a,b) => (b.completedAt||b.date||'').localeCompare(a.completedAt||a.date||''));
 
+  // Copy open to-dos to clipboard as a plain bullet list (handy for sharing a
+  // shopping list etc.). Falls back to a hidden textarea + execCommand on
+  // browsers/contexts where the async clipboard API is unavailable.
+  const [copied, setCopied] = useState(false);
+  const copyList = async () => {
+    const lines = openTodos.map(t => `• ${t.text}`);
+    if (!lines.length) return;
+    const text = lines.join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      try { document.execCommand('copy'); } catch {}
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
+
   const [justAdded, setJustAdded] = useState(false);
   const addTodo = async () => {
     const text = newTodo.trim();
@@ -168,9 +189,14 @@ export function ProjectDetail({ project, notes, people, nav, backInfo,
       <PageHead back={backInfo ? backInfo.label : 'Projects'} onBack={()=>nav('projects')} sticky
         subInfo={isDone ? 'completed' : `${openTodos.length} open`}
         action={
-          isDone
-            ? <Btn variant="ghost" small onClick={()=>onSetStatus(project.id,'active')}>Reopen</Btn>
-            : <Btn variant="secondary" small onClick={()=>onSetStatus(project.id,'done')}>Mark done</Btn>
+          <>
+            {openTodos.length > 0 && (
+              <Btn variant="ghost" small onClick={copyList}>{copied ? 'Copied ✓' : 'Copy list'}</Btn>
+            )}
+            {isDone
+              ? <Btn variant="ghost" small onClick={()=>onSetStatus(project.id,'active')}>Reopen</Btn>
+              : <Btn variant="secondary" small onClick={()=>onSetStatus(project.id,'done')}>Mark done</Btn>}
+          </>
         }>
         {editingName ? (
           <input
