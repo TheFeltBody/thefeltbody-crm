@@ -1900,7 +1900,7 @@ export function RecentActivityView({ notes, people, classes, orgs, attendance, p
 // is read + navigate only — clicking a member opens their PersonDetail. No
 // dedicated household detail page (decided V1): the inline expand IS the detail.
 
-export function HouseholdsList({ households, householdMembers, people, nav }) {
+export function HouseholdsList({ households, householdMembers, people, nav, onEditHousehold }) {
   const isMobile = useIsMobile();
   const [q, setQ] = useState('');
   const [sort, setSort] = useState('name'); // 'name' | 'size'
@@ -1976,6 +1976,12 @@ export function HouseholdsList({ households, householdMembers, people, nav }) {
                 {h.notes && <div style={{color:C.muted,fontSize:12,marginTop:2,fontStyle:'italic',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{h.notes}</div>}
               </div>
               <span style={{color:C.muted,fontSize:12,flexShrink:0}}>{members.length} {members.length===1?'member':'members'}</span>
+              {onEditHousehold && members.length > 0 && (
+                <button onClick={(e)=>{e.stopPropagation();onEditHousehold(h.id);}}
+                  style={{background:'none',border:`1px solid ${C.border}`,color:C.gold,cursor:'pointer',borderRadius:6,fontSize:11,padding:'4px 10px',flexShrink:0,fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>
+                  Edit
+                </button>
+              )}
             </div>
             {isOpen && (
               <div style={{borderTop:`1px solid ${C.border}`,padding:'6px 14px 10px 40px'}}>
@@ -2005,8 +2011,30 @@ export function HouseholdsList({ households, householdMembers, people, nav }) {
 // doesn't need one-open-at-a-time). Panels: Households, upcoming birthdays +
 // anniversaries (recurring contact_dates), and active personal projects.
 
-export function PersonalDashboard({ people, orgs, households, householdMembers, contactDates, projects=[], nav }) {
+export function PersonalDashboard({ people, orgs, households, householdMembers, contactDates, notes=[], projects=[], nav }) {
   const isMobile = useIsMobile();
+  // Which home-member rows are expanded to show their recent interactions.
+  const [expandedMember, setExpandedMember] = useState(() => new Set());
+  const toggleMember = (id) => setExpandedMember(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+  // Last 5 interactions (any kind) per person, newest first. Built once over all
+  // notes so an expand is a cheap lookup rather than a re-scan per row.
+  const recentByPerson = useMemo(() => {
+    const map = new Map();
+    notes.forEach(n => {
+      if (!n.personId) return;
+      if (!map.has(n.personId)) map.set(n.personId, []);
+      map.get(n.personId).push(n);
+    });
+    map.forEach(list => list.sort((a,b) => {
+      const d = new Date(b.date) - new Date(a.date);
+      return d !== 0 ? d : String(b.id).localeCompare(String(a.id));
+    }));
+    return map;
+  }, [notes]);
 
   // Personal contacts only (mirrors BirthdaysView scoping).
   const personalIds = useMemo(() => new Set(
@@ -2080,14 +2108,44 @@ export function PersonalDashboard({ people, orgs, households, householdMembers, 
           <Empty text="Home household not found. Create or rename one to match, or browse all households." />
         ) : homeMembers.length === 0 ? (
           <div style={{color:C.muted,fontSize:13,fontStyle:'italic',padding:'4px 0'}}>No members yet.</div>
-        ) : homeMembers.map(m => (
-          <div key={m.id} onClick={()=>nav('person_detail',{personId:m.person.id})}
-            style={{display:'flex',alignItems:'center',gap:10,padding:'9px 0',cursor:'pointer',borderBottom:`1px solid ${C.border}44`}}>
-            <span style={{color:C.muted,fontSize:13,width:16,flexShrink:0}}>◉</span>
-            <span style={{flex:1,minWidth:0,color:C.text,fontSize:14,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{m.person.name}</span>
-            <span style={{color:C.muted,fontSize:11,flexShrink:0}}>{RELATIONSHIP_LABELS[m.relationship] || 'Other'}</span>
-          </div>
-        ))}
+        ) : homeMembers.map(m => {
+          const isOpen = expandedMember.has(m.person.id);
+          const recent = (recentByPerson.get(m.person.id) || []).slice(0, 5);
+          return (
+            <div key={m.id} style={{borderBottom:`1px solid ${C.border}44`}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,padding:'9px 0'}}>
+                <span style={{color:C.muted,fontSize:13,width:16,flexShrink:0}}>◉</span>
+                {/* Name → contact */}
+                <span onClick={()=>nav('person_detail',{personId:m.person.id})}
+                  style={{flex:1,minWidth:0,color:C.text,fontSize:14,cursor:'pointer',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{m.person.name}</span>
+                <span style={{color:C.muted,fontSize:11,flexShrink:0}}>{RELATIONSHIP_LABELS[m.relationship] || 'Other'}</span>
+                {/* Right side → expand last 5 interactions */}
+                <span onClick={()=>toggleMember(m.person.id)} title={isOpen?'Hide recent notes':'Show recent notes'}
+                  style={{color:C.muted,fontSize:12,width:18,flexShrink:0,textAlign:'center',cursor:'pointer',transition:'transform 0.12s',transform:isOpen?'rotate(90deg)':'none'}}>▸</span>
+              </div>
+              {isOpen && (
+                <div style={{padding:'2px 0 10px 26px'}}>
+                  {recent.length === 0 ? (
+                    <div style={{color:C.muted,fontSize:12,fontStyle:'italic',padding:'4px 0'}}>No notes yet.</div>
+                  ) : recent.map(n => {
+                    const meta = KIND_META[n.kind] || KIND_META.note || {};
+                    const head = (n.subject && n.subject.trim()) ? n.subject.trim() : (n.text || '').trim();
+                    return (
+                      <div key={n.id} onClick={()=>nav('person_detail',{personId:m.person.id,highlightNoteId:n.id})}
+                        style={{display:'flex',gap:8,padding:'6px 0',cursor:'pointer',borderBottom:`1px solid ${C.border}22`}}>
+                        <span style={{color:C.muted,fontSize:10,width:62,flexShrink:0,paddingTop:2}}>{fmtRel ? fmtRel(n.date) : n.date}</span>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{color:C.text,fontSize:13,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{head || <span style={{color:C.muted,fontStyle:'italic'}}>(no content)</span>}</div>
+                          <div style={{color:C.muted,fontSize:10,marginTop:1,letterSpacing:'0.3px',textTransform:'uppercase'}}>{meta.label || n.kind}{n.direction?` · ${n.direction}`:''}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </Card>
 
       <Card title="Upcoming — birthdays & anniversaries" onMore={()=>nav('birthdays')}>

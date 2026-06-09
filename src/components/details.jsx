@@ -571,7 +571,8 @@ export function OrgDetail({ org, people, classes, invoices, notes=[], contactDat
     <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={<Btn small={isMobile} variant="secondary" onClick={onEdit}>Edit</Btn>}>{org.name}</PageHead>
       <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '260px 1fr',gap: isMobile ? 14 : 24}}>
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,alignSelf:'start',overflow:'hidden'}}>
+        <div>
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,alignSelf:'start',overflow:'hidden',marginBottom:14}}>
           <div onClick={()=>setInfoOpen(v=>!v)}
             style={{position: isMobile ? 'static' : 'sticky',top: isMobile?97:0,zIndex:4,background:C.card,display:'flex',alignItems:'center',gap:10,padding:'14px 20px',cursor:'pointer',borderBottom: infoOpen?`1px solid ${C.border}`:'none'}}>
             <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',gap:6,alignItems:'flex-start'}}>
@@ -593,6 +594,7 @@ export function OrgDetail({ org, people, classes, invoices, notes=[], contactDat
         </div>
         <ContactDatesCard anchor={{orgId: org.id}} contactDates={contactDates}
           onAdd={onAddContactDate} onUpdate={onUpdateContactDate} onRemove={onRemoveContactDate} />
+        </div>
         <div>
           {isMobile ? (
             <MobileTabBar topOffset={97} tabs={mobileTabs} active={tab} onChange={setTab} />
@@ -744,6 +746,7 @@ export function HouseholdModal({ person, household, roster, allPeople, household
   const [addPersonId, setAddPersonId] = useState('');
   const [addRel, setAddRel] = useState('child');
   const [addBusy, setAddBusy] = useState(false);
+  const [addQuery, setAddQuery] = useState(''); // search filter for the existing-contact picker
   const [confirmDelete, setConfirmDelete] = useState(false);
   // "+ Add new contact" sub-mode: when set, we show AddPersonForm and, on save,
   // create the person + add them to this household with `newContactRel`. The
@@ -778,6 +781,16 @@ export function HouseholdModal({ person, household, roster, allPeople, household
   const addable = (allPeople || [])
     .filter(p => !inThisHousehold.has(p.id))
     .sort((a,b) => a.name.localeCompare(b.name));
+  // Search-filtered subset of `addable` for the existing-contact picker. Matches
+  // name or email. If the currently-selected person drops out of the filter,
+  // the select simply shows them not-listed; we keep addPersonId so a stray
+  // keystroke doesn't silently clear a deliberate selection.
+  const addableFiltered = (() => {
+    const needle = addQuery.trim().toLowerCase();
+    if (!needle) return addable;
+    return addable.filter(p =>
+      p.name.toLowerCase().includes(needle) || (p.email||'').toLowerCase().includes(needle));
+  })();
 
   const relOpts = RELATIONSHIP_KEYS.map(k => ({ v:k, l:RELATIONSHIP_LABELS[k] }));
 
@@ -920,11 +933,16 @@ export function HouseholdModal({ person, household, roster, allPeople, household
           <div style={{display:'flex',gap:8,alignItems:'flex-end',flexWrap:'wrap',marginBottom:10}}>
             <div style={{flex:'2 1 200px',minWidth:0}}>
               <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>EXISTING CONTACT</label>
-              <select value={addPersonId} onChange={e=>setAddPersonId(e.target.value)}
+              <input value={addQuery} onChange={e=>setAddQuery(e.target.value)} placeholder="Search by name or email…"
+                style={{width:'100%',background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif",marginBottom:6}} />
+              <select value={addPersonId} onChange={e=>setAddPersonId(e.target.value)} size={addQuery.trim() ? Math.min(6, addableFiltered.length + 1) : 1}
                 style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}}>
                 <option value="">— select contact —</option>
-                {addable.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                {addableFiltered.map(p=><option key={p.id} value={p.id}>{p.name}{p.email?` · ${p.email}`:''}</option>)}
               </select>
+              {addQuery.trim() && addableFiltered.length===0 && (
+                <div style={{color:C.muted,fontSize:11,marginTop:4,fontStyle:'italic'}}>No contacts match “{addQuery.trim()}”.</div>
+              )}
             </div>
             <div style={{flex:'1 1 120px'}}>
               <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>RELATIONSHIP</label>
@@ -971,6 +989,36 @@ export function HouseholdModal({ person, household, roster, allPeople, household
 // Handlers come from the parent (server-confirmed create, optimistic update/
 // delete). Rows sort by upcoming occurrence (recurring) then raw date.
 
+// Hoisted to module scope so it keeps a stable component identity across
+// parent re-renders. Defining it inside ContactDatesCard gave it a new
+// identity on every keystroke (setD → re-render → new fn → remount), which
+// blew away focus mid-type — the documented nested-component remount bug.
+function DateForm({ d, setD, onSave, onCancel, saveLabel }) {
+  const canSave = d.label.trim() && d.date;
+  return (
+    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'12px 14px',marginBottom:8}}>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}>
+        <input type="date" value={d.date} onChange={e=>setD({...d,date:e.target.value})}
+          style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,padding:'7px 10px',color:C.text,fontSize:13,fontFamily:"'Jost',sans-serif"}} />
+        <input value={d.label} onChange={e=>setD({...d,label:e.target.value})} placeholder="Label (e.g. Wedding, Met)"
+          style={{flex:1,minWidth:140,background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,padding:'7px 10px',color:C.text,fontSize:13,fontFamily:"'Jost',sans-serif"}} />
+      </div>
+      <input value={d.note} onChange={e=>setD({...d,note:e.target.value})} placeholder="Note (optional)"
+        style={{width:'100%',background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,padding:'7px 10px',color:C.text,fontSize:13,fontFamily:"'Jost',sans-serif",marginBottom:8}} />
+      <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+        <label style={{display:'flex',alignItems:'center',gap:6,color:C.muted,fontSize:12,cursor:'pointer'}}>
+          <input type="checkbox" checked={d.recurring} onChange={e=>setD({...d,recurring:e.target.checked})} style={{accentColor:C.gold}} />
+          Repeats every year
+        </label>
+        <div style={{marginLeft:'auto',display:'flex',gap:6}}>
+          <Btn variant="secondary" small onClick={onCancel}>Cancel</Btn>
+          <Btn small onClick={onSave} disabled={!canSave}>{saveLabel}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ContactDatesCard({ anchor, contactDates, onAdd, onUpdate, onRemove }) {
   const mine = useMemo(() => {
     const list = contactDates.filter(d =>
@@ -1008,29 +1056,6 @@ export function ContactDatesCard({ anchor, contactDates, onAdd, onUpdate, onRemo
     onUpdate(editId, { ...anchor, label: editDraft.label.trim(), date: editDraft.date, recurring: editDraft.recurring, note: editDraft.note.trim() });
     setEditId(null);
   };
-
-  const DateForm = ({ d, setD, onSave, onCancel, saveLabel }) => (
-    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'12px 14px',marginBottom:8}}>
-      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}>
-        <input type="date" value={d.date} onChange={e=>setD({...d,date:e.target.value})}
-          style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,padding:'7px 10px',color:C.text,fontSize:13,fontFamily:"'Jost',sans-serif"}} />
-        <input value={d.label} onChange={e=>setD({...d,label:e.target.value})} placeholder="Label (e.g. Wedding, Met)"
-          style={{flex:1,minWidth:140,background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,padding:'7px 10px',color:C.text,fontSize:13,fontFamily:"'Jost',sans-serif"}} />
-      </div>
-      <input value={d.note} onChange={e=>setD({...d,note:e.target.value})} placeholder="Note (optional)"
-        style={{width:'100%',background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,padding:'7px 10px',color:C.text,fontSize:13,fontFamily:"'Jost',sans-serif",marginBottom:8}} />
-      <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
-        <label style={{display:'flex',alignItems:'center',gap:6,color:C.muted,fontSize:12,cursor:'pointer'}}>
-          <input type="checkbox" checked={d.recurring} onChange={e=>setD({...d,recurring:e.target.checked})} style={{accentColor:C.gold}} />
-          Repeats every year
-        </label>
-        <div style={{marginLeft:'auto',display:'flex',gap:6}}>
-          <Btn variant="secondary" small onClick={onCancel}>Cancel</Btn>
-          <Btn small onClick={onSave} disabled={!canSave(d)}>{saveLabel}</Btn>
-        </div>
-      </div>
-    </div>
-  );
 
   return (
     <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:12,padding:'16px 18px',marginBottom:14}}>

@@ -6,7 +6,7 @@ import { MobileUIContext, TypesContext, buildOrgTypes, buildPersonRoles, fmt, ge
 import { Empty } from "./components/primitives.jsx";
 import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, EditNoteForm, EditPackageForm, EditSeriesClassForm, MergePeopleForm, PackageTemplateForm } from "./components/forms.jsx";
 import { BirthdaysView, ClassList, Dashboard, FormsList, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackageTemplatesView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
-import { ClassDetail, OrgDetail, PersonDetail, ProjectDetail } from "./components/details.jsx";
+import { ClassDetail, HouseholdModal, OrgDetail, PersonDetail, ProjectDetail } from "./components/details.jsx";
 
 export default function FeltBodyCRM() {
   const [history, setHistory] = useState([{ name:'dashboard' }]);
@@ -1018,6 +1018,39 @@ export default function FeltBodyCRM() {
       }
       case 'create_invoice': return <CreateInvoiceForm orgs={orgs} classes={classes} invoices={invoices} onSave={addInvoice} onClose={close} />;
       case 'edit_invoice': return <CreateInvoiceForm existing={modal.inv} orgs={orgs} classes={classes} invoices={invoices} onSave={inv=>updateInvoice(modal.inv.id, inv)} onClose={close} />;
+      case 'household_manage': {
+        // Opened from the Households view. HouseholdModal is anchored to a
+        // contact (uses person.id for the self-marker + create/join paths that
+        // manage mode doesn't exercise). With no natural anchor here, we use the
+        // first member alphabetically — same sort the modal applies to its roster.
+        const h = households.find(x => x.id === modal.householdId);
+        if (!h) return null;
+        const roster = householdMembers
+          .filter(m => m.householdId === h.id)
+          .map(m => ({ membership: m, person: people.find(p => p.id === m.personId) }))
+          .filter(x => x.person)
+          .sort((a,b) => a.person.name.localeCompare(b.person.name));
+        const anchor = roster[0]?.person;
+        if (!anchor) return null; // empty household — nothing to anchor to
+        return <HouseholdModal
+          person={anchor}
+          household={h}
+          roster={roster}
+          allPeople={people}
+          households={households}
+          householdMembers={householdMembers}
+          orgs={orgs}
+          onClose={close}
+          onCreateHousehold={createHousehold}
+          onRenameHousehold={renameHousehold}
+          onDeleteHousehold={deleteHousehold}
+          onAddHouseholdMember={addHouseholdMember}
+          onCreatePersonForHousehold={createPersonForHousehold}
+          onUpdateMemberRelationship={updateMemberRelationship}
+          onRemoveHouseholdMember={removeHouseholdMember}
+          nav={nav}
+        />;
+      }
       default: return null;
     }
   };
@@ -1029,7 +1062,7 @@ export default function FeltBodyCRM() {
       case 'dashboard':
         if (mode === 'personal') return <PersonalDashboard people={people} orgs={orgs}
           households={households} householdMembers={householdMembers} contactDates={contactDates}
-          projects={projects} nav={nav} />;
+          notes={notes} projects={projects} nav={nav} />;
         return <Dashboard orgs={orgs} people={people} classes={classes} attendance={attendance} notes={notes} packages={packages} invoices={invoices} projects={projects} nav={nav}
         onAddClass={(date)=>setModal({type:'add_class', date})}
         onCompleteNote={clearNoteAction}
@@ -1064,7 +1097,7 @@ export default function FeltBodyCRM() {
       }
       case 'threads': return <ThreadsView notes={notes} people={people} nav={nav} onMarkThreadRead={markThreadRead} initialThreadKey={view.threadKey} onSendEmail={sendEmail} />;
       case 'birthdays': return <BirthdaysView people={people} orgs={orgs} nav={nav} />;
-      case 'households': return <HouseholdsList households={households} householdMembers={householdMembers} people={people} nav={nav} />;
+      case 'households': return <HouseholdsList households={households} householdMembers={householdMembers} people={people} nav={nav} onEditHousehold={(id)=>setModal({type:'household_manage',householdId:id})} />;
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;
       case 'org_detail': {
         const org=orgs.find(o=>o.id===orgId); if(!org) return <Empty text="Not found" />;
