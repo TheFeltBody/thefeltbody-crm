@@ -8,6 +8,15 @@ import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterF
 import { BirthdaysView, ClassList, Dashboard, FormsList, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackageTemplatesView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
 import { ClassDetail, HouseholdModal, OrgDetail, PersonDetail, ProjectDetail } from "./components/details.jsx";
 
+// Cheap change guards for the background poller: only replace a state array
+// when its membership actually changed, so quiet ticks don't trigger re-renders
+// (or disturb in-flight local edits). Compares length, then the id set.
+const sameLen = (a, b) => a.length === b.length;
+const sameIds = (a, b) => {
+  const ids = new Set(a.map(x => x.id));
+  return b.every(x => ids.has(x.id));
+};
+
 export default function FeltBodyCRM() {
   const [history, setHistory] = useState([{ name:'dashboard' }]);
   const view = history[history.length - 1];
@@ -168,13 +177,30 @@ export default function FeltBodyCRM() {
       if (document.visibilityState !== 'visible') return;
       if (modalOpenRef.current) return;
       try {
-        const fresh = await data.notes.list();
+        // The website pipeline (form worker, later Stripe) writes a real
+        // interaction row AND its booking side-effects: an attendance/register
+        // entry, and sometimes a packages row. Polling notes alone surfaced the
+        // Web Activity event but left the derived Recent Activity / register feed
+        // stale until a hard refresh. Pull all four together so deriveActivity()
+        // recomputes on the same cadence.
+        const [freshNotes, freshClasses, freshAttendance, freshPackages] =
+          await Promise.all([
+            data.notes.list(),
+            data.classes.list(),
+            data.attendance.list(),
+            data.packages.list(),
+          ]);
         if (cancelled) return;
-        setNotes(fresh);
+        setNotes(freshNotes);
+        // Only replace the other arrays when they've actually changed — avoids
+        // re-rendering (and any local edit churn) on every quiet tick.
+        setClasses(prev => sameLen(prev, freshClasses) && sameIds(prev, freshClasses) ? prev : freshClasses);
+        setAttendance(prev => sameLen(prev, freshAttendance) && sameIds(prev, freshAttendance) ? prev : freshAttendance);
+        setPackages(prev => sameLen(prev, freshPackages) && sameIds(prev, freshPackages) ? prev : freshPackages);
       } catch (e) {
         // Soft-fail: log and try again next tick. Worker rows will still
         // appear on the next successful poll, or on next manual refresh.
-        console.warn('[CRM] notes poll failed:', e?.message || e);
+        console.warn('[CRM] poll failed:', e?.message || e);
       }
     };
 

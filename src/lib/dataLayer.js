@@ -414,6 +414,14 @@ export const classes = {
       .select().then(ok);
     return rows.map(classFromDb);
   },
+  // List all sessions. Mirrors the read shape in loadAll(). Used by the
+  // booking poller (App component, ~60s interval) so register/derived activity
+  // catches up after a website booking without a hard refresh.
+  async list() {
+    const rows = await supabase.from('sessions').select('*')
+      .order('date', { ascending: false }).then(ok);
+    return rows.map(classFromDb);
+  },
 };
 
 // ─── Attendance ──────────────────────────────────────────────────────────────
@@ -450,6 +458,12 @@ export const attendance = {
   },
   async delete(id) {
     await supabase.from('attendance').delete().eq('id', id).then(ok);
+  },
+  // List all attendance rows. Mirrors loadAll(). Used by the booking poller
+  // so a website booking's register entry appears without a hard refresh.
+  async list() {
+    const rows = await supabase.from('attendance').select('*').then(ok);
+    return rows.map(attendanceFromDb);
   },
 };
 
@@ -670,6 +684,15 @@ export const packages = {
   async hardDelete(id) {
     await supabase.from('packages').delete().eq('id', id).then(ok);
     return id;
+  },
+  // List all non-deleted packages (with usage). Mirrors loadAll(). Used by the
+  // booking poller so a package purchased via the website appears without a
+  // hard refresh.
+  async list() {
+    const rows = await supabase.from('packages_with_usage').select('*')
+      .is('deleted_at', null)
+      .order('date_purchased', { ascending: false }).then(ok);
+    return rows.map(packageFromDb);
   },
 };
 

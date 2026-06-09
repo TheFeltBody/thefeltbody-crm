@@ -1604,26 +1604,34 @@ export function EditNoteForm({ note, onSave, onClose }) {
 // the parent's notes state so it appears on PersonDetail immediately.
 
 export function SendEmailModal({ person, onSend, onClose, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey }) {
-  // Draft persistence: if a draftKey is supplied (reply from a thread), the
-  // in-progress body survives closing/reopening the modal via localStorage.
-  // Subject is seeded from initialSubject (e.g. "Re: …") and not persisted —
-  // it's derived and cheap to regenerate.
-  const [subject, setSubject] = useState(initialSubject);
-  const [body, setBody] = useState(() => {
-    if (draftKey) {
-      try { const saved = localStorage.getItem(draftKey); if (saved != null) return saved; } catch {}
-    }
-    return initialBody;
-  });
+  // Draft persistence: if a draftKey is supplied, the in-progress subject AND
+  // body survive closing/reopening the modal (and navigating away) via
+  // localStorage. Stored as a single JSON blob {subject, body}. Falls back to
+  // treating a bare string as a legacy body-only draft from before subjects
+  // were persisted, so nothing already saved is lost.
+  const restored = (() => {
+    if (!draftKey) return null;
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (raw == null) return null;
+      if (raw.startsWith('{')) {
+        const o = JSON.parse(raw);
+        return { subject: o.subject ?? '', body: o.body ?? '' };
+      }
+      return { subject: '', body: raw }; // legacy body-only draft
+    } catch { return null; }
+  })();
+  const [subject, setSubject] = useState(restored?.subject || initialSubject);
+  const [body, setBody] = useState(restored?.body != null ? restored.body : initialBody);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
-  // Persist body as it changes. Writes are cheap and the modal is short-lived,
-  // so no debounce. Cleared on successful send.
+  // Persist subject + body as they change. Writes are cheap and the modal is
+  // short-lived, so no debounce. Cleared on successful send.
   useEffect(() => {
     if (!draftKey) return;
-    try { localStorage.setItem(draftKey, body); } catch {}
-  }, [body, draftKey]);
+    try { localStorage.setItem(draftKey, JSON.stringify({ subject, body })); } catch {}
+  }, [subject, body, draftKey]);
 
   const hasEmail = !!person.email;
   const canSend = !busy && hasEmail && subject.trim() && body.trim();
