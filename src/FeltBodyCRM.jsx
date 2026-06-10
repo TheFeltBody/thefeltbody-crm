@@ -975,7 +975,7 @@ export default function FeltBodyCRM() {
     switch(modal.type){
       case 'add_org': return <AddOrgForm defaultType={modal.orgType==='all'?undefined:modal.orgType} onSave={addOrg} onClose={close} />;
       case 'edit_org': return <AddOrgForm existing={modal.org} onSave={o=>updateOrg(modal.org.id, o)} onClose={close} />;
-      case 'add_person': return <AddPersonForm orgs={orgs} defaultType={modal.personType} defaultOrgId={modal.orgId} onSave={addPerson} onClose={close} onAddPersonRole={addPersonRole} customPersonRoles={customPersonRoles} />;
+      case 'add_person': return <AddPersonForm orgs={orgs} defaultType={modal.personType} defaultOrgId={modal.orgId} onSave={addPerson} onClose={close} onAddPersonRole={addPersonRole} customPersonRoles={customPersonRoles} roleParents={roleParents} />;
       case 'edit_person': return <AddPersonForm existing={modal.person} orgs={orgs}
         onSave={p=>updatePerson(modal.person.id, p)}
         onEmailAdd={addPersonEmail}
@@ -983,6 +983,7 @@ export default function FeltBodyCRM() {
         onEmailSetPrimary={setPersonPrimaryEmail}
         onAddPersonRole={addPersonRole}
         customPersonRoles={customPersonRoles}
+        roleParents={roleParents}
         onClose={close} />;
       case 'merge_people': return <MergePeopleForm personA={modal.personA} personB={modal.personB} orgs={orgs} onMerge={mergePeople} onClose={close} />;
       case 'edit_note': return <EditNoteForm note={modal.note} onSave={n=>updateNote(modal.note.id, n)} onClose={close} />;
@@ -1026,6 +1027,7 @@ export default function FeltBodyCRM() {
         return <AddPersonForm orgs={orgs}
           onAddPersonRole={addPersonRole}
           customPersonRoles={customPersonRoles}
+          roleParents={roleParents}
           onSave={async (p) => {
             try {
               const savedPerson = await data.people.create(p);

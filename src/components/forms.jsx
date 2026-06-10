@@ -25,9 +25,11 @@ export function AddOrgForm({ existing, onSave, onClose, defaultType }) {
 }
 
 
-export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOrgId, onEmailAdd, onEmailDelete, onEmailSetPrimary, onAddPersonRole, customPersonRoles: customRolesList=[] }) {
+export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOrgId, onEmailAdd, onEmailDelete, onEmailSetPrimary, onAddPersonRole, customPersonRoles: customRolesList=[], roleParents=[] }) {
   const { personRoles } = useTypes();
   const [addingRoleType, setAddingRoleType] = useState(false);
+  // Active parent filter for the role chips. null = "All".
+  const [roleFilter, setRoleFilter] = useState(null);
   // New contacts start with no role pre-selected (canSave blocks saving with
   // zero roles, so the user is nudged to choose). A defaultType — e.g. when
   // adding from a role-filtered list — still pre-selects that one role.
@@ -133,11 +135,37 @@ export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, de
         {addingRoleType && onAddPersonRole && (
           <AddTypeForm kind="person"
             existingKeys={[...Object.keys(PERSON_ROLES), ...customRolesList.map(t=>t.key)]}
+            parents={roleParents}
             onSave={t => { onAddPersonRole(t).then(saved => { toggleRole(saved.key); }); }}
             onClose={()=>setAddingRoleType(false)} />
         )}
+        {roleParents.length > 0 && (() => {
+          // Only show a parent chip if at least one role is tagged with it.
+          const parentsWithRoles = roleParents.filter(p =>
+            Object.values(personRoles).some(m => (m.parentKey||null) === p.key));
+          const hasOrphans = Object.values(personRoles).some(m => !m.parentKey);
+          if (parentsWithRoles.length === 0) return null;
+          const chip = (active, label, onClick) => (
+            <button key={label} onClick={onClick}
+              style={{background:active?C.gold+'22':'transparent',border:`1px solid ${active?C.gold:C.border}`,color:active?C.gold:C.muted,cursor:'pointer',borderRadius:14,fontSize:10,fontWeight:600,padding:'3px 10px',letterSpacing:'0.4px',textTransform:'uppercase',fontFamily:"'Jost',sans-serif"}}>
+              {label}
+            </button>
+          );
+          return (
+            <div style={{display:'flex',flexWrap:'wrap',gap:5,marginBottom:8}}>
+              {chip(roleFilter===null, 'All', ()=>setRoleFilter(null))}
+              {parentsWithRoles.map(p => chip(roleFilter===p.key, p.label, ()=>setRoleFilter(p.key)))}
+              {hasOrphans && chip(roleFilter==='__none__', 'Other', ()=>setRoleFilter('__none__'))}
+            </div>
+          );
+        })()}
         <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-          {Object.entries(personRoles).map(([r,m])=>(
+          {Object.entries(personRoles).filter(([r,m])=>{
+            if (roles.includes(r)) return true; // always show selected roles
+            if (roleFilter === null) return true;
+            if (roleFilter === '__none__') return !m.parentKey;
+            return (m.parentKey||null) === roleFilter;
+          }).map(([r,m])=>(
             <button key={r} onClick={()=>toggleRole(r)} style={{background:roles.includes(r)?m.bg:C.surf,border:`1px solid ${roles.includes(r)?m.color:C.border}`,color:roles.includes(r)?m.color:C.muted,cursor:'pointer',borderRadius:20,fontSize:11,fontWeight:600,padding:'4px 12px',textTransform:'uppercase',fontFamily:"'Jost',sans-serif"}}>{m.label}</button>
           ))}
         </div>
