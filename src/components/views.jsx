@@ -56,9 +56,26 @@ export function SidebarCustomTypeItem({ active, indent, label, icon, count, onNa
   );
 }
 
+// Collapsible parent-category header for grouping person roles in the sidebar.
+// Children are passed in and rendered when open. Defaults to expanded.
+function RoleParentGroup({ label, count, children, defaultOpen=true }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <>
+      <div onClick={()=>setOpen(o=>!o)}
+        style={{display:'flex',alignItems:'center',gap:7,padding:'7px 20px 7px 28px',color:C.muted,cursor:'pointer',fontSize:10,fontWeight:600,letterSpacing:'0.6px',textTransform:'uppercase',userSelect:'none'}}>
+        <span style={{fontSize:9,width:10,flexShrink:0,transition:'transform 0.12s',transform:open?'rotate(90deg)':'none'}}>▶</span>
+        <span style={{flex:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{label}</span>
+        {count>0 && <span style={{opacity:0.6,fontSize:10}}>{count}</span>}
+      </div>
+      {open && children}
+    </>
+  );
+}
+
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 
-export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgTypes, customPersonRoles, onAddOrgType, onAddPersonRole, orgs, people, onRemoveOrgType, onRemovePersonRole, onEditPersonRole, onSignOut, mode='client', onSwitchMode, onAddPersonalOrg }) {
+export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgTypes, customPersonRoles, roleParents=[], onAddOrgType, onAddPersonRole, orgs, people, onRemoveOrgType, onRemovePersonRole, onEditPersonRole, onSignOut, mode='client', onSwitchMode, onAddPersonalOrg }) {
   const unpaidInvoices = invoices.filter(i=>i.status!=='paid').length;
   const { personRoles } = useTypes();
   const inboxCount = notes.filter(n =>
@@ -231,28 +248,47 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
             <>
               <Item name="people" params={{personType:'recent'}} label="Recent Contacts" icon="◷" indent />
               <Item name="people" params={{personType:'all'}} label="All Contacts" icon="◉" indent />
-              {['private_client','website_student','resident','tt_prospect','retreat_interest','workshop_interest'].map(key => {
-                const meta = personRoles[key] || {};
-                const count = people.filter(p=>(p.roles||[]).includes(key)).length;
-                const active = view.name==='people' && view.personType===key;
-                // Built-in role labels are pluralised the same way the originals were.
+              {(() => {
+                // Hand-tuned plurals for the built-in roles; custom roles get a
+                // naive "+s". personal_contact is excluded (it's its own section).
                 const plural = { private_client:'Private Clients', website_student:'Students', resident:'Residents', tt_prospect:'TT Prospects', retreat_interest:'Retreat Interest', workshop_interest:'Workshop Interest' };
-                return <SidebarCustomTypeItem key={key}
-                  active={active} indent
-                  label={plural[key] || `${meta.label||key}s`} icon="▸" count={count}
-                  onNav={()=>nav('people',{personType:key})}
-                  onEdit={onEditPersonRole ? ()=>onEditPersonRole(key) : undefined} />;
-              })}
-              {customPersonRoles.filter(t=>t.key!=='personal_contact').map(t => {
-                const count = people.filter(p=>(p.roles||[]).includes(t.key)).length;
-                const active = view.name==='people' && view.personType===t.key;
-                return <SidebarCustomTypeItem key={t.key}
-                  active={active} indent
-                  label={`${t.label}s`} icon="▸" count={count}
-                  onNav={()=>nav('people',{personType:t.key})}
-                  onEdit={onEditPersonRole ? ()=>onEditPersonRole(t.key) : undefined}
-                  onDelete={()=>onRemovePersonRole && onRemovePersonRole(t.key)} />;
-              })}
+                const labelFor = (key, meta) => plural[key] || `${meta.label||key}s`;
+                // Renders one role row. Built-ins (in PERSON_ROLES) are edit-only;
+                // custom roles also get delete.
+                const renderRole = (key) => {
+                  const meta = personRoles[key] || {};
+                  const isBuiltin = Object.prototype.hasOwnProperty.call(PERSON_ROLES, key);
+                  const count = people.filter(p=>(p.roles||[]).includes(key)).length;
+                  const active = view.name==='people' && view.personType===key;
+                  return <SidebarCustomTypeItem key={key}
+                    active={active} indent
+                    label={labelFor(key, meta)} icon="▸" count={count}
+                    onNav={()=>nav('people',{personType:key})}
+                    onEdit={onEditPersonRole ? ()=>onEditPersonRole(key) : undefined}
+                    onDelete={isBuiltin ? undefined : (()=>onRemovePersonRole && onRemovePersonRole(key))} />;
+                };
+                // All displayable role keys (built-in + custom), minus personal_contact.
+                const allKeys = Object.keys(personRoles).filter(k => k !== 'personal_contact');
+                const byParent = (pk) => allKeys.filter(k => (personRoles[k]?.parentKey || null) === pk);
+                const memberCount = (keys) => people.filter(p => (p.roles||[]).some(r => keys.includes(r))).length;
+                const orphans = byParent(null);
+                return (
+                  <>
+                    {roleParents.map(par => {
+                      const keys = byParent(par.key);
+                      if (keys.length === 0) return null; // hide empty categories
+                      return (
+                        <RoleParentGroup key={par.key} label={par.label} count={memberCount(keys)}>
+                          {keys.map(renderRole)}
+                        </RoleParentGroup>
+                      );
+                    })}
+                    {/* Uncategorised roles render flat (no header) so nothing is hidden
+                        before you've assigned parents. */}
+                    {orphans.map(renderRole)}
+                  </>
+                );
+              })()}
               <AddTypeAction onClick={onAddPersonRole} />
             </>
           )}

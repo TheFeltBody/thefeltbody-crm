@@ -551,14 +551,34 @@ export const customPersonRoleFromDb = (row) => ({
   label: row.label,
   color: row.color,
   bg: row.bg,
+  parentKey: row.parent_key || null,
 });
 
-export const customPersonRoleToDb = (t) => ({
+export const customPersonRoleToDb = (t, ownerId) => ({
   key: t.key,
   label: t.label,
   color: t.color,
   bg: t.bg,
+  parent_key: t.parentKey || null,
   is_builtin: false,
+  // Explicit owner_id (belt-and-braces alongside the column DEFAULT auth.uid()).
+  // Only included when supplied so SQL-editor/other callers aren't forced to.
+  ...(ownerId ? { owner_id: ownerId } : {}),
+});
+
+// Likewise for role parents — set owner explicitly when we have it.
+export const roleParentToDb = (p, ownerId) => ({
+  key: p.key,
+  label: p.label,
+  position: p.position ?? 0,
+  ...(ownerId ? { owner_id: ownerId } : {}),
+});
+
+// ─── Role parents (lookup table; the category layer above person roles) ──────
+export const roleParentFromDb = (row) => ({
+  key: row.key,
+  label: row.label,
+  position: row.position ?? 0,
 });
 
 // ─── Org contacts (people <-> orgs working-relationships junction) ───────────

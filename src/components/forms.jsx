@@ -212,10 +212,12 @@ export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, de
 // Modal for adding a new custom org type or person role.
 // Picks one of the palette colors + an icon (icon only used by org types in the sidebar).
 
-export function AddTypeForm({ kind, onSave, onClose, existingKeys=[], existing=null }) {
+export function AddTypeForm({ kind, onSave, onClose, existingKeys=[], existing=null, parents=[] }) {
   const isOrg = kind === 'org';
   const isEdit = !!existing;
   const [label, setLabel] = useState(existing?.label || '');
+  // Parent category (person roles only). '' = uncategorised.
+  const [parentKey, setParentKey] = useState(existing?.parentKey || '');
   // When editing, preselect the palette swatch matching the current colour (fall
   // back to 0 if it's a legacy colour not in the palette).
   const initPalette = existing
@@ -244,6 +246,7 @@ export function AddTypeForm({ kind, onSave, onClose, existingKeys=[], existing=n
       bg: palette.bg,
     };
     if(isOrg) out.icon = TYPE_ICONS[iconIdx];
+    else out.parentKey = parentKey || null;
     onSave(out);
     onClose();
   };
@@ -272,6 +275,10 @@ export function AddTypeForm({ kind, onSave, onClose, existingKeys=[], existing=n
             ))}
           </div>
         </div>
+      )}
+      {!isOrg && parents.length > 0 && (
+        <FI label="PARENT CATEGORY (optional)" value={parentKey} onChange={setParentKey}
+          opts={[{v:'',l:'— none —'}, ...parents.map(p=>({v:p.key,l:p.label}))]} />
       )}
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 14px',marginBottom:14,display:'flex',alignItems:'center',gap:10}}>
         <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px'}}>PREVIEW</div>

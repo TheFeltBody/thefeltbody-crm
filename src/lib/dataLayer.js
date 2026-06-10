@@ -28,6 +28,7 @@ import {
   formFromDb, formToDb,
   customOrgTypeFromDb, customOrgTypeToDb,
   customPersonRoleFromDb, customPersonRoleToDb,
+  roleParentFromDb, roleParentToDb,
   orgContactFromDb, orgContactToDb,
   householdFromDb, householdToDb,
   householdMemberFromDb, householdMemberToDb,
@@ -80,6 +81,7 @@ export async function loadAll() {
     projectRows,
     packageTemplateRows,
     fileRows,
+    roleParentRows,
   ] = await Promise.all([
     supabase.from('active_organisations').select('*').order('name').then(ok),
     supabase.from('active_people').select('*').order('name').then(ok),
@@ -110,6 +112,7 @@ export async function loadAll() {
     supabase.from('projects').select('*').order('created_at', { ascending: false }).then(ok),
     supabase.from('package_templates').select('*').order('position').then(ok),
     supabase.from('active_files').select('*').order('created_at', { ascending: false }).then(ok),
+    supabase.from('role_parents').select('*').order('position').then(ok),
   ]);
 
   // Group person_roles by person_id -> array of role keys
@@ -158,6 +161,7 @@ export async function loadAll() {
     // buildPersonRoles. Kept separate from customPersonRoles so the sidebar/merge
     // logic, which treats that array as "user-created roles only", is undisturbed.
     builtinPersonRoles: builtinRoleMetaRows.map(customPersonRoleFromDb),
+    roleParents: roleParentRows.map(roleParentFromDb),
     orgContacts: orgContactRows.map(orgContactFromDb),
     households: householdRows.map(householdFromDb),
     householdMembers: householdMemberRows.map(householdMemberFromDb),
@@ -826,22 +830,54 @@ export const customOrgTypes = {
 
 export const customPersonRoles = {
   async create(t) {
-    const row = await supabase.from('person_role_meta').insert(customPersonRoleToDb(t))
+    // Belt-and-braces owner_id: explicit from the session, in addition to the
+    // column DEFAULT auth.uid(). Guards against the default not firing.
+    const uid = (await supabase.auth.getUser()).data.user?.id;
+    const row = await supabase.from('person_role_meta').insert(customPersonRoleToDb(t, uid))
       .select().single().then(ok);
     return customPersonRoleFromDb(row);
   },
-  // Edit an existing role's label/colour. Works for both custom and built-in
-  // rows (built-ins are seeded into person_role_meta by migration). Only
-  // label/color/bg are mutable — never the key or the is_builtin flag.
+  // Edit an existing role's label/colour/parent. Works for both custom and
+  // built-in rows (built-ins are seeded into person_role_meta by migration).
+  // Only label/color/bg/parent_key are mutable — never the key or is_builtin.
+  // parent_key is written only when the patch carries the property, so a
+  // label-only edit never clobbers an existing parent assignment.
   async update(key, patch) {
+    const dbPatch = { label: patch.label, color: patch.color, bg: patch.bg };
+    if (Object.prototype.hasOwnProperty.call(patch, 'parentKey')) {
+      dbPatch.parent_key = patch.parentKey || null;
+    }
     const row = await supabase.from('person_role_meta')
-      .update({ label: patch.label, color: patch.color, bg: patch.bg })
+      .update(dbPatch)
       .eq('key', key).select().single().then(ok);
     return customPersonRoleFromDb(row);
   },
   async delete(key) {
     await supabase.from('person_role_meta').delete()
       .eq('key', key).eq('is_builtin', false).then(ok);
+  },
+};
+
+// ─── Role parents (category layer above person roles) ─────────────────────────
+export const roleParents = {
+  async create(p) {
+    const uid = (await supabase.auth.getUser()).data.user?.id;
+    const row = await supabase.from('role_parents').insert(roleParentToDb(p, uid))
+      .select().single().then(ok);
+    return roleParentFromDb(row);
+  },
+  async update(key, patch) {
+    const dbPatch = {};
+    if (Object.prototype.hasOwnProperty.call(patch, 'label')) dbPatch.label = patch.label;
+    if (Object.prototype.hasOwnProperty.call(patch, 'position')) dbPatch.position = patch.position;
+    const row = await supabase.from('role_parents')
+      .update(dbPatch)
+      .eq('key', key).select().single().then(ok);
+    return roleParentFromDb(row);
+  },
+  async delete(key) {
+    // FK on person_role_meta.parent_key is ON DELETE SET NULL — children survive.
+    await supabase.from('role_parents').delete().eq('key', key).then(ok);
   },
 };
 

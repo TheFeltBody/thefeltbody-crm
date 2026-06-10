@@ -47,6 +47,8 @@ export default function FeltBodyCRM() {
   const [customPersonRoles, setCustomPersonRoles] = useState([]);
   // Edits to built-in roles (label/colour) — is_builtin=true rows in person_role_meta.
   const [builtinPersonRoles, setBuiltinPersonRoles] = useState([]);
+  // Parent categories (the layer above roles): renameable/reorderable lookup.
+  const [roleParents, setRoleParents] = useState([]);
   // Junction rows linking people to organisations in working/staff roles
   // (primary contact, billing contact, etc.). Distinct from people.orgId which
   // models residency. Loaded eagerly, surfaced via OrgDetail in Batch 2.
@@ -114,6 +116,7 @@ export default function FeltBodyCRM() {
         setCustomOrgTypes(all.customOrgTypes);
         setCustomPersonRoles(all.customPersonRoles);
         setBuiltinPersonRoles(all.builtinPersonRoles || []);
+        setRoleParents(all.roleParents || []);
         setOrgContacts(all.orgContacts);
         setHouseholds(all.households || []);
         setHouseholdMembers(all.householdMembers || []);
@@ -925,6 +928,7 @@ export default function FeltBodyCRM() {
   const editPersonRole = (key, patch) => {
     const isBuiltin = Object.prototype.hasOwnProperty.call(PERSON_ROLES, key);
     const next = { key, label: patch.label, color: patch.color, bg: patch.bg };
+    if (Object.prototype.hasOwnProperty.call(patch, 'parentKey')) next.parentKey = patch.parentKey || null;
     if (isBuiltin) {
       setBuiltinPersonRoles(prev => {
         const without = prev.filter(t => t.key !== key);
@@ -988,14 +992,16 @@ export default function FeltBodyCRM() {
         onClose={close} />;
       case 'add_person_role': return <AddTypeForm kind="person"
         existingKeys={[...Object.keys(PERSON_ROLES), ...customPersonRoles.map(t=>t.key)]}
+        parents={roleParents}
         onSave={addPersonRole}
         onClose={close} />;
       case 'edit_person_role': {
         const m = personRoles[modal.roleKey];
         if(!m) return null;
         return <AddTypeForm kind="person"
-          existing={{ key:modal.roleKey, label:m.label, color:m.color, bg:m.bg }}
-          onSave={(t)=>editPersonRole(t.key, { label:t.label, color:t.color, bg:t.bg })}
+          existing={{ key:modal.roleKey, label:m.label, color:m.color, bg:m.bg, parentKey:m.parentKey||'' }}
+          parents={roleParents}
+          onSave={(t)=>editPersonRole(t.key, { label:t.label, color:t.color, bg:t.bg, parentKey:t.parentKey })}
           onClose={close} />;
       }
       case 'add_class': return <AddClassForm orgs={orgs} defaultOrgId={modal.orgId} defaultDate={modal.date} onSave={handleAddClass} onClose={close} />;
@@ -1304,6 +1310,7 @@ export default function FeltBodyCRM() {
           <Sidebar view={view} nav={nav} invoices={invoices} notes={notes} projects={projects}
             customOrgTypes={customOrgTypes}
             customPersonRoles={customPersonRoles}
+            roleParents={roleParents}
             orgs={orgs} people={people}
             onAddOrgType={()=>setModal({type:'add_org_type'})}
             onAddPersonRole={()=>setModal({type:'add_person_role'})}
@@ -1328,6 +1335,7 @@ export default function FeltBodyCRM() {
               <Sidebar view={view} nav={nav} invoices={invoices} notes={notes} projects={projects}
                 customOrgTypes={customOrgTypes}
                 customPersonRoles={customPersonRoles}
+                roleParents={roleParents}
                 orgs={orgs} people={people}
                 onAddOrgType={()=>{ setMobileNavOpen(false); setModal({type:'add_org_type'}); }}
                 onAddPersonRole={()=>{ setMobileNavOpen(false); setModal({type:'add_person_role'}); }}

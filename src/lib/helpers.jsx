@@ -29,10 +29,10 @@ export const buildOrgTypes = (custom=[]) => {
 };
 export const buildPersonRoles = (custom=[], builtinOverrides=[]) => {
   const merged = {};
-  Object.entries(PERSON_ROLES).forEach(([k,v]) => { merged[k] = { ...v, _builtin:true }; });
-  // Apply user edits to built-in roles (label/colour) over the hardcoded seed.
-  builtinOverrides.forEach(t => { if (merged[t.key]) merged[t.key] = { label:t.label, color:t.color, bg:t.bg, _builtin:true }; });
-  custom.forEach(t => { merged[t.key] = { label:t.label, color:t.color, bg:t.bg, _builtin:false }; });
+  Object.entries(PERSON_ROLES).forEach(([k,v]) => { merged[k] = { ...v, parentKey:null, _builtin:true }; });
+  // Apply user edits to built-in roles (label/colour/parent) over the seed.
+  builtinOverrides.forEach(t => { if (merged[t.key]) merged[t.key] = { label:t.label, color:t.color, bg:t.bg, parentKey:t.parentKey||null, _builtin:true }; });
+  custom.forEach(t => { merged[t.key] = { label:t.label, color:t.color, bg:t.bg, parentKey:t.parentKey||null, _builtin:false }; });
   return merged;
 };
 
