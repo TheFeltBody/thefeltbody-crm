@@ -7,6 +7,7 @@ import { Empty } from "./components/primitives.jsx";
 import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, EditNoteForm, EditPackageForm, EditSeriesClassForm, MergePeopleForm, PackageTemplateForm } from "./components/forms.jsx";
 import { BirthdaysView, ClassList, Dashboard, FormsList, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackageTemplatesView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
 import { ClassDetail, HouseholdModal, OrgDetail, PersonDetail, ProjectDetail } from "./components/details.jsx";
+import { CareHomeResourcesView, DocumentsView } from "./components/documents.jsx";
 
 // Cheap change guards for the background poller: only replace a state array
 // when its membership actually changed, so quiet ticks don't trigger re-renders
@@ -63,6 +64,11 @@ export default function FeltBodyCRM() {
   // is an array of operator email addresses). Loaded eagerly so inbox-assign
   // and any other settings-aware flows have it on the first interaction.
   const [settings, setSettings] = useState({});
+  // Stored documents/photos (the `files` table + Supabase Storage). Each row is
+  // metadata + a path into the private bucket, optionally anchored to a person /
+  // org / interaction. Surfaced via DocumentsView; binaries fetched on demand
+  // through short-lived signed URLs.
+  const [files, setFiles] = useState([]);
   // Mobile nav state (Phase 1: basic hamburger button + modal nav for small screens)
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   // Mobile accordion expand/contract toggle, persisted per-device so the user's
@@ -112,6 +118,7 @@ export default function FeltBodyCRM() {
         setSettings(all.settings || {});
         setProjects(all.projects || []);
         setPackageTemplates(all.packageTemplates || []);
+        setFiles(all.files || []);
         setLoadStatus('ready');
       } catch (e) {
         if (cancelled) return;
@@ -608,6 +615,32 @@ export default function FeltBodyCRM() {
       .then(saved => setProjects(prev => prev.map(x => x.id === id ? saved : x)))
       .catch(onError('Update project status'));
   };
+
+  // ─── Documents (files + Storage) ────────────────────────────────────────
+  // Server-confirmed: uploads return the saved metadata row (with the real DB
+  // id) which we splice into state. getFileUrl mints a short-lived signed URL
+  // on demand (the bucket is private). removeFile soft-deletes the row and
+  // hard-deletes the storage object, then drops it from local state.
+  const uploadFile = (file, anchor, label) =>
+    data.files.upload(file, anchor, label)
+      .then(saved => { setFiles(prev => [saved, ...prev]); return saved; });
+      // NOTE: deliberately not .catch'd here — the upload modal surfaces the
+      // error inline so the user can retry without losing their selection.
+  const getFileUrl = (file) => data.files.signedUrl(file);
+  const removeFile = (file) => {
+    // Optimistic removal; the row is soft-deleted + object purged server-side.
+    setFiles(prev => prev.filter(f => f.id !== file.id));
+    return data.files.remove(file).catch(onError('Delete document'));
+  };
+
+  // ─── Care home resources (settings-backed) ──────────────────────────────
+  // The pitch-PDF link + phone-call scripts live in the settings key-value
+  // store under 'care_home_resources' (config, editable without redeploy).
+  // Server-confirmed: write the whole object, reconcile local settings from
+  // the saved row's value.
+  const saveCareHomeResources = (value) =>
+    data.settings.set('care_home_resources', value)
+      .then(saved => { setSettings(prev => ({ ...prev, care_home_resources: saved.value })); return saved; });
 
   // Inbox → assign an unlinked interaction to a real person. Two-step server
   // operation (patch row, optionally insert new email) is wrapped by
@@ -1107,6 +1140,10 @@ export default function FeltBodyCRM() {
         onDelete={deleteTemplate} />;
       case 'web_activity': return <WebActivityView notes={notes} people={people} nav={nav}
         onMarkRead={markWebEventRead} onMarkAllRead={markAllWebEventsRead} />;
+      case 'documents': return <DocumentsView files={files} people={people} orgs={orgs}
+        onUpload={uploadFile} onGetUrl={getFileUrl} onRemove={removeFile} nav={nav} />;
+      case 'care_home_resources': return <CareHomeResourcesView
+        resources={settings.care_home_resources} onSave={saveCareHomeResources} nav={nav} />;
       case 'projects': return <ProjectsView projects={projects} notes={notes} nav={nav} mode={mode}
         onAddProject={addProject} onSetStatus={setProjectStatus} />;
       case 'project_detail': {

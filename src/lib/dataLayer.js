@@ -35,6 +35,7 @@ import {
   emailFromDb, emailToDb,
   settingFromDb,
   projectFromDb, projectToDb,
+  fileFromDb, fileToDb,
 } from './mappers.js';;
 
 // Throw on any Supabase error so callers (and React error boundaries) see
@@ -77,6 +78,7 @@ export async function loadAll() {
     settingRows,
     projectRows,
     packageTemplateRows,
+    fileRows,
   ] = await Promise.all([
     supabase.from('active_organisations').select('*').order('name').then(ok),
     supabase.from('active_people').select('*').order('name').then(ok),
@@ -104,6 +106,7 @@ export async function loadAll() {
     supabase.from('settings').select('*').then(ok),
     supabase.from('projects').select('*').order('created_at', { ascending: false }).then(ok),
     supabase.from('package_templates').select('*').order('position').then(ok),
+    supabase.from('active_files').select('*').order('created_at', { ascending: false }).then(ok),
   ]);
 
   // Group person_roles by person_id -> array of role keys
@@ -154,6 +157,7 @@ export async function loadAll() {
     settings: settingsByKey,
     projects: projectRows.map(projectFromDb),
     packageTemplates: packageTemplateRows.map(packageTemplateFromDb),
+    files: fileRows.map(fileFromDb),
   };
 }
 
@@ -939,6 +943,105 @@ export const settings = {
       .upsert({ key, value }, { onConflict: 'key' })
       .select().single().then(ok);
     return settingFromDb(row);
+  },
+};
+
+// ─── Files (stored documents / photos) ───────────────────────────────────────
+// Manual upload (workflow 1). The binary goes to Supabase Storage; a `files`
+// row records the metadata + path + optional anchor. Reads come back via the
+// active_files view in loadAll; viewing/downloading uses short-lived signed
+// URLs minted on demand (the bucket is private).
+//
+// Anchor: pass at most one of personId / orgId / interactionId. None = a
+// general document. owner_id is set DB-side (default auth.uid()).
+//
+// Free-tier note: the bucket is capped at 50 MB/object server-side; we also
+// soft-guard here. Storage + egress count against the free quota, so prefer
+// modest file sizes (compress photos before upload where practical).
+const BUCKET = 'client-documents';
+const MAX_BYTES = 50 * 1024 * 1024;
+
+export const files = {
+  // Upload a File/Blob to storage, then insert the metadata row.
+  // `file` is a browser File object (from an <input type="file">).
+  // `anchor` is { personId?, orgId?, interactionId? } — at most one set.
+  // `label` is an optional human description.
+  // Returns the saved row in JSX shape (fileFromDb). Throws on any failure;
+  // if the storage upload succeeds but the row insert fails, we best-effort
+  // remove the orphaned object so we don't leak storage.
+  async upload(file, anchor = {}, label = '') {
+    if (!file) throw new Error('No file provided.');
+    if (file.size > MAX_BYTES) {
+      throw new Error(`File is ${(file.size / 1048576).toFixed(1)} MB — the limit is 50 MB.`);
+    }
+
+    // Path convention: <anchorKind>/<uuid>-<safeName>. UUID prevents collisions
+    // and makes the object key unguessable; the original name is preserved for
+    // readability and as the download filename.
+    const kind = anchor.personId ? 'person'
+      : anchor.orgId ? 'org'
+      : anchor.interactionId ? 'interaction'
+      : 'general';
+    const safeName = (file.name || 'file')
+      .replace(/[^\w.\-]+/g, '_')   // strip anything not word/dot/dash
+      .replace(/_{2,}/g, '_')
+      .slice(0, 120);
+    const path = `${kind}/${crypto.randomUUID()}-${safeName}`;
+
+    const up = await supabase.storage.from(BUCKET).upload(path, file, {
+      contentType: file.type || 'application/octet-stream',
+      upsert: false,
+    });
+    if (up.error) throw new Error(`Storage upload failed: ${up.error.message}`);
+
+    try {
+      const row = await supabase.from('files').insert(fileToDb({
+        bucket: BUCKET,
+        path,
+        filename: file.name || safeName,
+        mimeType: file.type || '',
+        sizeBytes: file.size,
+        label,
+        personId: anchor.personId || null,
+        orgId: anchor.orgId || null,
+        interactionId: anchor.interactionId || null,
+      })).select().single().then(ok);
+      return fileFromDb(row);
+    } catch (e) {
+      // Roll back the orphaned object so a failed insert doesn't leak storage.
+      await supabase.storage.from(BUCKET).remove([path]).catch(() => {});
+      throw e;
+    }
+  },
+
+  // Mint a short-lived signed URL for viewing/downloading a stored object.
+  // `expiresIn` seconds (default 1 hour). Returns the URL string.
+  async signedUrl(file, expiresIn = 3600) {
+    const { data, error } = await supabase.storage
+      .from(file.bucket || BUCKET)
+      .createSignedUrl(file.path, expiresIn);
+    if (error) throw new Error(`Could not create link: ${error.message}`);
+    return data.signedUrl;
+  },
+
+  // Edit mutable fields (label / anchor). Immutable upload fields are re-sent
+  // unchanged via fileToDb. Returns the updated row in JSX shape.
+  async update(id, f) {
+    const row = await supabase.from('files').update(fileToDb(f))
+      .eq('id', id).select().single().then(ok);
+    return fileFromDb(row);
+  },
+
+  // Remove: soft-delete the metadata row AND hard-delete the storage object.
+  // The object is gone for good (no soft-delete on storage); the row is kept
+  // with deleted_at set so any FK / audit reference survives, and active_files
+  // filters it out on next load. Pass the full file object so we have the path.
+  async remove(file) {
+    await softDelete('files', file.id);
+    // Best-effort object removal — if this fails the row is already hidden;
+    // a stray object is harmless and can be swept later.
+    await supabase.storage.from(file.bucket || BUCKET).remove([file.path]).catch(() => {});
+    return file.id;
   },
 };
 

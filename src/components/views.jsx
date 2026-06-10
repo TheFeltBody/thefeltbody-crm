@@ -176,6 +176,7 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
       {!isPersonal && <Item name="inbox" label="Inbox" icon="✉" badge={inboxCount} />}
       {!isPersonal && <Item name="threads" label="Threads" icon="✦" badge={threadsUnread} />}
       {!isPersonal && <Item name="web_activity" label="Web Activity" icon="◇" badge={webUnread} />}
+      {!isPersonal && <Item name="documents" label="Documents" icon="📎" />}
       {isPersonal && <Item name="households" label="Households" icon="⌂" />}
       {isPersonal && <Item name="birthdays" label="Birthdays" icon="🎂" />}
 
@@ -194,6 +195,8 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
             <>
               <Item name="org_list" params={{orgType:'all'}} label="All Organisations" icon="⛁" indent />
               <Item name="org_list" params={{orgType:'care_home'}} label="Care Homes" icon="⌂" indent />
+              <Item name="care_home_resources" label="Care Home Resources" icon="📑" indent
+                isActive={view.name==='care_home_resources'} />
               <Item name="org_list" params={{orgType:'gym'}} label="Gyms" icon="◎" indent />
               <Item name="org_list" params={{orgType:'other'}} label="Other Orgs" icon="◇" indent />
               {customOrgTypes.filter(t=>t.key!=='personal').map(t => {

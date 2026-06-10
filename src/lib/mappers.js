@@ -697,3 +697,45 @@ export const projectToDb = (p) => ({
   is_personal: p.isPersonal ?? false,
   completed_at: p.completedAt || null,
 });
+
+// ─── Files (stored documents / photos) ───────────────────────────────────────
+// One row per object in Supabase Storage. The binary lives in the bucket; this
+// row is the metadata + pointer (path within the bucket) + optional anchor.
+//
+// Anchor: zero or one of personId / orgId / interactionId. All-null = a general
+// (unattached) document. We do NOT enforce XOR — "general" is legitimate and a
+// doc may sensibly relate to both a person and an interaction. The data layer
+// sets whichever anchor applies at upload time.
+//
+// owner_id defaults to auth.uid() DB-side (authenticated client writes), so the
+// mapper never writes it — mirrors projects / contact_dates. bucket, path,
+// filename, mimeType, sizeBytes are set once at upload and not edited after;
+// only `label` and the anchor are mutable via fileToDb. createdAt is read-only.
+export const fileFromDb = (row) => ({
+  id: row.id,
+  bucket: row.bucket || 'client-documents',
+  path: row.path,
+  filename: row.filename,
+  mimeType: row.mime_type || '',
+  sizeBytes: row.size_bytes !== null && row.size_bytes !== undefined ? Number(row.size_bytes) : null,
+  label: row.label || '',
+  personId: row.person_id || null,
+  orgId: row.org_id || null,
+  interactionId: row.interaction_id || null,
+  createdAt: row.created_at,
+});
+
+// Write shape. Used for the initial insert (all fields) and for label/anchor
+// edits (the immutable upload fields are simply re-sent unchanged). owner_id
+// omitted intentionally — DB default fills it.
+export const fileToDb = (f) => ({
+  bucket: f.bucket || 'client-documents',
+  path: f.path,
+  filename: f.filename,
+  mime_type: f.mimeType || null,
+  size_bytes: f.sizeBytes ?? null,
+  label: f.label ? String(f.label).trim() || null : null,
+  person_id: f.personId || null,
+  org_id: f.orgId || null,
+  interaction_id: f.interactionId || null,
+});
