@@ -28,7 +28,10 @@ export function AddOrgForm({ existing, onSave, onClose, defaultType }) {
 export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOrgId, onEmailAdd, onEmailDelete, onEmailSetPrimary, onAddPersonRole, customPersonRoles: customRolesList=[] }) {
   const { personRoles } = useTypes();
   const [addingRoleType, setAddingRoleType] = useState(false);
-  const initRoles = existing?.roles || (defaultType?[defaultType]:['private_client']);
+  // New contacts start with no role pre-selected (canSave blocks saving with
+  // zero roles, so the user is nudged to choose). A defaultType — e.g. when
+  // adding from a role-filtered list — still pre-selects that one role.
+  const initRoles = existing?.roles || (defaultType?[defaultType]:[]);
   // Strip `emails` and `email` from form state — managed separately
   const initForm = existing ? (() => { const {emails, email, ...rest} = existing; return rest; })()
     : {name:'',phone:'',website:'',address:'',dateOfBirth:'',orgId:defaultOrgId||'',status:'active',source:{channel:'manual',detail:''},notes:'',defaultSessionRate:'',rateNotes:''};
@@ -209,11 +212,18 @@ export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, de
 // Modal for adding a new custom org type or person role.
 // Picks one of the palette colors + an icon (icon only used by org types in the sidebar).
 
-export function AddTypeForm({ kind, onSave, onClose, existingKeys=[] }) {
+export function AddTypeForm({ kind, onSave, onClose, existingKeys=[], existing=null }) {
   const isOrg = kind === 'org';
-  const [label, setLabel] = useState('');
-  const [paletteIdx, setPaletteIdx] = useState(0);
-  const [iconIdx, setIconIdx] = useState(0);
+  const isEdit = !!existing;
+  const [label, setLabel] = useState(existing?.label || '');
+  // When editing, preselect the palette swatch matching the current colour (fall
+  // back to 0 if it's a legacy colour not in the palette).
+  const initPalette = existing
+    ? Math.max(0, TYPE_PALETTE.findIndex(p => p.color === existing.color))
+    : 0;
+  const [paletteIdx, setPaletteIdx] = useState(initPalette === -1 ? 0 : initPalette);
+  const initIcon = existing?.icon ? Math.max(0, TYPE_ICONS.indexOf(existing.icon)) : 0;
+  const [iconIdx, setIconIdx] = useState(initIcon === -1 ? 0 : initIcon);
   const trimmed = label.trim();
   // Generate a stable key from the label, suffixed with a short uid in case of collision
   const makeKey = () => {
@@ -225,18 +235,21 @@ export function AddTypeForm({ kind, onSave, onClose, existingKeys=[] }) {
   const submit = () => {
     if(!trimmed) return;
     const palette = TYPE_PALETTE[paletteIdx];
-    const newType = {
-      key: makeKey(),
+    // Edit keeps the original key (renaming the key would orphan tagged rows);
+    // only label/colour (and icon for orgs) change.
+    const out = {
+      key: isEdit ? existing.key : makeKey(),
       label: trimmed,
       color: palette.color,
       bg: palette.bg,
     };
-    if(isOrg) newType.icon = TYPE_ICONS[iconIdx];
-    onSave(newType);
+    if(isOrg) out.icon = TYPE_ICONS[iconIdx];
+    onSave(out);
     onClose();
   };
+  const titleNoun = isOrg ? 'Organisation Type' : 'Contact Type';
   return (
-    <Modal title={isOrg ? 'Add Organisation Type' : 'Add Contact Type'} onClose={onClose}>
+    <Modal title={`${isEdit ? 'Edit' : 'Add'} ${titleNoun}`} onClose={onClose}>
       <FI label="NAME" value={label} onChange={setLabel} />
       <div style={{marginBottom:14}}>
         <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:8}}>COLOUR</div>
@@ -268,7 +281,7 @@ export function AddTypeForm({ kind, onSave, onClose, existingKeys=[] }) {
       </div>
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn onClick={submit} disabled={!trimmed}>Add Type</Btn>
+        <Btn onClick={submit} disabled={!trimmed}>{isEdit ? 'Save Changes' : 'Add Type'}</Btn>
       </div>
     </Modal>
   );

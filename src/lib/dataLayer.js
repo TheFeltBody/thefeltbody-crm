@@ -71,6 +71,7 @@ export async function loadAll() {
     formRows,
     orgTypeMetaRows,
     personRoleMetaRows,
+    builtinRoleMetaRows,
     orgContactRows,
     householdRows,
     householdMemberRows,
@@ -99,6 +100,8 @@ export async function loadAll() {
       .order('created_at').then(ok),
     supabase.from('person_role_meta').select('*').eq('is_builtin', false)
       .order('created_at').then(ok),
+    supabase.from('person_role_meta').select('*').eq('is_builtin', true)
+      .order('key').then(ok),
     supabase.from('org_contacts').select('*').order('created_at').then(ok),
     supabase.from('households').select('*').order('name').then(ok),
     supabase.from('household_members').select('*').order('created_at').then(ok),
@@ -150,6 +153,11 @@ export async function loadAll() {
     forms: formRows.map(formFromDb),
     customOrgTypes: orgTypeMetaRows.map(customOrgTypeFromDb),
     customPersonRoles: personRoleMetaRows.map(customPersonRoleFromDb),
+    // Built-in roles that have been edited (label/colour) live as is_builtin=true
+    // rows in person_role_meta. They override the hardcoded PERSON_ROLES seed via
+    // buildPersonRoles. Kept separate from customPersonRoles so the sidebar/merge
+    // logic, which treats that array as "user-created roles only", is undisturbed.
+    builtinPersonRoles: builtinRoleMetaRows.map(customPersonRoleFromDb),
     orgContacts: orgContactRows.map(orgContactFromDb),
     households: householdRows.map(householdFromDb),
     householdMembers: householdMemberRows.map(householdMemberFromDb),
@@ -820,6 +828,15 @@ export const customPersonRoles = {
   async create(t) {
     const row = await supabase.from('person_role_meta').insert(customPersonRoleToDb(t))
       .select().single().then(ok);
+    return customPersonRoleFromDb(row);
+  },
+  // Edit an existing role's label/colour. Works for both custom and built-in
+  // rows (built-ins are seeded into person_role_meta by migration). Only
+  // label/color/bg are mutable — never the key or the is_builtin flag.
+  async update(key, patch) {
+    const row = await supabase.from('person_role_meta')
+      .update({ label: patch.label, color: patch.color, bg: patch.bg })
+      .eq('key', key).select().single().then(ok);
     return customPersonRoleFromDb(row);
   },
   async delete(key) {

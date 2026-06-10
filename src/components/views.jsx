@@ -4,7 +4,7 @@ import { PrintInvoiceOverlay, addDays, birthdayInfo, classKindKey, contactDateIn
 import { Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
 
-export function SidebarCustomTypeItem({ active, indent, label, icon, count, onNav, onDelete }) {
+export function SidebarCustomTypeItem({ active, indent, label, icon, count, onNav, onDelete, onEdit }) {
   const [hover, setHover] = useState(false);
   const [armed, setArmed] = useState(false);
   // Auto-disarm so the confirm state doesn't get stuck if the user looks away
@@ -24,6 +24,13 @@ export function SidebarCustomTypeItem({ active, indent, label, icon, count, onNa
         <span style={{flex:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{label}</span>
         {count > 0 && <span style={{color:C.muted,fontSize:10,opacity:0.7}}>{count}</span>}
       </div>
+      {hover && onEdit && !armed && (
+        <button onClick={(e)=>{ e.stopPropagation(); onEdit(); }}
+          title="Edit"
+          style={{background:'none',border:'none',color:C.muted,cursor:'pointer',padding:'2px 5px',fontSize:12,marginLeft:2,opacity:0.6,fontFamily:"'Jost',sans-serif",lineHeight:1}}>
+          ✎
+        </button>
+      )}
       {hover && canDelete && !armed && (
         <button onClick={(e)=>{ e.stopPropagation(); setArmed(true); }}
           title="Remove type (only when empty)"
@@ -51,8 +58,9 @@ export function SidebarCustomTypeItem({ active, indent, label, icon, count, onNa
 
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 
-export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgTypes, customPersonRoles, onAddOrgType, onAddPersonRole, orgs, people, onRemoveOrgType, onRemovePersonRole, onSignOut, mode='client', onSwitchMode, onAddPersonalOrg }) {
+export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgTypes, customPersonRoles, onAddOrgType, onAddPersonRole, orgs, people, onRemoveOrgType, onRemovePersonRole, onEditPersonRole, onSignOut, mode='client', onSwitchMode, onAddPersonalOrg }) {
   const unpaidInvoices = invoices.filter(i=>i.status!=='paid').length;
+  const { personRoles } = useTypes();
   const inboxCount = notes.filter(n =>
     (n.kind === 'email' || n.kind === 'form') &&
     n.direction !== 'outbound' &&
@@ -223,12 +231,18 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
             <>
               <Item name="people" params={{personType:'recent'}} label="Recent Contacts" icon="◷" indent />
               <Item name="people" params={{personType:'all'}} label="All Contacts" icon="◉" indent />
-              <Item name="people" params={{personType:'private_client'}} label="Private Clients" icon="▸" indent />
-              <Item name="people" params={{personType:'website_student'}} label="Students" icon="▸" indent />
-              <Item name="people" params={{personType:'resident'}} label="Residents" icon="▸" indent />
-              <Item name="people" params={{personType:'tt_prospect'}} label="TT Prospects" icon="▸" indent />
-              <Item name="people" params={{personType:'retreat_interest'}} label="Retreat Interest" icon="▸" indent />
-              <Item name="people" params={{personType:'workshop_interest'}} label="Workshop Interest" icon="▸" indent />
+              {['private_client','website_student','resident','tt_prospect','retreat_interest','workshop_interest'].map(key => {
+                const meta = personRoles[key] || {};
+                const count = people.filter(p=>(p.roles||[]).includes(key)).length;
+                const active = view.name==='people' && view.personType===key;
+                // Built-in role labels are pluralised the same way the originals were.
+                const plural = { private_client:'Private Clients', website_student:'Students', resident:'Residents', tt_prospect:'TT Prospects', retreat_interest:'Retreat Interest', workshop_interest:'Workshop Interest' };
+                return <SidebarCustomTypeItem key={key}
+                  active={active} indent
+                  label={plural[key] || `${meta.label||key}s`} icon="▸" count={count}
+                  onNav={()=>nav('people',{personType:key})}
+                  onEdit={onEditPersonRole ? ()=>onEditPersonRole(key) : undefined} />;
+              })}
               {customPersonRoles.filter(t=>t.key!=='personal_contact').map(t => {
                 const count = people.filter(p=>(p.roles||[]).includes(t.key)).length;
                 const active = view.name==='people' && view.personType===t.key;
@@ -236,6 +250,7 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
                   active={active} indent
                   label={`${t.label}s`} icon="▸" count={count}
                   onNav={()=>nav('people',{personType:t.key})}
+                  onEdit={onEditPersonRole ? ()=>onEditPersonRole(t.key) : undefined}
                   onDelete={()=>onRemovePersonRole && onRemovePersonRole(t.key)} />;
               })}
               <AddTypeAction onClick={onAddPersonRole} />

@@ -45,6 +45,8 @@ export default function FeltBodyCRM() {
   // User-defined org categories (Insurance, Banks, etc.) and contact roles, persisted alongside data.
   const [customOrgTypes, setCustomOrgTypes] = useState([]);
   const [customPersonRoles, setCustomPersonRoles] = useState([]);
+  // Edits to built-in roles (label/colour) — is_builtin=true rows in person_role_meta.
+  const [builtinPersonRoles, setBuiltinPersonRoles] = useState([]);
   // Junction rows linking people to organisations in working/staff roles
   // (primary contact, billing contact, etc.). Distinct from people.orgId which
   // models residency. Loaded eagerly, surfaced via OrgDetail in Batch 2.
@@ -90,7 +92,7 @@ export default function FeltBodyCRM() {
   // Memoized merged maps go into the context so badges, dropdowns, and avatars
   // see custom types automatically without prop-drilling.
   const orgTypes = useMemo(() => buildOrgTypes(customOrgTypes), [customOrgTypes]);
-  const personRoles = useMemo(() => buildPersonRoles(customPersonRoles), [customPersonRoles]);
+  const personRoles = useMemo(() => buildPersonRoles(customPersonRoles, builtinPersonRoles), [customPersonRoles, builtinPersonRoles]);
   const typesValue = useMemo(() => ({ orgTypes, personRoles }), [orgTypes, personRoles]);
 
   // Single bulk fetch on mount. Auth is guaranteed by the AuthGate wrapper.
@@ -111,6 +113,7 @@ export default function FeltBodyCRM() {
         setForms(all.forms);
         setCustomOrgTypes(all.customOrgTypes);
         setCustomPersonRoles(all.customPersonRoles);
+        setBuiltinPersonRoles(all.builtinPersonRoles || []);
         setOrgContacts(all.orgContacts);
         setHouseholds(all.households || []);
         setHouseholdMembers(all.householdMembers || []);
@@ -916,6 +919,23 @@ export default function FeltBodyCRM() {
     data.customPersonRoles.delete(key).catch(onError('Remove person role'));
     return true;
   };
+  // Edit a role's label/colour. Built-in keys (present in PERSON_ROLES) update
+  // the builtinPersonRoles override slice; everything else is a custom role.
+  // Optimistic-local then fire to server. The key never changes — only label/bg/color.
+  const editPersonRole = (key, patch) => {
+    const isBuiltin = Object.prototype.hasOwnProperty.call(PERSON_ROLES, key);
+    const next = { key, label: patch.label, color: patch.color, bg: patch.bg };
+    if (isBuiltin) {
+      setBuiltinPersonRoles(prev => {
+        const without = prev.filter(t => t.key !== key);
+        return [...without, next];
+      });
+    } else {
+      setCustomPersonRoles(prev => prev.map(t => t.key === key ? { ...t, ...next } : t));
+    }
+    return data.customPersonRoles.update(key, patch)
+      .catch(onError('Edit person role'));
+  };
 
   // Sign-out helper passed to the sidebar
   const signOut = () => supabase.auth.signOut();
@@ -970,6 +990,14 @@ export default function FeltBodyCRM() {
         existingKeys={[...Object.keys(PERSON_ROLES), ...customPersonRoles.map(t=>t.key)]}
         onSave={addPersonRole}
         onClose={close} />;
+      case 'edit_person_role': {
+        const m = personRoles[modal.roleKey];
+        if(!m) return null;
+        return <AddTypeForm kind="person"
+          existing={{ key:modal.roleKey, label:m.label, color:m.color, bg:m.bg }}
+          onSave={(t)=>editPersonRole(t.key, { label:t.label, color:t.color, bg:t.bg })}
+          onClose={close} />;
+      }
       case 'add_class': return <AddClassForm orgs={orgs} defaultOrgId={modal.orgId} defaultDate={modal.date} onSave={handleAddClass} onClose={close} />;
       case 'edit_class': {
         const cls=modal.cls;
@@ -1281,6 +1309,7 @@ export default function FeltBodyCRM() {
             onAddPersonRole={()=>setModal({type:'add_person_role'})}
             onRemoveOrgType={handleRemoveOrgType}
             onRemovePersonRole={handleRemovePersonRole}
+            onEditPersonRole={(key)=>setModal({type:'edit_person_role',roleKey:key})}
             onSignOut={signOut} mode={mode} onSwitchMode={switchMode} onAddPersonalOrg={()=>setModal({type:"add_org",orgType:"personal"})} />
         </div>
 
@@ -1304,6 +1333,7 @@ export default function FeltBodyCRM() {
                 onAddPersonRole={()=>{ setMobileNavOpen(false); setModal({type:'add_person_role'}); }}
                 onRemoveOrgType={handleRemoveOrgType}
                 onRemovePersonRole={handleRemovePersonRole}
+                onEditPersonRole={(key)=>{ setMobileNavOpen(false); setModal({type:'edit_person_role',roleKey:key}); }}
                 onSignOut={signOut} mode={mode} onSwitchMode={switchMode} onAddPersonalOrg={()=>setModal({type:"add_org",orgType:"personal"})} />
             </div>
             {/* Backdrop click closes the modal */}
