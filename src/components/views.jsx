@@ -57,9 +57,10 @@ export function SidebarCustomTypeItem({ active, indent, label, icon, count, onNa
 }
 
 // Collapsible parent-category header for grouping person roles in the sidebar.
-// Children are passed in and rendered when open. Defaults to expanded.
-function RoleParentGroup({ label, count, children, defaultOpen=true }) {
-  const [open, setOpen] = useState(defaultOpen);
+// Open/closed state persists per group (keyed by groupKey) so collapsing a
+// category to de-clutter the nav survives navigation and reloads.
+function RoleParentGroup({ groupKey, label, count, children, defaultOpen=true }) {
+  const [open, setOpen] = useLocalStorage(`felt.nav.rolegroup.${groupKey}`, defaultOpen);
   return (
     <>
       <div onClick={()=>setOpen(o=>!o)}
@@ -303,7 +304,7 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
                       const keys = byParent(par.key);
                       if (keys.length === 0) return null; // hide empty categories
                       return (
-                        <RoleParentGroup key={par.key} label={par.label} count={memberCount(keys)}>
+                        <RoleParentGroup key={par.key} groupKey={par.key} label={par.label} count={memberCount(keys)}>
                           {keys.map(renderRole)}
                         </RoleParentGroup>
                       );
