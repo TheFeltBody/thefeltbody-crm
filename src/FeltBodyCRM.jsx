@@ -1216,7 +1216,7 @@ export default function FeltBodyCRM() {
           onRemoveContactDate={removeContactDate}
           onUpdateInvoiceStatus={setInvoiceStatus} />;
       }
-      case 'people': return <PeopleList people={people} orgs={orgs} personType={personType} nav={nav} mode={mode} households={households} householdMembers={householdMembers} recentPersonIds={recentPersonIds} onAdd={()=>setModal({type:'add_person',personType: personType==='all'?'private_client':personType, ...(mode==='personal'?{orgId: orgs.find(o=>o.type==='personal')?.id}:{})})} onMerge={(a,b)=>setModal({type:'merge_people',personA:a,personB:b})} />;
+      case 'people': return <PeopleList people={people} orgs={orgs} personType={personType} nav={nav} mode={mode} households={households} householdMembers={householdMembers} recentPersonIds={recentPersonIds} onAdd={()=>setModal({type:'add_person',personType: (personType==='all'||personType==='__personal_all__'||personType==='recent') ? (mode==='personal'?'personal_contact':'private_client') : personType, ...(mode==='personal'?{orgId: orgs.find(o=>o.type==='personal')?.id}:{})})} onMerge={(a,b)=>setModal({type:'merge_people',personA:a,personB:b})} />;
       case 'person_detail': {
         const person=people.find(p=>p.id===personId); if(!person) return <Empty text="Not found" />;
         const org=orgs.find(o=>o.id===person.orgId);

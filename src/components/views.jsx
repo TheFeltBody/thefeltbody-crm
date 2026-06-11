@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BANK_DETAILS, C, CLIENT_ROLES, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
+import { BANK_DETAILS, C, CLIENT_ROLES, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
 import { PrintInvoiceOverlay, addDays, birthdayInfo, classKindKey, contactDateInfo, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
 import { Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
@@ -243,7 +243,29 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
       {openSection==='people' && (
         <>
           {isPersonal ? (
-            <Item name="people" params={{personType:'personal_contact'}} label="All Personal Contacts" icon="◉" indent />
+            <>
+              <Item name="people" params={{personType:'__personal_all__'}} label="All Personal Contacts" icon="◉" indent />
+              {(() => {
+                // Sub-roles parented to `personal` become their own filter items,
+                // mirroring the client side. Lets you organise the personal side
+                // (Family, Friends, Household, …) instead of a single flat tag.
+                const personalRoleKeys = Object.keys(personRoles).filter(k =>
+                  (personRoles[k]?.parentKey || null) === 'personal');
+                return personalRoleKeys.map(key => {
+                  const meta = personRoles[key] || {};
+                  const isBuiltin = Object.prototype.hasOwnProperty.call(PERSON_ROLES, key);
+                  const count = people.filter(p=>(p.roles||[]).includes(key)).length;
+                  const active = view.name==='people' && view.personType===key;
+                  return <SidebarCustomTypeItem key={key}
+                    active={active} indent
+                    label={`${meta.label||key}s`} icon="▸" count={count}
+                    onNav={()=>nav('people',{personType:key})}
+                    onEdit={onEditPersonRole ? ()=>onEditPersonRole(key) : undefined}
+                    onDelete={isBuiltin ? undefined : (()=>onRemovePersonRole && onRemovePersonRole(key))} />;
+                });
+              })()}
+              <AddTypeAction onClick={onAddPersonRole} />
+            </>
           ) : (
             <>
               <Item name="people" params={{personType:'recent'}} label="Recent Contacts" icon="◷" indent />
@@ -267,14 +289,17 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
                     onEdit={onEditPersonRole ? ()=>onEditPersonRole(key) : undefined}
                     onDelete={isBuiltin ? undefined : (()=>onRemovePersonRole && onRemovePersonRole(key))} />;
                 };
-                // All displayable role keys (built-in + custom), minus personal_contact.
-                const allKeys = Object.keys(personRoles).filter(k => k !== 'personal_contact');
+                // All displayable role keys (built-in + custom). Exclude the
+                // legacy personal_contact tag AND anything parented to `personal`
+                // — those live in the Personal Record System's own section.
+                const allKeys = Object.keys(personRoles).filter(k =>
+                  k !== 'personal_contact' && (personRoles[k]?.parentKey || null) !== 'personal');
                 const byParent = (pk) => allKeys.filter(k => (personRoles[k]?.parentKey || null) === pk);
                 const memberCount = (keys) => people.filter(p => (p.roles||[]).some(r => keys.includes(r))).length;
                 const orphans = byParent(null);
                 return (
                   <>
-                    {roleParents.map(par => {
+                    {roleParents.filter(par => par.key !== 'personal').map(par => {
                       const keys = byParent(par.key);
                       if (keys.length === 0) return null; // hide empty categories
                       return (
@@ -440,6 +465,7 @@ export function QuickTodoModal({ people, projects=[], onSave, onClose }) {
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 
 export function Dashboard({ orgs, people, classes, attendance, notes, packages, invoices, projects=[], nav, onAddClass, onCompleteNote, onReopenNote, onAddTodo, onMarkWebRead }) {
+  const { personRoles } = useTypes();
   const [selectedDate, setSelectedDate] = useState(today());
   const isToday = selectedDate === today();
   const dateLabel = (() => {
@@ -907,7 +933,7 @@ export function Dashboard({ orgs, people, classes, attendance, notes, packages, 
       </div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:36}}>
         <Stat label="Organisations" value={orgs.filter(o=>!isPersonalOrg(o)).length} sub={`${orgs.filter(o=>o.type==='care_home').length} care homes`} />
-        <Stat label="All Contacts" value={people.filter(p=>!isPersonalOnly(p)).length} sub={`${people.filter(p=>p.status==='active'&&!isPersonalOnly(p)).length} active`} />
+        <Stat label="All Contacts" value={people.filter(p=>!isPersonalOnly(p, personRoles)).length} sub={`${people.filter(p=>p.status==='active'&&!isPersonalOnly(p, personRoles)).length} active`} />
         <Stat label="To Do" value={todoCounts.all} sub={(()=>{ const o=notes.filter(n=>n.actionDate&&!n.completed&&n.actionDate<t).length; return o>0?`${o} overdue`:'all on track'; })()} />
         <Stat label="Outstanding" value={fmtMoney(outstanding)} sub={`${invoices.filter(i=>i.status!=='paid').length} invoice${invoices.filter(i=>i.status!=='paid').length!==1?'s':''}`} />
       </div>
@@ -1257,7 +1283,8 @@ export function WebActivityView({ notes, people, nav, onMarkRead, onMarkAllRead 
 
 export function BirthdaysView({ people, orgs, nav }) {
   const isMobile = useIsMobile();
-  const personal = useMemo(() => people.filter(p => (p.roles||[]).includes('personal_contact')), [people]);
+  const { personRoles } = useTypes();
+  const personal = useMemo(() => people.filter(p => hasPersonalRole(p, personRoles)), [people, personRoles]);
   const withDob = useMemo(() => {
     return personal
       .filter(p => p.dateOfBirth)
@@ -1667,6 +1694,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
 
 export function RecentActivityView({ notes, people, classes, orgs, attendance, packages, projects=[], nav }) {
   const isMobile = useIsMobile();
+  const { personRoles } = useTypes();
   const [kindFilter, setKindFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(null); // null | {type:'person'|'org', id}
@@ -1740,7 +1768,7 @@ export function RecentActivityView({ notes, people, classes, orgs, attendance, p
   const searchResults = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
-    const personIsPersonal = p => (p.roles||[]).includes('personal_contact') && !(p.roles||[]).some(r => CLIENT_ROLES.includes(r));
+    const personIsPersonal = p => isPersonalOnly(p, personRoles);
     const pHits = people
       .filter(p => p.name?.toLowerCase().includes(q) || (p.email||'').toLowerCase().includes(q))
       .slice(0, 6)
@@ -2067,6 +2095,7 @@ export function HouseholdsList({ households, householdMembers, people, nav, onEd
 
 export function PersonalDashboard({ people, orgs, households, householdMembers, contactDates, notes=[], projects=[], nav }) {
   const isMobile = useIsMobile();
+  const { personRoles } = useTypes();
   // Which home-member rows are expanded to show their recent interactions.
   const [expandedMember, setExpandedMember] = useState(() => new Set());
   const toggleMember = (id) => setExpandedMember(prev => {
@@ -2092,8 +2121,8 @@ export function PersonalDashboard({ people, orgs, households, householdMembers, 
 
   // Personal contacts only (mirrors BirthdaysView scoping).
   const personalIds = useMemo(() => new Set(
-    people.filter(p => (p.roles||[]).includes('personal_contact')).map(p => p.id)
-  ), [people]);
+    people.filter(p => hasPersonalRole(p, personRoles)).map(p => p.id)
+  ), [people, personRoles]);
   const nameOf = (id) => people.find(p => p.id === id)?.name || '';
 
   // Upcoming dates: personal-contact birthdays + recurring contact_dates within
@@ -2557,11 +2586,17 @@ export function PeopleList({ people, orgs, personType, nav, onAdd, onMerge, hous
   const isRecent = personType === 'recent';
   const baseList = isRecent
     ? recentPersonIds.map(id => people.find(p => p.id === id)).filter(Boolean)
-    : people.filter(p => personType==='all' ? !isPersonalOnly(p) : p.roles.includes(personType));
+    : people.filter(p => {
+        if (personType==='all') return !isPersonalOnly(p, personRoles);
+        if (personType==='__personal_all__') return hasPersonalRole(p, personRoles);
+        return p.roles.includes(personType);
+      });
   const list = baseList.filter(p=>!q||p.name.toLowerCase().includes(q.toLowerCase())||(p.email||'').toLowerCase().includes(q.toLowerCase()));
   const title = isRecent
     ? 'Recent Contacts'
-    : (personType==='all' ? 'All Contacts' : ((personRoles[personType]||PERSON_ROLES[personType])?.label+'s' || personType));
+    : (personType==='all' ? 'All Contacts'
+      : personType==='__personal_all__' ? 'All Personal Contacts'
+      : ((personRoles[personType]||PERSON_ROLES[personType])?.label+'s' || personType));
   const toggleSel = (id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const exitSelect = () => { setSelectMode(false); setSelected(new Set()); };
   const canMerge = selected.size === 2;

@@ -179,8 +179,28 @@ export const PERSON_SIDEBAR_ROLES = ['private_client','website_student','tt_pros
 // personal org. doNotEmail is left as a manual per-person flag (set true by hand on
 // pure personal contacts); it is intentionally not driven by these predicates.
 export const CLIENT_ROLES = ['private_client','website_student','tt_prospect','retreat_interest','workshop_interest','resident'];
-export const isPersonalOnly = p => {
+
+// PERSONAL_PARENT: the role-parent key that files a contact into the Personal
+// Record System. Any role parented to this counts as personal — letting you
+// organise the personal side with sub-roles (Family, Friends, …) instead of a
+// single flat tag. personRoles is the runtime merged map (key -> { parentKey }).
+export const PERSONAL_PARENT = 'personal';
+
+// Does this person carry any role whose parent is `personal`?
+// Falls back to the legacy `personal_contact` tag so it works before/after the
+// re-parent migration. personRoles may be omitted (legacy-only check).
+export const hasPersonalRole = (p, personRoles) => {
   const roles = p.roles || [];
-  return roles.includes('personal_contact') && !roles.some(r => CLIENT_ROLES.includes(r));
+  if (roles.includes('personal_contact')) return true;
+  if (!personRoles) return false;
+  return roles.some(r => (personRoles[r]?.parentKey || null) === PERSONAL_PARENT);
+};
+
+// isPersonalOnly: personal AND not also a client. Dual-membership preserved —
+// a personal contact who's also a client is NOT personal-only and stays in
+// client views. Pass personRoles to get parent-aware behaviour.
+export const isPersonalOnly = (p, personRoles) => {
+  const roles = p.roles || [];
+  return hasPersonalRole(p, personRoles) && !roles.some(r => CLIENT_ROLES.includes(r));
 };
 export const isPersonalOrg = o => o.type === 'personal';
