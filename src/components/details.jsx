@@ -317,7 +317,7 @@ export function SessionNoteRow({ c, notesList, open, onToggle, nav }) {
 
 // ─── ORG LIST / DETAIL ────────────────────────────────────────────────────────
 
-export function OrgDetail({ org, people, classes, invoices, notes=[], contactDates=[], nav, backInfo, onEdit, onAddPerson, onAddClass, onCreateInvoice, onEditInvoice, onUpdateInvoiceStatus, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onAddContactDate, onUpdateContactDate, onRemoveContactDate }) {
+export function OrgDetail({ org, people, classes, invoices, notes=[], contactDates=[], nav, backInfo, onEdit, onAddPerson, onAddClass, onCreateInvoice, onEditInvoice, onUpdateInvoiceStatus, onAddToCalendar, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onAddContactDate, onUpdateContactDate, onRemoveContactDate }) {
   const isMobile = useIsMobile();
   const { orgTypes, personRoles } = useTypes();
   // Persisted so the org page reopens on the last-viewed tab (sticky, per-device).
@@ -680,6 +680,7 @@ export function OrgDetail({ org, people, classes, invoices, notes=[], contactDat
                       onReopenNote={onReopenNote}
                       onUpdateActionDate={onUpdateActionDate}
                       onDelete={onDeleteNote}
+                      onAddToCalendar={onAddToCalendar}
                       onClick={()=>nav('person_detail',{personId:n.personId,highlightNoteId:n.id})} />
                   </div>
                 ))}
@@ -1104,7 +1105,7 @@ export function ContactDatesCard({ anchor, contactDates, onAdd, onUpdate, onRemo
 }
 
 
-export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], orgs, nav, backInfo, highlightNoteId, people, households, householdMembers, contactDates=[], onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onSendEmail, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {
+export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], orgs, nav, backInfo, highlightNoteId, people, households, householdMembers, contactDates=[], onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onAddToCalendar, onSendEmail, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {
   const isMobile = useIsMobile();  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
@@ -1520,8 +1521,8 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
               )}
             </div>
             {addKind&&<NoteForm personId={person.id} classId={null} kind={addKind} onSave={n=>{onAddNote(n);setAddKind(null);}} onCancel={()=>setAddKind(null)} />}
-            {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onClick={onEditNote?()=>onEditNote(n):undefined} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
-            {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onClick={onEditNote?()=>onEditNote(n):undefined} highlight={flashId===n.id} />)}
+            {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
+            {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} highlight={flashId===n.id} />)}
             {visibleNotes.length===0&&!addKind&&<Empty text={effectiveFilter==='all' ? 'No comms yet' : `No ${INTERACTION_KINDS[effectiveFilter].label.toLowerCase()}s logged yet`} />}
           </>}
           {tab==='packages'&&<>

@@ -38,7 +38,7 @@ export const Avatar = ({ name, size=36, role }) => {
   return <div style={{width:size,height:size,borderRadius:'50%',background:bg,border:`1.5px solid ${color}`,display:'flex',alignItems:'center',justifyContent:'center',color,fontSize:size*0.36,fontWeight:600,flexShrink:0}}>{initials(name)}</div>;
 };
 
-export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote, onUpdateActionDate, onDelete, onClick, highlight, dimReason }) => {
+export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote, onUpdateActionDate, onDelete, onClick, onAddToCalendar, highlight, dimReason }) => {
   const [editingDate, setEditingDate] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // Auto-disarm the delete-confirm if user looks away
@@ -145,6 +145,18 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:6,gap:8}}>
         <div style={{color:C.muted,fontSize:12}}>{fmt(note.date)}</div>
         <div style={{display:'flex',alignItems:'center',gap:6}} onClick={e=>e.stopPropagation()}>
+          {/* Add-to-calendar: promotes a note into a diary entry (opens the diary
+              modal prefilled from this note). Hidden for entries that are already
+              diary blocks, and only shown where the parent wires the handler. */}
+          {onAddToCalendar && note.kind !== 'diary' && (
+            <button onClick={()=>onAddToCalendar(note)}
+              title="Add to calendar — creates a diary entry from this note"
+              style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:4,fontSize:11,padding:'2px 9px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.4px'}}
+              onMouseEnter={e=>{e.currentTarget.style.color=C.gold;e.currentTarget.style.borderColor=C.gold+'88';}}
+              onMouseLeave={e=>{e.currentTarget.style.color=C.muted;e.currentTarget.style.borderColor=C.border;}}>
+              🗓 Calendar
+            </button>
+          )}
           {/* Subtle delete: a small × that arms on first click, deletes on second.
               Sandbox-safe (no native confirm). Quietly low-contrast so it doesn't shout. */}
           {onDelete && !confirmingDelete && (

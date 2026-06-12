@@ -1,0 +1,32 @@
+feat: diary editing, note-to-calendar, titles, and mini-week placement
+
+DiaryModal (create-or-edit):
+- Clicking a diary block now reopens DiaryModal (was navigating to the
+  person record via the generic note editor, which had no time field and
+  silently stripped the entry off the calendar)
+- Add Title field (maps to existing subject) as the short calendar label,
+  plus an optional multi-line Note body; no schema change - subject was
+  already wired through the mappers
+- Person AND project links, both optional, each with an open jump-out
+- Anchoring safety net: clearing both person and project falls back to self
+  (SELF_PERSON_ID) so interactions_anchored always passes
+
+Note to calendar:
+- Small Calendar button on note rows in PersonDetail / OrgDetail
+  (NoteCard gains optional onAddToCalendar). Opens DiaryModal prefilled from
+  the note - seeds the body from note text, leaves the original note intact,
+  creates a NEW diary entry. Hidden on entries that are already diary blocks.
+
+Calendar rendering:
+- Week/Month blocks + pills show the title (subject), fall back to body for
+  legacy entries; full body shown in the hover tooltip
+- handleEditDiary now patches the full diary field set incl. subject, so
+  edits persist without dropping the entry off the calendar
+
+Mini-week placement:
+- Desktop dashboards: moved to sit directly above Web Activity
+- Business dashboard mobile: added as a This week accordion section above
+  Web activity
+- Personal dashboard: mini-week now shows on mobile too (was desktop-only)
+
+Files: FeltBodyCRM.jsx, components/{forms,views,details,primitives}.jsx

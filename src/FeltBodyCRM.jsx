@@ -519,6 +519,7 @@ export default function FeltBodyCRM() {
   // Optimistic local patch first, then server-confirm.
   const handleEditDiary = (entry) => {
     const patch = {
+      subject: entry.subject || '',
       text: entry.text,
       date: entry.date,
       time: entry.time || null,
@@ -530,6 +531,20 @@ export default function FeltBodyCRM() {
     setNotes(p => p.map(n => n.id === entry.id ? { ...n, ...patch } : n));
     data.notes.patch(entry.id, patch).catch(onError('Update diary entry'));
   };
+  // "Add to calendar" on a note row → open the diary modal in create mode,
+  // seeded from the note (text, date, person/project link). Creates a NEW diary
+  // entry; the original note is left untouched. Personal/business defaults to
+  // the current mode.
+  const handleNoteToCalendar = (note) => setModal({
+    type: 'add_diary',
+    prefill: {
+      text: note.text || '',
+      date: note.date || today(),
+      personId: note.personId || null,
+      projectId: note.projectId || null,
+      isPersonal: mode === 'personal',
+    },
+  });
   // Adhoc outbound email. data.email.send goes via form-worker /send-email
   // which writes the outbound interaction row server-side and returns it
   // mapped to JSX shape, so we splice into local notes state immediately
@@ -1029,7 +1044,7 @@ export default function FeltBodyCRM() {
           onClose={close} />;
       }
       case 'add_class': return <AddClassForm orgs={orgs} defaultOrgId={modal.orgId} defaultDate={modal.date} onSave={handleAddClass} onClose={close} />;
-      case 'add_diary': return <DiaryModal people={people} projects={projects} selfPersonId={SELF_PERSON_ID} existing={modal.entry || null} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={modal.entry ? handleEditDiary : handleAddDiary} onClose={close} nav={nav} />;
+      case 'add_diary': return <DiaryModal people={people} projects={projects} selfPersonId={SELF_PERSON_ID} existing={modal.entry || null} prefill={modal.prefill || null} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={modal.entry ? handleEditDiary : handleAddDiary} onClose={close} nav={nav} />;
       case 'edit_class': {
         const cls=modal.cls;
         if(cls.seriesId) return <EditSeriesClassForm cls={cls} orgs={orgs} onSaveThis={u=>handleEditClass(cls,u,'this')} onSaveFuture={u=>handleEditClass(cls,u,'future')} onClose={close} />;
@@ -1230,6 +1245,7 @@ export default function FeltBodyCRM() {
           onAddClass={()=>setModal({type:'add_class',orgId})}
           onCreateInvoice={()=>setModal({type:'create_invoice',orgId})}
           onEditInvoice={inv=>setModal({type:'edit_invoice',inv})}
+          onAddToCalendar={handleNoteToCalendar}
           onToggleImportant={toggleNoteImportant}
           onClearAction={clearNoteAction}
           onReopenNote={reopenNote}
@@ -1259,6 +1275,7 @@ export default function FeltBodyCRM() {
           onUpdateContactDate={updateContactDate}
           onRemoveContactDate={removeContactDate}
           onAddNote={addNote}
+          onAddToCalendar={handleNoteToCalendar}
           onSendEmail={sendEmail}
           onToggleImportant={toggleNoteImportant}
           onClearAction={clearNoteAction}

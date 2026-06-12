@@ -1662,21 +1662,28 @@ export function EditNoteForm({ note, onSave, onClose }) {
 // record (selfPersonId) so interactions_anchored is always satisfied. The little
 // "open ↗" links jump to the linked record without making the block-click itself
 // navigate away.
-export function DiaryModal({ people, projects=[], selfPersonId, existing=null, defaultDate, defaultTime, defaultPersonal=false, onSave, onClose, nav }) {
+export function DiaryModal({ people, projects=[], selfPersonId, existing=null, prefill=null, defaultDate, defaultTime, defaultPersonal=false, onSave, onClose, nav }) {
   const isEdit = !!existing;
   const [f, setF] = useState({
-    text: existing?.text || '',
-    date: existing?.date || defaultDate || today(),
+    title: existing?.subject || '',
+    text: existing?.text || prefill?.text || '',
+    date: existing?.date || prefill?.date || defaultDate || today(),
     time: existing?.time || defaultTime || currentHourTime(),
     duration: existing?.durationMins || 60,
-    isPersonal: existing ? !!existing.isPersonal : defaultPersonal,
-    personId: existing ? (existing.personId || '') : (selfPersonId || ''),
-    projectId: existing?.projectId || '',
+    isPersonal: existing ? !!existing.isPersonal : (prefill ? !!prefill.isPersonal : defaultPersonal),
+    personId: existing ? (existing.personId || '') : (prefill?.personId ?? (selfPersonId || '')),
+    projectId: existing?.projectId || prefill?.projectId || '',
   });
   const s = k => v => setF(x=>({...x,[k]:v}));
 
   const save = () => {
-    if(!f.text.trim()) return;
+    // Title is the calendar label and is required. Body is the optional longer
+    // note shown on hover / in this form. (When promoting a note to the calendar
+    // the note text seeds the body, so title may start empty — hence we validate
+    // on title, and fall back to body if a title-less entry somehow saves.)
+    const title = f.title.trim();
+    const text = f.text.trim();
+    if(!title && !text) return;
     // Anchoring safety net: at least one of person / project must be set, else
     // fall back to self so interactions_anchored passes.
     let personId = f.personId || null;
@@ -1684,7 +1691,8 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, d
     if(!personId && !projectId) personId = selfPersonId || null;
     const payload = {
       kind: 'diary',
-      text: f.text.trim(),
+      subject: title || text,   // ensure the calendar always has a label
+      text,
       date: f.date,
       time: f.time || null,
       durationMins: parseInt(f.duration) || 60,
@@ -1701,7 +1709,8 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, d
 
   return (
     <Modal title={isEdit ? 'Edit diary entry' : 'New diary entry'} onClose={onClose}>
-      <FI label="WHAT" value={f.text} onChange={s('text')} placeholder="e.g. Dentist, supervision call, gym…" />
+      <FI label="TITLE" value={f.title} onChange={s('title')} placeholder="e.g. Dentist, Erica's birthday, Supervision" />
+      <FI label="NOTE (optional)" value={f.text} onChange={s('text')} rows={3} placeholder="Longer detail — shows on hover and here when you reopen." />
       <div style={{display:'flex',gap:12}}>
         <FI label="DATE" value={f.date} onChange={s('date')} type="date" half />
         <FI label="TIME" value={f.time} onChange={s('time')} type="time" half />

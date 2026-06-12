@@ -817,6 +817,18 @@ export function Dashboard({ orgs, people, classes, attendance, notes, packages, 
       body: renderImportantNotesBody,
     },
     {
+      key: 'week',
+      title: 'This week',
+      meta: null,
+      action: (
+        <button onClick={()=>nav('week_view')}
+          style={{background:'none',border:'none',color:C.gold,cursor:'pointer',fontSize:12,padding:0,fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>
+          Open →
+        </button>
+      ),
+      body: () => <MiniWeek classes={classes} notes={notes} mode="client" nav={nav} />,
+    },
+    {
       key: 'web',
       title: 'Web activity',
       meta: webUnreadN > 0 ? `${webUnreadN} new` : null,
@@ -950,10 +962,6 @@ export function Dashboard({ orgs, people, classes, attendance, notes, packages, 
         <Stat label="Outstanding" value={fmtMoney(outstanding)} sub={`${invoices.filter(i=>i.status!=='paid').length} invoice${invoices.filter(i=>i.status!=='paid').length!==1?'s':''}`} />
       </div>
 
-      <div style={{marginBottom:32}}>
-        <MiniWeek classes={classes} notes={notes} mode="client" nav={nav} />
-      </div>
-
       {/* Section order: To Do → Classes → Important Notes → Recent Activity.
           The bottom two render side-by-side at >=920px (Important / Classes
           historically; now we keep the same two-column flow for compactness
@@ -972,6 +980,10 @@ export function Dashboard({ orgs, people, classes, attendance, notes, packages, 
           <SectionTitleBar s={sections[2]} mobile={false} />
           {renderImportantNotesBody()}
         </div>
+      </div>
+
+      <div style={{marginTop:32,marginBottom:32}}>
+        <MiniWeek classes={classes} notes={notes} mode="client" nav={nav} />
       </div>
 
       <div style={{marginTop:32}}>
@@ -2202,11 +2214,9 @@ export function PersonalDashboard({ people, orgs, classes=[], households, househ
     <div style={{padding: isMobile ? '12px 12px 24px' : '24px 32px',maxWidth:680}}>
       {isMobile ? <MobileHeader>Personal</MobileHeader> : <PageHead>Personal</PageHead>}
 
-      {!isMobile && (
-        <div style={{marginBottom:18}}>
-          <MiniWeek classes={classes} notes={notes} mode="personal" nav={nav} />
-        </div>
-      )}
+      <div style={{marginBottom:18}}>
+        <MiniWeek classes={classes} notes={notes} mode="personal" nav={nav} />
+      </div>
 
       <Card title={homeHousehold ? homeHousehold.name : 'Household'} onMore={()=>nav('households')}>
         {!homeHousehold ? (
@@ -2937,7 +2947,7 @@ export function MiniWeek({ classes, notes, mode='client', nav }) {
     (notes||[]).forEach(n => {
       if(n.kind !== 'diary' || n.date < anchor || n.date > weekEnd) return;
       const m = timeToMin(n.time); if(m === null) return;
-      out.push({ id:'d_'+n.id, date:n.date, min:m, dur:n.durationMins||60, name:n.text||'', isPersonal:!!n.isPersonal, diary:true });
+      out.push({ id:'d_'+n.id, date:n.date, min:m, dur:n.durationMins||60, name:(n.subject||n.text||''), isPersonal:!!n.isPersonal, diary:true });
     });
     return out;
   }, [classes, notes, anchor, weekEnd]);
@@ -3044,7 +3054,8 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, mode='cl
         __note: n,
         __personId: n.personId || null,
         __projectId: n.projectId || null,
-        name: n.text,
+        name: n.subject || n.text,   // title is the calendar label; fall back to body
+        body: n.subject ? (n.text || '') : '',  // longer note for the tooltip (only if distinct from label)
         date: n.date,
         time: n.time || null,
         duration: n.durationMins || 60,
@@ -3320,7 +3331,7 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, mode='cl
                     }}
                     onMouseEnter={ev=>{ev.currentTarget.style.opacity=1;ev.currentTarget.style.zIndex=3;}}
                     onMouseLeave={ev=>{ev.currentTarget.style.opacity=offMode?0.5:1;ev.currentTarget.style.zIndex=1;}}
-                    title={`${e.name}${fmtTime(e.time)?` · ${fmtTime(e.time)} · ${e.duration} min`:''}${offMode?` · ${e.isPersonal?'personal':'business'}`:''}`}>
+                    title={`${e.name}${fmtTime(e.time)?` · ${fmtTime(e.time)} · ${e.duration} min`:''}${offMode?` · ${e.isPersonal?'personal':'business'}`:''}${e.body?`\n\n${e.body}`:''}`}>
                     <div style={{color:offMode?C.muted:C.text,fontSize:11,fontWeight:500,lineHeight:1.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',fontStyle:'italic'}}>{e.name}</div>
                   </div>
                 );
@@ -3448,7 +3459,9 @@ export function MonthView({ classes, orgs, notes, nav, backInfo, mode='client', 
   const DiaryPill = ({ n }) => {
     const offMode = !!n.isPersonal !== personalMode;
     const accent = offMode ? C.muted : (n.isPersonal ? C.blue : C.gold);
-    const tip = `${n.text}${fmtTime(n.time)?` · ${fmtTime(n.time)}`:''}${offMode?` · ${n.isPersonal?'personal':'business'}`:''}`;
+    const label = n.subject || n.text;       // title is the label
+    const body = n.subject ? (n.text || '') : '';  // longer note for tooltip
+    const tip = `${label}${fmtTime(n.time)?` · ${fmtTime(n.time)}`:''}${offMode?` · ${n.isPersonal?'personal':'business'}`:''}${body?`\n\n${body}`:''}`;
     const go = (e) => {
       e.stopPropagation();
       if(onEditDiary) onEditDiary(n);
@@ -3459,7 +3472,7 @@ export function MonthView({ classes, orgs, notes, nav, backInfo, mode='client', 
       <div onClick={go} title={tip}
         style={{background:offMode?'transparent':accent+'18',borderLeft:`2px dashed ${accent}`,borderRadius:3,padding:isMobile?'1px 3px':'1px 4px',marginBottom:2,cursor:'pointer',opacity:offMode?0.55:1,display:'flex',alignItems:'center',gap:4,overflow:'hidden'}}>
         {!isMobile && n.time && <span style={{color:accent,fontSize:9,fontWeight:600,flexShrink:0}}>{fmtTime(n.time)}</span>}
-        <span style={{color:offMode?C.muted:C.text,fontSize:10,fontStyle:'italic',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{isMobile ? (fmtTime(n.time)||n.text) : n.text}</span>
+        <span style={{color:offMode?C.muted:C.text,fontSize:10,fontStyle:'italic',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{isMobile ? (fmtTime(n.time)||label) : label}</span>
       </div>
     );
   };
