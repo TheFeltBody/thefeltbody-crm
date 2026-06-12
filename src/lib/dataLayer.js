@@ -46,6 +46,28 @@ const ok = ({ data, error }) => {
   return data;
 };
 
+// Fetch ALL rows past PostgREST's 1000-row cap by paging with .range().
+// PostgREST returns at most 1000 rows per request regardless of how many match,
+// so an unbounded .select() silently truncates once a table crosses 1000 rows —
+// dropped rows simply never reach the client (e.g. a person past row 1000 loads
+// with no role and falls back to the default). We loop with .range() until a
+// short page signals the end. `tweak` applies any per-page filters/ordering
+// (needed for the view-backed reads that order/filter).
+async function fetchAll(table, columns = '*', tweak = null) {
+  const PAGE = 1000;
+  let from = 0;
+  let out = [];
+  for (;;) {
+    let q = supabase.from(table).select(columns).range(from, from + PAGE - 1);
+    if (tweak) q = tweak(q);
+    const rows = await q.then(ok);
+    out = out.concat(rows);
+    if (rows.length < PAGE) break;   // last (short) page reached
+    from += PAGE;
+  }
+  return out;
+}
+
 // ─── Initial bulk load ───────────────────────────────────────────────────────
 // One call after auth. Issues all queries in parallel; returns the eleven
 // arrays the JSX expects, plus the customOrgTypes and customPersonRoles arrays.
@@ -84,9 +106,11 @@ export async function loadAll() {
     roleParentRows,
   ] = await Promise.all([
     supabase.from('active_organisations').select('*').order('name').then(ok),
-    supabase.from('active_people').select('*').order('name').then(ok),
-    supabase.from('person_roles').select('person_id, role_key').then(ok),
-    supabase.from('people_emails').select('*').order('created_at').then(ok),
+    // Ranged reads: these tables cross (or are near) PostgREST's 1000-row cap.
+    // Plain .select() would silently drop rows past 1000 — see fetchAll above.
+    fetchAll('active_people', '*', q => q.order('name')),
+    fetchAll('person_roles', 'person_id, role_key'),
+    fetchAll('people_emails', '*', q => q.order('created_at')),
     supabase.from('series').select('*').order('start_date', { ascending: false }).then(ok),
     supabase.from('sessions').select('*').order('date', { ascending: false }).then(ok),
     supabase.from('attendance').select('*').then(ok),
