@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { BANK_DETAILS, C, CLIENT_ROLES, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
-import { PrintInvoiceOverlay, addDays, birthdayInfo, classKindKey, contactDateInfo, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
+import { PrintInvoiceOverlay, addDays, birthdayInfo, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
 import { Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
 
@@ -110,7 +110,8 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
   const sectionForView =
     (view.name === 'org_list' || view.name === 'org_detail') ? 'orgs' :
     (view.name === 'people'   || view.name === 'person_detail') ? 'people' :
-    (view.name === 'week_view' || view.name === 'month_view' || view.name === 'classes' || view.name === 'class_detail' || view.name === 'forms_list') ? 'sessions' :
+    (view.name === 'week_view' || view.name === 'month_view') ? (mode === 'personal' ? 'diary' : 'sessions') :
+    (view.name === 'classes' || view.name === 'class_detail' || view.name === 'forms_list') ? 'sessions' :
     (view.name === 'invoices' || view.name === 'invoice_detail') ? 'finance' :
     null;
   const [openSection, setOpenSection] = useState(sectionForView || 'people');
@@ -328,6 +329,16 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
           <Item name="month_view" label="Month View" icon="▥" indent />
           <Item name="classes" label="All Classes" icon="≡" indent />
           <Item name="forms_list" label="Forms" icon="◍" indent />
+        </>
+      )}
+
+      {/* Personal-mode diary — reuses the same Week/Month views, which grey the
+          opposite (business) calendar when mode==='personal'. */}
+      {isPersonal && <SectionToggle label="Diary" sectionKey="diary" />}
+      {isPersonal && openSection==='diary' && (
+        <>
+          <Item name="week_view" label="Week View" icon="▦" indent />
+          <Item name="month_view" label="Month View" icon="▥" indent />
         </>
       )}
 
@@ -937,6 +948,10 @@ export function Dashboard({ orgs, people, classes, attendance, notes, packages, 
         <Stat label="All Contacts" value={people.filter(p=>!isPersonalOnly(p, personRoles)).length} sub={`${people.filter(p=>p.status==='active'&&!isPersonalOnly(p, personRoles)).length} active`} />
         <Stat label="To Do" value={todoCounts.all} sub={(()=>{ const o=notes.filter(n=>n.actionDate&&!n.completed&&n.actionDate<t).length; return o>0?`${o} overdue`:'all on track'; })()} />
         <Stat label="Outstanding" value={fmtMoney(outstanding)} sub={`${invoices.filter(i=>i.status!=='paid').length} invoice${invoices.filter(i=>i.status!=='paid').length!==1?'s':''}`} />
+      </div>
+
+      <div style={{marginBottom:32}}>
+        <MiniWeek classes={classes} notes={notes} mode="client" nav={nav} />
       </div>
 
       {/* Section order: To Do → Classes → Important Notes → Recent Activity.
@@ -2094,7 +2109,7 @@ export function HouseholdsList({ households, householdMembers, people, nav, onEd
 // doesn't need one-open-at-a-time). Panels: Households, upcoming birthdays +
 // anniversaries (recurring contact_dates), and active personal projects.
 
-export function PersonalDashboard({ people, orgs, households, householdMembers, contactDates, notes=[], projects=[], nav }) {
+export function PersonalDashboard({ people, orgs, classes=[], households, householdMembers, contactDates, notes=[], projects=[], nav }) {
   const isMobile = useIsMobile();
   const { personRoles } = useTypes();
   // Which home-member rows are expanded to show their recent interactions.
@@ -2186,6 +2201,12 @@ export function PersonalDashboard({ people, orgs, households, householdMembers, 
   return (
     <div style={{padding: isMobile ? '12px 12px 24px' : '24px 32px',maxWidth:680}}>
       {isMobile ? <MobileHeader>Personal</MobileHeader> : <PageHead>Personal</PageHead>}
+
+      {!isMobile && (
+        <div style={{marginBottom:18}}>
+          <MiniWeek classes={classes} notes={notes} mode="personal" nav={nav} />
+        </div>
+      )}
 
       <Card title={homeHousehold ? homeHousehold.name : 'Household'} onMore={()=>nav('households')}>
         {!homeHousehold ? (
@@ -2885,9 +2906,122 @@ export function ClassList({ classes, orgs, series, attendance, nav, onAdd }) {
 }
 
 
-export function WeekView({ classes, orgs, notes, people, nav, backInfo, onAddClass, onUpdateActionDate, onClearAction, onToggleImportant }) {
+// ─── MINI WEEK (dashboard widget) ─────────────────────────────────────────────
+// A compact, read-only week strip for the dashboards. Shows classes + diary as
+// small time-grid blocks, greying whichever belongs to the opposite calendar to
+// `mode`. Has its own ‹ › week navigation but no add/edit — clicking anywhere in
+// the grid (or the header) jumps to the full Week View. Fixed 7am–9pm window
+// (no auto-extend) keeps it predictably small; anything outside falls into a
+// compact "all-day / off-hours" count rather than stretching the widget.
+export function MiniWeek({ classes, notes, mode='client', nav }) {
+  const t = today();
+  const personalMode = mode === 'personal';
+  const [offset, setOffset] = useState(0); // weeks from current
+  const anchor = useMemo(() => addDays(startOfWeek(t), offset*7), [t, offset]);
+  const days = useMemo(() => Array.from({length:7}, (_,i) => addDays(anchor, i)), [anchor]);
+  const weekEnd = days[6];
+
+  const SLOT_MIN = 30, SLOT_HEIGHT = 9;       // tight vertical scale
+  const G_START = 7*60, G_END = 21*60;        // fixed 7am–9pm
+  const totalSlots = (G_END - G_START) / SLOT_MIN;
+  const gridHeight = totalSlots * SLOT_HEIGHT;
+
+  // Merge classes + diary into one positioned stream. diary flags styling.
+  const items = useMemo(() => {
+    const out = [];
+    classes.forEach(c => {
+      if(c.date < anchor || c.date > weekEnd) return;
+      const m = timeToMin(c.time); if(m === null) return;
+      out.push({ id:'c_'+c.id, date:c.date, min:m, dur:c.duration||60, name:c.name||'', isPersonal:false, diary:false });
+    });
+    (notes||[]).forEach(n => {
+      if(n.kind !== 'diary' || n.date < anchor || n.date > weekEnd) return;
+      const m = timeToMin(n.time); if(m === null) return;
+      out.push({ id:'d_'+n.id, date:n.date, min:m, dur:n.durationMins||60, name:n.text||'', isPersonal:!!n.isPersonal, diary:true });
+    });
+    return out;
+  }, [classes, notes, anchor, weekEnd]);
+
+  const monthLabel = (() => {
+    const a = new Date(anchor+'T12:00'), e = new Date(weekEnd+'T12:00');
+    if(a.getMonth()===e.getMonth()) return a.toLocaleDateString('en-GB',{month:'short',day:'numeric'})+' – '+e.getDate();
+    return a.toLocaleDateString('en-GB',{month:'short',day:'numeric'})+' – '+e.toLocaleDateString('en-GB',{month:'short',day:'numeric'});
+  })();
+
+  const btn = { background:'none', border:`1px solid ${C.border}`, color:C.muted, cursor:'pointer', borderRadius:5, fontSize:12, padding:'2px 7px', lineHeight:1, fontFamily:"'Jost',sans-serif" };
+
+  return (
+    <div style={{border:`1px solid ${C.border}`,borderRadius:10,padding:14,background:C.card}}>
+      {/* Header: label + week nav + full-view link */}
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:16,color:C.text,fontWeight:600,cursor:'pointer'}} onClick={()=>nav('week_view')}>
+          {offset===0 ? 'This week' : monthLabel}
+        </div>
+        <div style={{flex:1}} />
+        <button style={btn} onClick={()=>setOffset(o=>o-1)}>‹</button>
+        {offset!==0 && <button style={btn} onClick={()=>setOffset(0)}>Today</button>}
+        <button style={btn} onClick={()=>setOffset(o=>o+1)}>›</button>
+        <button style={{...btn,color:C.gold,borderColor:C.gold+'88'}} onClick={()=>nav('week_view')}>Open ↗</button>
+      </div>
+
+      {/* Day-of-week header */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,marginBottom:3}}>
+        {days.map((d,i)=>{
+          const isToday = d===t;
+          const dd = new Date(d+'T12:00');
+          return (
+            <div key={d} style={{textAlign:'center'}}>
+              <div style={{color:isToday?C.gold:C.muted,fontSize:8,fontWeight:600,letterSpacing:'0.5px'}}>{['M','T','W','T','F','S','S'][i]}</div>
+              <div style={{color:isToday?C.gold:C.text,fontSize:11,fontWeight:isToday?600:400}}>{dd.getDate()}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Mini grid — read-only; clicking jumps to full Week View */}
+      <div onClick={()=>nav('week_view')}
+        style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,cursor:'pointer'}}>
+        {days.map((d,i)=>{
+          const isToday = d===t;
+          const dayItems = items.filter(it => it.date===d);
+          return (
+            <div key={d} style={{position:'relative',height:gridHeight,borderRadius:4,background:isToday?C.goldBg+'33':C.bg,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+              {dayItems.map(it=>{
+                const offMode = it.diary ? (it.isPersonal !== personalMode) : (personalMode); // classes are business; off-mode in personal
+                const accent = offMode ? C.muted : (it.diary ? (it.isPersonal?C.blue:C.gold) : C.gold);
+                const top = Math.max(0, ((it.min - G_START)/SLOT_MIN)*SLOT_HEIGHT);
+                const h = Math.max(8, (it.dur/SLOT_MIN)*SLOT_HEIGHT - 1);
+                if(it.min >= G_END || it.min+it.dur <= G_START) return null;
+                const tLbl = `${String(Math.floor(it.min/60)).padStart(2,'0')}:${String(it.min%60).padStart(2,'0')}`;
+                const sideLbl = it.diary ? (it.isPersonal?'personal':'business') : 'business';
+                const tip = `${it.name} · ${fmtTime(tLbl)}${offMode?` · ${sideLbl}`:''}`;
+                return (
+                  <div key={it.id} title={tip}
+                    style={{position:'absolute',top,height:h,left:1,right:1,borderRadius:2,
+                      background: offMode ? C.muted+'22' : accent+'2e',
+                      borderLeft:`2px ${it.diary?'dashed':'solid'} ${accent}`,
+                      opacity: offMode ? 0.7 : 1,
+                      overflow:'hidden',padding:'0 2px',
+                      display:'flex',alignItems:'center'}}>
+                    <span style={{fontSize:7,lineHeight:1,color:offMode?C.muted:C.text,
+                      fontStyle:it.diary?'italic':'normal',
+                      whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{it.name}</span>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
+export function WeekView({ classes, orgs, notes, people, nav, backInfo, mode='client', onAddClass, onAddDiary, onUpdateActionDate, onClearAction, onToggleImportant }) {
   const isMobile = useIsMobile();
   const t = today();
+  const personalMode = mode === 'personal';
   // Anchor the week to Monday (UK convention).
   const initialAnchor = useMemo(() => startOfWeek(t), [t]);
   const [anchor, setAnchor] = useState(initialAnchor);
@@ -2897,6 +3031,26 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, onAddCla
   const weekClasses = useMemo(() =>
     classes.filter(c => c.date >= anchor && c.date <= weekEnd),
     [classes, anchor, weekEnd]);
+  // Diary entries (kind='diary') normalised into the class-like shape the grid
+  // renders, so they flow through the same classBlock positioner and day-column
+  // map. __diary flags them for greyed off-mode styling + nav-to-person click.
+  const weekDiary = useMemo(() =>
+    notes
+      .filter(n => n.kind === 'diary' && n.date >= anchor && n.date <= weekEnd)
+      .map(n => ({
+        id: 'diary_' + n.id,
+        __diary: true,
+        __noteId: n.id,
+        __personId: n.personId || null,
+        __projectId: n.projectId || null,
+        name: n.text,
+        date: n.date,
+        time: n.time || null,
+        duration: n.durationMins || 60,
+        isPersonal: !!n.isPersonal,
+        location: '',
+      })),
+    [notes, anchor, weekEnd]);
   // Action notes for this week — only active (non-completed) ones surface here.
   const weekActionNotes = useMemo(() =>
     notes.filter(n => n.actionDate && !n.completed && n.actionDate >= anchor && n.actionDate <= weekEnd)
@@ -2911,17 +3065,19 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, onAddCla
   const DEFAULT_END = 21*60;
   const { gridStart, gridEnd } = useMemo(() => {
     let s = DEFAULT_START, e = DEFAULT_END;
-    weekClasses.forEach(c => {
-      const m = timeToMin(c.time);
+    const scan = (item) => {
+      const m = timeToMin(item.time);
       if(m === null) return;
-      const dur = c.duration || 60;
+      const dur = item.duration || 60;
       const startSlot = Math.floor(m / SLOT_MIN) * SLOT_MIN;
       const endSlot = Math.ceil((m + dur) / SLOT_MIN) * SLOT_MIN;
       if(startSlot < s) s = startSlot;
       if(endSlot > e) e = endSlot;
-    });
+    };
+    weekClasses.forEach(scan);
+    weekDiary.forEach(scan);
     return { gridStart: s, gridEnd: e };
-  }, [weekClasses]);
+  }, [weekClasses, weekDiary]);
   const totalSlots = (gridEnd - gridStart) / SLOT_MIN;
   const gridHeight = totalSlots * SLOT_HEIGHT;
 
@@ -2968,7 +3124,10 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, onAddCla
   return (
     <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={
-        <Btn small onClick={()=>onAddClass && onAddClass(t)}>+ Class</Btn>
+        <div style={{display:'flex',gap:8}}>
+          {onAddDiary && <Btn small variant="secondary" onClick={()=>onAddDiary(t, currentHourTime())}>+ Diary</Btn>}
+          <Btn small onClick={()=>onAddClass && onAddClass(t)}>+ Class</Btn>
+        </div>
       }>Week View</PageHead>
 
       {/* Week navigator */}
@@ -3059,8 +3218,23 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, onAddCla
         {days.map((d,i) => {
           const lbl = dayLabel(d, i);
           const dayItems = weekClasses.filter(c => c.date === d && timeToMin(c.time) !== null);
+          const dayDiary = weekDiary.filter(e => e.date === d && timeToMin(e.time) !== null);
+          // Click an empty part of the column → quick-add a diary entry, with the
+          // time derived from the click's vertical position (snapped to 30 min).
+          const onColumnClick = (ev) => {
+            if(!onAddDiary) return;
+            // Ignore clicks that landed on a block (they handle their own nav).
+            if(ev.target !== ev.currentTarget) return;
+            const rect = ev.currentTarget.getBoundingClientRect();
+            const y = ev.clientY - rect.top;
+            const rawMin = gridStart + Math.floor(y / SLOT_HEIGHT) * SLOT_MIN;
+            const hh = String(Math.floor(rawMin / 60)).padStart(2,'0');
+            const mm = String(rawMin % 60).padStart(2,'0');
+            onAddDiary(d, `${hh}:${mm}`);
+          };
           return (
-            <div key={d} style={{position:'relative',height:gridHeight,borderRight:i<6?`1px solid ${C.border}`:'none',background:lbl.isToday?C.goldBg+'22':'transparent'}}>
+            <div key={d} onClick={onColumnClick}
+              style={{position:'relative',height:gridHeight,borderRight:i<6?`1px solid ${C.border}`:'none',background:lbl.isToday?C.goldBg+'22':'transparent',cursor:onAddDiary?'copy':'default'}}>
               {/* Half-hourly gridlines: full lines on the hour, subtle lines on the half */}
               {Array.from({length: totalSlots}, (_, j) => {
                 const minute = gridStart + j * SLOT_MIN;
@@ -3070,6 +3244,7 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, onAddCla
                     position:'absolute', top:j*SLOT_HEIGHT, left:0, right:0,
                     height:1, background:C.border,
                     opacity: isFullHour ? 0.45 : 0.18,
+                    pointerEvents:'none',
                   }} />
                 );
               })}
@@ -3079,7 +3254,7 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, onAddCla
                 const nowMin = now.getHours()*60 + now.getMinutes();
                 const yMin = nowMin - gridStart;
                 if(yMin < 0 || yMin > (gridEnd - gridStart)) return null;
-                return <div style={{position:'absolute',top:(yMin/SLOT_MIN)*SLOT_HEIGHT,left:0,right:0,height:2,background:C.red,zIndex:2,boxShadow:`0 0 4px ${C.red}99`}} />;
+                return <div style={{position:'absolute',top:(yMin/SLOT_MIN)*SLOT_HEIGHT,left:0,right:0,height:2,background:C.red,zIndex:2,boxShadow:`0 0 4px ${C.red}99`,pointerEvents:'none'}} />;
               })()}
               {/* Class blocks — name + venue only, time/details on hover */}
               {dayItems.map(c => {
@@ -3111,6 +3286,40 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, onAddCla
                     {!compact && c.location && (
                       <div style={{color:C.muted,fontSize:10,marginTop:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{c.location}</div>
                     )}
+                  </div>
+                );
+              })}
+              {/* Diary blocks — colour by personal(blue)/business(gold); greyed +
+                  muted when they belong to the opposite calendar to the current
+                  mode, but still clickable through to the linked contact. */}
+              {dayDiary.map(e => {
+                const block = classBlock(e);
+                if(!block) return null;
+                const offMode = e.isPersonal !== personalMode;
+                const accent = offMode ? C.muted : (e.isPersonal ? C.blue : C.gold);
+                const compact = block.height < 28;
+                const goDetail = () => {
+                  if(e.__personId) nav('person_detail',{personId:e.__personId,highlightNoteId:e.__noteId});
+                  else if(e.__projectId) nav('project_detail',{projectId:e.__projectId});
+                };
+                return (
+                  <div key={e.id} onClick={goDetail}
+                    style={{
+                      position:'absolute', top:block.top, height:block.height, left:3, right:3,
+                      background: offMode ? C.card : accent+'1e',
+                      border:`1px dashed ${accent}${offMode?'55':'88'}`,
+                      borderLeft:`3px solid ${accent}`,
+                      borderRadius:4, padding: compact ? '1px 6px' : '2px 6px',
+                      cursor:'pointer', overflow:'hidden',
+                      opacity: offMode ? 0.5 : 1,
+                      fontFamily:"'Jost',sans-serif",
+                      transition:'all 0.12s',
+                      display:'flex', flexDirection:'column', justifyContent: compact ? 'center' : 'flex-start',
+                    }}
+                    onMouseEnter={ev=>{ev.currentTarget.style.opacity=1;ev.currentTarget.style.zIndex=3;}}
+                    onMouseLeave={ev=>{ev.currentTarget.style.opacity=offMode?0.5:1;ev.currentTarget.style.zIndex=1;}}
+                    title={`${e.name}${fmtTime(e.time)?` · ${fmtTime(e.time)} · ${e.duration} min`:''}${offMode?` · ${e.isPersonal?'personal':'business'}`:''}`}>
+                    <div style={{color:offMode?C.muted:C.text,fontSize:11,fontWeight:500,lineHeight:1.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',fontStyle:'italic'}}>{e.name}</div>
                   </div>
                 );
               })}
@@ -3166,9 +3375,10 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, onAddCla
 // the class on click; days overflow to "+N more". Mirrors WeekView's header and
 // Monday-start convention, and the OrgDetail MonthCalendar's grid mechanics.
 
-export function MonthView({ classes, orgs, nav, backInfo, onAddClass }) {
+export function MonthView({ classes, orgs, notes, nav, backInfo, mode='client', onAddClass, onAddDiary }) {
   const isMobile = useIsMobile();
   const t = today();
+  const personalMode = mode === 'personal';
   const [anchor, setAnchor] = useState(() => t); // any date inside the shown month
   const a = new Date(anchor+'T12:00');
   const year = a.getFullYear(), month = a.getMonth();
@@ -3184,6 +3394,13 @@ export function MonthView({ classes, orgs, nav, backInfo, onAddClass }) {
     Object.values(map).forEach(list => list.sort((x,y)=>(x.time||'').localeCompare(y.time||'')));
     return map;
   }, [classes]);
+  // Diary entries grouped by date for the month grid.
+  const diaryByDate = useMemo(() => {
+    const map = {};
+    (notes||[]).forEach(n => { if(n.kind==='diary') (map[n.date]||(map[n.date]=[])).push(n); });
+    Object.values(map).forEach(list => list.sort((x,y)=>(x.time||'').localeCompare(y.time||'')));
+    return map;
+  }, [notes]);
   const monthCount = classes.filter(c => { const d=new Date(c.date+'T12:00'); return d.getFullYear()===year && d.getMonth()===month; }).length;
 
   const DOW = isMobile ? ['M','T','W','T','F','S','S'] : ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -3224,10 +3441,33 @@ export function MonthView({ classes, orgs, nav, backInfo, onAddClass }) {
     );
   };
 
+  // Diary pill — italic, dashed accent, greyed when off-mode. Clicking navigates
+  // to the linked contact (or project), mirroring WeekView.
+  const DiaryPill = ({ n }) => {
+    const offMode = !!n.isPersonal !== personalMode;
+    const accent = offMode ? C.muted : (n.isPersonal ? C.blue : C.gold);
+    const tip = `${n.text}${fmtTime(n.time)?` · ${fmtTime(n.time)}`:''}${offMode?` · ${n.isPersonal?'personal':'business'}`:''}`;
+    const go = (e) => {
+      e.stopPropagation();
+      if(n.personId) nav('person_detail',{personId:n.personId,highlightNoteId:n.id});
+      else if(n.projectId) nav('project_detail',{projectId:n.projectId});
+    };
+    return (
+      <div onClick={go} title={tip}
+        style={{background:offMode?'transparent':accent+'18',borderLeft:`2px dashed ${accent}`,borderRadius:3,padding:isMobile?'1px 3px':'1px 4px',marginBottom:2,cursor:'pointer',opacity:offMode?0.55:1,display:'flex',alignItems:'center',gap:4,overflow:'hidden'}}>
+        {!isMobile && n.time && <span style={{color:accent,fontSize:9,fontWeight:600,flexShrink:0}}>{fmtTime(n.time)}</span>}
+        <span style={{color:offMode?C.muted:C.text,fontSize:10,fontStyle:'italic',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{isMobile ? (fmtTime(n.time)||n.text) : n.text}</span>
+      </div>
+    );
+  };
+
   return (
     <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={
-        <Btn small onClick={()=>onAddClass && onAddClass(t)}>+ Class</Btn>
+        <div style={{display:'flex',gap:8}}>
+          {onAddDiary && <Btn small variant="secondary" onClick={()=>onAddDiary(t)}>+ Diary</Btn>}
+          <Btn small onClick={()=>onAddClass && onAddClass(t)}>+ Class</Btn>
+        </div>
       }>Month View</PageHead>
 
       <div style={{display:'flex',alignItems:'center',gap:isMobile?6:10,marginBottom:isMobile?12:18,flexWrap:'wrap'}}>
@@ -3281,8 +3521,20 @@ export function MonthView({ classes, orgs, nav, backInfo, onAddClass }) {
                 }}>
                 {dd.getDate()}
               </div>
-              {dayClasses.slice(0,maxPills).map(c=><Pill key={c.id} c={c} />)}
-              {dayClasses.length>maxPills && <div style={{color:C.muted,fontSize:9,paddingLeft:2}}>+{dayClasses.length-maxPills}</div>}
+              {(() => {
+                const dayDiary = diaryByDate[d] || [];
+                const shownClasses = dayClasses.slice(0, maxPills);
+                const remainingSlots = Math.max(0, maxPills - shownClasses.length);
+                const shownDiary = dayDiary.slice(0, remainingSlots);
+                const overflow = (dayClasses.length - shownClasses.length) + (dayDiary.length - shownDiary.length);
+                return (
+                  <>
+                    {shownClasses.map(c=><Pill key={c.id} c={c} />)}
+                    {shownDiary.map(n=><DiaryPill key={n.id} n={n} />)}
+                    {overflow>0 && <div style={{color:C.muted,fontSize:9,paddingLeft:2}}>+{overflow}</div>}
+                  </>
+                );
+              })()}
             </div>
           );
         })}

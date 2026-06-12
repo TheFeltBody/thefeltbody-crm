@@ -1643,6 +1643,82 @@ export function EditNoteForm({ note, onSave, onClose }) {
   );
 }
 
+// ─── DIARY ENTRY (calendar quick-add) ─────────────────────────────────────────
+// Create-only modal for diary entries. A diary entry is an interaction with
+// kind='diary' carrying a start time + duration, so it renders as a positioned
+// block in WeekView/MonthView alongside classes. The personal/business toggle
+// (isPersonal) drives which calendar it appears in and whether it greys out in
+// the opposite mode. Person link defaults to the owner's own contact (selfPersonId,
+// threaded from the parent) so interactions_anchored is always satisfied — the
+// field can be re-pointed to any contact but never left empty (save falls back to
+// self). Editing happens on PersonDetail's Comms tab, where diary entries live as
+// notes; clicking a block in the calendar navigates there rather than reopening
+// this modal. defaultDate/defaultTime are prefilled from the clicked day/slot.
+export function DiaryModal({ people, selfPersonId, defaultDate, defaultTime, defaultPersonal=false, onSave, onClose }) {
+  const [f, setF] = useState({
+    text: '',
+    date: defaultDate || today(),
+    time: defaultTime || currentHourTime(),
+    duration: 60,
+    isPersonal: defaultPersonal,
+    personId: selfPersonId || '',
+  });
+  const s = k => v => setF(x=>({...x,[k]:v}));
+
+  const save = () => {
+    if(!f.text.trim()) return;
+    // Never allow an empty person link — interactions_anchored requires an
+    // anchor and diary entries carry no session/project. Fall back to self.
+    const personId = f.personId || selfPersonId || '';
+    onSave({
+      kind: 'diary',
+      text: f.text.trim(),
+      date: f.date,
+      time: f.time || null,
+      durationMins: parseInt(f.duration) || 60,
+      isPersonal: !!f.isPersonal,
+      personId,
+    });
+    onClose();
+  };
+
+  return (
+    <Modal title="New diary entry" onClose={onClose}>
+      <FI label="WHAT" value={f.text} onChange={s('text')} placeholder="e.g. Dentist, supervision call, gym…" />
+      <div style={{display:'flex',gap:12}}>
+        <FI label="DATE" value={f.date} onChange={s('date')} type="date" half />
+        <FI label="TIME" value={f.time} onChange={s('time')} type="time" half />
+      </div>
+      <div style={{display:'flex',gap:12}}>
+        <FI label="DURATION (mins)" value={f.duration} onChange={v=>s('duration')(parseInt(v)||60)} type="number" half />
+        <FI label="LINKED CONTACT" value={f.personId}
+          onChange={s('personId')}
+          opts={people.map(p=>({v:p.id,l:p.name}))} half />
+      </div>
+      {/* Personal / business toggle — drives which calendar this shows in. */}
+      <div style={{marginTop:4,marginBottom:14}}>
+        <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:8}}>CALENDAR</div>
+        <div style={{display:'flex',gap:8}}>
+          {[{v:false,l:'Business',c:C.gold},{v:true,l:'Personal',c:C.blue}].map(opt=>(
+            <button key={String(opt.v)} onClick={()=>s('isPersonal')(opt.v)}
+              style={{flex:1,padding:'9px 12px',borderRadius:6,cursor:'pointer',fontSize:13,
+                fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',
+                background: f.isPersonal===opt.v ? opt.c+'22' : C.card,
+                border:`1px solid ${f.isPersonal===opt.v ? opt.c : C.border}`,
+                color: f.isPersonal===opt.v ? opt.c : C.muted}}>
+              {f.isPersonal===opt.v ? '● ' : '○ '}{opt.l}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
+        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn onClick={save}>Add entry</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 // Compose-and-send modal for the CRM adhoc email feature. Plain-text v1: the
 // form-worker handles HTML escaping + \n -> <br>, and sends via Brevo with no
 // template (htmlContent direct). Errors from the worker (validation, missing

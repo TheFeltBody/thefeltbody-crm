@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "./lib/supabase.js";
 import * as data from "./lib/dataLayer.js";
-import { C, ORG_META, PERSON_ROLES, SEED } from "./lib/constants.js";
+import { C, ORG_META, PERSON_ROLES, SEED, SELF_PERSON_ID } from "./lib/constants.js";
 import { MobileUIContext, TypesContext, buildOrgTypes, buildPersonRoles, fmt, generateSeriesClasses, isWebEvent, today, useLocalStorage } from "./lib/helpers.jsx";
 import { Empty } from "./components/primitives.jsx";
-import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, EditNoteForm, EditPackageForm, EditSeriesClassForm, MergePeopleForm, PackageTemplateForm } from "./components/forms.jsx";
+import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, DiaryModal, EditNoteForm, EditPackageForm, EditSeriesClassForm, MergePeopleForm, PackageTemplateForm } from "./components/forms.jsx";
 import { BirthdaysView, ClassList, Dashboard, FormsList, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackageTemplatesView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
 import { ClassDetail, HouseholdModal, OrgDetail, PersonDetail, ProjectDetail } from "./components/details.jsx";
 import { CareHomeResourcesView, DocumentsView } from "./components/documents.jsx";
@@ -507,6 +507,12 @@ export default function FeltBodyCRM() {
   const addNote = (n) => data.notes.create(n)
     .then(saved => setNotes(p => [...p, saved]))
     .catch(onError('Add note'));
+  // Diary entries are interactions with kind='diary' — same create path as a
+  // note, splicing into local notes state so the new block appears on the
+  // calendar immediately rather than waiting on the 60s poll.
+  const handleAddDiary = (entry) => data.notes.create(entry)
+    .then(saved => setNotes(p => [...p, saved]))
+    .catch(onError('Add diary entry'));
   // Adhoc outbound email. data.email.send goes via form-worker /send-email
   // which writes the outbound interaction row server-side and returns it
   // mapped to JSX shape, so we splice into local notes state immediately
@@ -1006,6 +1012,7 @@ export default function FeltBodyCRM() {
           onClose={close} />;
       }
       case 'add_class': return <AddClassForm orgs={orgs} defaultOrgId={modal.orgId} defaultDate={modal.date} onSave={handleAddClass} onClose={close} />;
+      case 'add_diary': return <DiaryModal people={people} selfPersonId={SELF_PERSON_ID} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={handleAddDiary} onClose={close} />;
       case 'edit_class': {
         const cls=modal.cls;
         if(cls.seriesId) return <EditSeriesClassForm cls={cls} orgs={orgs} onSaveThis={u=>handleEditClass(cls,u,'this')} onSaveFuture={u=>handleEditClass(cls,u,'future')} onClose={close} />;
@@ -1155,7 +1162,7 @@ export default function FeltBodyCRM() {
     const { name, orgId, orgType, personType, personId, classId, invoiceId, highlightNoteId } = view;
     switch(name){
       case 'dashboard':
-        if (mode === 'personal') return <PersonalDashboard people={people} orgs={orgs}
+        if (mode === 'personal') return <PersonalDashboard people={people} orgs={orgs} classes={classes}
           households={households} householdMembers={householdMembers} contactDates={contactDates}
           notes={notes} projects={projects} nav={nav} />;
         return <Dashboard orgs={orgs} people={people} classes={classes} attendance={attendance} notes={notes} packages={packages} invoices={invoices} projects={projects} nav={nav}
@@ -1250,13 +1257,15 @@ export default function FeltBodyCRM() {
           onReturnSession={id=>adjustSessionsUsed(id, -1)} />;
       }
       case 'classes': return <ClassList classes={classes} orgs={orgs} series={series} attendance={attendance} nav={nav} onAdd={()=>setModal({type:'add_class'})} />;
-      case 'week_view': return <WeekView classes={classes} orgs={orgs} notes={notes} people={people} nav={nav} backInfo={backInfo}
+      case 'week_view': return <WeekView classes={classes} orgs={orgs} notes={notes} people={people} nav={nav} backInfo={backInfo} mode={mode}
         onAddClass={(date)=>setModal({type:'add_class', date})}
+        onAddDiary={(date,time)=>setModal({type:'add_diary', date, time, personal: mode==='personal'})}
         onUpdateActionDate={updateNoteAction}
         onClearAction={clearNoteAction}
         onToggleImportant={toggleNoteImportant} />;
-      case 'month_view': return <MonthView classes={classes} orgs={orgs} nav={nav} backInfo={backInfo}
-        onAddClass={(date)=>setModal({type:'add_class', date})} />;
+      case 'month_view': return <MonthView classes={classes} orgs={orgs} notes={notes} nav={nav} backInfo={backInfo} mode={mode}
+        onAddClass={(date)=>setModal({type:'add_class', date})}
+        onAddDiary={(date)=>setModal({type:'add_diary', date, personal: mode==='personal'})} />;
       case 'forms_list': return <FormsList forms={forms} classes={classes} onAdd={addForm} onUpdate={updateForm} onRemove={removeForm} onMove={moveForm} />;
       case 'class_detail': {
         const cls=classes.find(c=>c.id===classId); if(!cls) return <Empty text="Not found" />;

@@ -132,6 +132,11 @@ export const INTERACTION_KINDS = {
 // the "Osmington" address word; only the home household is named precisely this.
 export const HOME_HOUSEHOLD_NAME = '10 Osmington';
 
+// The owner's own contact row in `people`. Diary entries default their linked
+// contact to this so interactions_anchored is always satisfied. Single-install
+// config — if the owner's contact row ever changes, update here only.
+export const SELF_PERSON_ID = '5974b9b3-1aa2-4a33-947f-ea0425a7f5c5';
+
 export const RELATIONSHIP_LABELS = {
   adult:       'Adult',
   child:       'Child',

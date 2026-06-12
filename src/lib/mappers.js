@@ -302,6 +302,11 @@ export const noteFromDb = (row) => ({
   direction: row.direction || null,
   subject: row.subject || '',
   durationMins: row.duration_mins != null ? Number(row.duration_mins) : null,
+  // Diary: start time (nullable) + which calendar this belongs to. time pairs
+  // with durationMins to render a positioned block in WeekView. isPersonal
+  // drives the personal/business calendar split and the greyed off-mode blocks.
+  time: row.time || null,
+  isPersonal: row.is_personal ?? false,
   externalId: row.external_id || null,
   threadId: row.thread_id || null,
   // Phase 8 Half A additions: raw addresses + ingestion source. fromEmail and
@@ -337,6 +342,9 @@ export const noteToDb = (n) => ({
   subject: n.subject || null,       // empty string → null on write
   duration_mins: n.durationMins !== undefined && n.durationMins !== null && n.durationMins !== ''
     ? parseInt(n.durationMins) : null,
+  // Diary fields
+  time: n.time || null,                  // '' / undefined → null
+  is_personal: n.isPersonal ?? false,    // DB default false; belt-and-braces
   external_id: n.externalId || null,
   thread_id: n.threadId || null,
   // Phase 8 Half A additions
@@ -371,6 +379,8 @@ export const notePatchToDb = (patch) => {
       ? parseInt(patch.durationMins) : null;
   }
   if (patch.externalId !== undefined) out.external_id = patch.externalId || null;
+  if (patch.time !== undefined) out.time = patch.time || null;
+  if (patch.isPersonal !== undefined) out.is_personal = patch.isPersonal ?? false;
   if (patch.threadId !== undefined) out.thread_id = patch.threadId || null;
   if (patch.fromEmail !== undefined) out.from_email = patch.fromEmail || null;
   if (patch.toEmail !== undefined) out.to_email = patch.toEmail || null;
