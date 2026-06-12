@@ -1654,23 +1654,35 @@ export function EditNoteForm({ note, onSave, onClose }) {
 // self). Editing happens on PersonDetail's Comms tab, where diary entries live as
 // notes; clicking a block in the calendar navigates there rather than reopening
 // this modal. defaultDate/defaultTime are prefilled from the clicked day/slot.
-export function DiaryModal({ people, selfPersonId, defaultDate, defaultTime, defaultPersonal=false, onSave, onClose }) {
+// Diary entry create-or-edit modal. Opened fresh (quick-add from the calendar)
+// or populated with `existing` (clicking a diary block re-opens it here — NOT
+// the generic note editor, which has no time field and would strip the entry's
+// diary-ness). Linkable to a person AND/OR a project, both optional. Anchoring
+// safety net: if both are cleared, the entry falls back to the owner's own
+// record (selfPersonId) so interactions_anchored is always satisfied. The little
+// "open ↗" links jump to the linked record without making the block-click itself
+// navigate away.
+export function DiaryModal({ people, projects=[], selfPersonId, existing=null, defaultDate, defaultTime, defaultPersonal=false, onSave, onClose, nav }) {
+  const isEdit = !!existing;
   const [f, setF] = useState({
-    text: '',
-    date: defaultDate || today(),
-    time: defaultTime || currentHourTime(),
-    duration: 60,
-    isPersonal: defaultPersonal,
-    personId: selfPersonId || '',
+    text: existing?.text || '',
+    date: existing?.date || defaultDate || today(),
+    time: existing?.time || defaultTime || currentHourTime(),
+    duration: existing?.durationMins || 60,
+    isPersonal: existing ? !!existing.isPersonal : defaultPersonal,
+    personId: existing ? (existing.personId || '') : (selfPersonId || ''),
+    projectId: existing?.projectId || '',
   });
   const s = k => v => setF(x=>({...x,[k]:v}));
 
   const save = () => {
     if(!f.text.trim()) return;
-    // Never allow an empty person link — interactions_anchored requires an
-    // anchor and diary entries carry no session/project. Fall back to self.
-    const personId = f.personId || selfPersonId || '';
-    onSave({
+    // Anchoring safety net: at least one of person / project must be set, else
+    // fall back to self so interactions_anchored passes.
+    let personId = f.personId || null;
+    const projectId = f.projectId || null;
+    if(!personId && !projectId) personId = selfPersonId || null;
+    const payload = {
       kind: 'diary',
       text: f.text.trim(),
       date: f.date,
@@ -1678,23 +1690,48 @@ export function DiaryModal({ people, selfPersonId, defaultDate, defaultTime, def
       durationMins: parseInt(f.duration) || 60,
       isPersonal: !!f.isPersonal,
       personId,
-    });
+      projectId,
+    };
+    onSave(isEdit ? { ...existing, ...payload } : payload);
     onClose();
   };
 
+  const jump = (view, params) => { onClose(); nav && nav(view, params); };
+  const linkBtn = { background:'none', border:'none', color:C.gold, cursor:'pointer', fontSize:11, padding:0, fontFamily:"'Jost',sans-serif", textDecoration:'underline', marginLeft:8 };
+
   return (
-    <Modal title="New diary entry" onClose={onClose}>
+    <Modal title={isEdit ? 'Edit diary entry' : 'New diary entry'} onClose={onClose}>
       <FI label="WHAT" value={f.text} onChange={s('text')} placeholder="e.g. Dentist, supervision call, gym…" />
       <div style={{display:'flex',gap:12}}>
         <FI label="DATE" value={f.date} onChange={s('date')} type="date" half />
         <FI label="TIME" value={f.time} onChange={s('time')} type="time" half />
       </div>
-      <div style={{display:'flex',gap:12}}>
-        <FI label="DURATION (mins)" value={f.duration} onChange={v=>s('duration')(parseInt(v)||60)} type="number" half />
-        <FI label="LINKED CONTACT" value={f.personId}
-          onChange={s('personId')}
-          opts={people.map(p=>({v:p.id,l:p.name}))} half />
+      <FI label="DURATION (mins)" value={f.duration} onChange={v=>s('duration')(parseInt(v)||60)} type="number" />
+
+      {/* Person link (optional) + jump-out */}
+      <div>
+        <div style={{display:'flex',alignItems:'center'}}>
+          <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px'}}>LINKED CONTACT</div>
+          {f.personId && nav && (
+            <button style={linkBtn} onClick={()=>jump('person_detail',{personId:f.personId})}>open ↗</button>
+          )}
+        </div>
+        <FI value={f.personId} onChange={s('personId')}
+          opts={[{v:'',l:'— none —'}, ...people.map(p=>({v:p.id,l:p.name}))]} />
       </div>
+
+      {/* Project link (optional) + jump-out */}
+      <div>
+        <div style={{display:'flex',alignItems:'center'}}>
+          <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px'}}>LINKED PROJECT</div>
+          {f.projectId && nav && (
+            <button style={linkBtn} onClick={()=>jump('project_detail',{projectId:f.projectId})}>open ↗</button>
+          )}
+        </div>
+        <FI value={f.projectId} onChange={s('projectId')}
+          opts={[{v:'',l:'— none —'}, ...projects.map(p=>({v:p.id,l:p.name}))]} />
+      </div>
+
       {/* Personal / business toggle — drives which calendar this shows in. */}
       <div style={{marginTop:4,marginBottom:14}}>
         <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:8}}>CALENDAR</div>
@@ -1713,7 +1750,7 @@ export function DiaryModal({ people, selfPersonId, defaultDate, defaultTime, def
       </div>
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn onClick={save}>Add entry</Btn>
+        <Btn onClick={save}>{isEdit ? 'Save changes' : 'Add entry'}</Btn>
       </div>
     </Modal>
   );

@@ -513,6 +513,23 @@ export default function FeltBodyCRM() {
   const handleAddDiary = (entry) => data.notes.create(entry)
     .then(saved => setNotes(p => [...p, saved]))
     .catch(onError('Add diary entry'));
+  // Edit an existing diary entry. Patches the FULL diary field set (time,
+  // isPersonal, personId, projectId, duration) — the generic updateNote patch
+  // omits these, which would silently strip a diary entry off the calendar.
+  // Optimistic local patch first, then server-confirm.
+  const handleEditDiary = (entry) => {
+    const patch = {
+      text: entry.text,
+      date: entry.date,
+      time: entry.time || null,
+      durationMins: entry.durationMins ?? null,
+      isPersonal: !!entry.isPersonal,
+      personId: entry.personId || null,
+      projectId: entry.projectId || null,
+    };
+    setNotes(p => p.map(n => n.id === entry.id ? { ...n, ...patch } : n));
+    data.notes.patch(entry.id, patch).catch(onError('Update diary entry'));
+  };
   // Adhoc outbound email. data.email.send goes via form-worker /send-email
   // which writes the outbound interaction row server-side and returns it
   // mapped to JSX shape, so we splice into local notes state immediately
@@ -1012,7 +1029,7 @@ export default function FeltBodyCRM() {
           onClose={close} />;
       }
       case 'add_class': return <AddClassForm orgs={orgs} defaultOrgId={modal.orgId} defaultDate={modal.date} onSave={handleAddClass} onClose={close} />;
-      case 'add_diary': return <DiaryModal people={people} selfPersonId={SELF_PERSON_ID} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={handleAddDiary} onClose={close} />;
+      case 'add_diary': return <DiaryModal people={people} projects={projects} selfPersonId={SELF_PERSON_ID} existing={modal.entry || null} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={modal.entry ? handleEditDiary : handleAddDiary} onClose={close} nav={nav} />;
       case 'edit_class': {
         const cls=modal.cls;
         if(cls.seriesId) return <EditSeriesClassForm cls={cls} orgs={orgs} onSaveThis={u=>handleEditClass(cls,u,'this')} onSaveFuture={u=>handleEditClass(cls,u,'future')} onClose={close} />;
@@ -1260,12 +1277,14 @@ export default function FeltBodyCRM() {
       case 'week_view': return <WeekView classes={classes} orgs={orgs} notes={notes} people={people} nav={nav} backInfo={backInfo} mode={mode}
         onAddClass={(date)=>setModal({type:'add_class', date})}
         onAddDiary={(date,time)=>setModal({type:'add_diary', date, time, personal: mode==='personal'})}
+        onEditDiary={(entry)=>setModal({type:'add_diary', entry})}
         onUpdateActionDate={updateNoteAction}
         onClearAction={clearNoteAction}
         onToggleImportant={toggleNoteImportant} />;
       case 'month_view': return <MonthView classes={classes} orgs={orgs} notes={notes} nav={nav} backInfo={backInfo} mode={mode}
         onAddClass={(date)=>setModal({type:'add_class', date})}
-        onAddDiary={(date)=>setModal({type:'add_diary', date, personal: mode==='personal'})} />;
+        onAddDiary={(date)=>setModal({type:'add_diary', date, personal: mode==='personal'})}
+        onEditDiary={(entry)=>setModal({type:'add_diary', entry})} />;
       case 'forms_list': return <FormsList forms={forms} classes={classes} onAdd={addForm} onUpdate={updateForm} onRemove={removeForm} onMove={moveForm} />;
       case 'class_detail': {
         const cls=classes.find(c=>c.id===classId); if(!cls) return <Empty text="Not found" />;

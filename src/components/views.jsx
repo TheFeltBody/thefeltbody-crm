@@ -3018,7 +3018,7 @@ export function MiniWeek({ classes, notes, mode='client', nav }) {
 }
 
 
-export function WeekView({ classes, orgs, notes, people, nav, backInfo, mode='client', onAddClass, onAddDiary, onUpdateActionDate, onClearAction, onToggleImportant }) {
+export function WeekView({ classes, orgs, notes, people, nav, backInfo, mode='client', onAddClass, onAddDiary, onEditDiary, onUpdateActionDate, onClearAction, onToggleImportant }) {
   const isMobile = useIsMobile();
   const t = today();
   const personalMode = mode === 'personal';
@@ -3041,6 +3041,7 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, mode='cl
         id: 'diary_' + n.id,
         __diary: true,
         __noteId: n.id,
+        __note: n,
         __personId: n.personId || null,
         __projectId: n.projectId || null,
         name: n.text,
@@ -3298,12 +3299,13 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, mode='cl
                 const offMode = e.isPersonal !== personalMode;
                 const accent = offMode ? C.muted : (e.isPersonal ? C.blue : C.gold);
                 const compact = block.height < 28;
-                const goDetail = () => {
-                  if(e.__personId) nav('person_detail',{personId:e.__personId,highlightNoteId:e.__noteId});
+                const onClick = () => {
+                  if(onEditDiary) onEditDiary(e.__note);
+                  else if(e.__personId) nav('person_detail',{personId:e.__personId,highlightNoteId:e.__noteId});
                   else if(e.__projectId) nav('project_detail',{projectId:e.__projectId});
                 };
                 return (
-                  <div key={e.id} onClick={goDetail}
+                  <div key={e.id} onClick={onClick}
                     style={{
                       position:'absolute', top:block.top, height:block.height, left:3, right:3,
                       background: offMode ? C.card : accent+'1e',
@@ -3375,7 +3377,7 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, mode='cl
 // the class on click; days overflow to "+N more". Mirrors WeekView's header and
 // Monday-start convention, and the OrgDetail MonthCalendar's grid mechanics.
 
-export function MonthView({ classes, orgs, notes, nav, backInfo, mode='client', onAddClass, onAddDiary }) {
+export function MonthView({ classes, orgs, notes, nav, backInfo, mode='client', onAddClass, onAddDiary, onEditDiary }) {
   const isMobile = useIsMobile();
   const t = today();
   const personalMode = mode === 'personal';
@@ -3449,7 +3451,8 @@ export function MonthView({ classes, orgs, notes, nav, backInfo, mode='client', 
     const tip = `${n.text}${fmtTime(n.time)?` · ${fmtTime(n.time)}`:''}${offMode?` · ${n.isPersonal?'personal':'business'}`:''}`;
     const go = (e) => {
       e.stopPropagation();
-      if(n.personId) nav('person_detail',{personId:n.personId,highlightNoteId:n.id});
+      if(onEditDiary) onEditDiary(n);
+      else if(n.personId) nav('person_detail',{personId:n.personId,highlightNoteId:n.id});
       else if(n.projectId) nav('project_detail',{projectId:n.projectId});
     };
     return (
