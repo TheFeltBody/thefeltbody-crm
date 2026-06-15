@@ -1392,7 +1392,7 @@ export function BirthdaysView({ people, orgs, nav }) {
 // their own single-message pseudo-thread (key `solo:<id>`). Reads the shared
 // `notes` array (kept fresh by the 60s poll) — no extra fetching.
 
-export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey, onSendEmail }) {
+export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey, onSendEmail, emailTemplates=[] }) {
   const isMobile = useIsMobile();
   const [selectedKey, setSelectedKey] = useState(initialThreadKey || null);
   const [search, setSearch] = useState('');
@@ -1482,6 +1482,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
   const replyModal = replyTo && (
     <SendEmailModal
       person={replyTo.person}
+      templates={emailTemplates}
       onSend={onSendEmail}
       onClose={() => setReplyTo(null)}
       initialSubject={replyTo.initialSubject}

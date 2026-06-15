@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { C, INTERACTION_KINDS, PAYMENT_MODELS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, SOURCES, TYPE_ICONS, TYPE_PALETTE } from "../lib/constants.js";
-import { addDays, addMonths, classKindKey, currentHourTime, fmt, fmtMoney, isCountlessPkg, nextInvoiceNumber, packageRemaining, primaryRole, today, uid, useTypes } from "../lib/helpers.jsx";
+import { addDays, addMonths, classKindKey, currentHourTime, fillTemplate, fmt, fmtMoney, isCountlessPkg, nextInvoiceNumber, packageRemaining, primaryRole, scoreTemplates, today, uid, useTypes } from "../lib/helpers.jsx";
 import { Avatar, Btn, FI, KindBadge, Modal, RoleBadge, SearchSelect } from "./primitives.jsx";
 
 export function AddOrgForm({ existing, onSave, onClose, defaultType }) {
@@ -1773,7 +1773,7 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
 // and returned to the caller via onSend, which is expected to splice it into
 // the parent's notes state so it appears on PersonDetail immediately.
 
-export function SendEmailModal({ person, onSend, onClose, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey }) {
+export function SendEmailModal({ person, org, templates = [], onSend, onClose, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey }) {
   // Draft persistence: if a draftKey is supplied, the in-progress subject AND
   // body survive closing/reopening the modal (and navigating away) via
   // localStorage. Stored as a single JSON blob {subject, body}. Falls back to
@@ -1806,6 +1806,27 @@ export function SendEmailModal({ person, onSend, onClose, initialSubject = '', i
   const hasEmail = !!person.email;
   const canSend = !busy && hasEmail && subject.trim() && body.trim();
 
+  // Template picker. Show ALL templates, with the most relevant for this
+  // recipient sorted to the top (scoreTemplates). Applying one fills subject +
+  // body via fillTemplate (which swaps {name}/{firstName} and leaves human-edit
+  // markers like [day] intact). If the draft already has content, confirm
+  // before overwriting so nothing typed is lost silently.
+  const rankedTemplates = useMemo(
+    () => scoreTemplates(templates, { person, org }),
+    [templates, person, org]
+  );
+  const applyTemplate = (id) => {
+    if (!id) return;
+    const tpl = rankedTemplates.find(t => t.id === id);
+    if (!tpl) return;
+    const hasDraft = subject.trim() || body.trim();
+    if (hasDraft && !window.confirm('Replace the current draft with this template? Your typed text will be lost.')) {
+      return;
+    }
+    setSubject(fillTemplate(tpl.subject || '', person));
+    setBody(fillTemplate(tpl.body || '', person));
+  };
+
   const send = async () => {
     if (!canSend) return;
     setBusy(true); setErr(null);
@@ -1835,6 +1856,25 @@ export function SendEmailModal({ person, onSend, onClose, initialSubject = '', i
           ? <span style={{color:C.text}}>{person.email}</span>
           : <span style={{color:C.gold}}>⚠ No primary email — set one on this contact before sending</span>}
       </div>
+      {rankedTemplates.length > 0 && (
+        <div style={{marginBottom:10}}>
+          <select
+            value=""
+            onChange={e => { applyTemplate(e.target.value); e.target.value = ''; }}
+            disabled={busy}
+            style={{
+              width:'100%',background:C.card,border:`1px solid ${C.border}`,
+              borderRadius:6,color:C.muted,fontSize:13,padding:'8px 12px',
+              fontFamily:"'Jost',sans-serif",outline:'none',cursor:'pointer',
+            }}
+          >
+            <option value="">Insert template…</option>
+            {rankedTemplates.map(t => (
+              <option key={t.id} value={t.id} style={{color:C.text}}>{t.label}</option>
+            ))}
+          </select>
+        </div>
+      )}
       <input
         type="text"
         value={subject}

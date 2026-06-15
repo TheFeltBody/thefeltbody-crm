@@ -1233,7 +1233,7 @@ export default function FeltBodyCRM() {
           onSetStatus={setProjectStatus}
           onUpdateProject={updateProject} />;
       }
-      case 'threads': return <ThreadsView notes={notes} people={people} nav={nav} onMarkThreadRead={markThreadRead} initialThreadKey={view.threadKey} onSendEmail={sendEmail} />;
+      case 'threads': return <ThreadsView notes={notes} people={people} nav={nav} onMarkThreadRead={markThreadRead} initialThreadKey={view.threadKey} onSendEmail={sendEmail} emailTemplates={settings.email_templates?.templates || []} />;
       case 'birthdays': return <BirthdaysView people={people} orgs={orgs} nav={nav} />;
       case 'households': return <HouseholdsList households={households} householdMembers={householdMembers} people={people} nav={nav} onEditHousehold={(id)=>setModal({type:'household_manage',householdId:id})} />;
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;
@@ -1262,7 +1262,7 @@ export default function FeltBodyCRM() {
         const org=orgs.find(o=>o.id===person.orgId);
         const pn=notes.filter(n=>n.personId===person.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
         const pc=attendance.filter(a=>a.personId===person.id).map(a=>classes.find(c=>c.id===a.classId)).filter(Boolean).sort((a,b)=>b.date.localeCompare(a.date));
-        return <PersonDetail person={person} org={org} pNotes={pn} pClasses={pc} attendance={attendance} packages={packages} classes={classes} notes={notes} orgs={orgs} nav={nav} backInfo={backInfo} highlightNoteId={highlightNoteId}
+        return <PersonDetail person={person} org={org} pNotes={pn} pClasses={pc} attendance={attendance} packages={packages} classes={classes} notes={notes} orgs={orgs} nav={nav} backInfo={backInfo} highlightNoteId={highlightNoteId} emailTemplates={settings.email_templates?.templates || []}
           people={people} households={households} householdMembers={householdMembers} contactDates={contactDates}
           onCreateHousehold={createHousehold}
           onRenameHousehold={renameHousehold}

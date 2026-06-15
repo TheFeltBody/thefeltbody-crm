@@ -622,3 +622,49 @@ export const generateSeriesClasses = (series, count=12) => {
     bookingInfo: series.bookingInfo || '',
   }));
 };
+
+// ─── Email templates ─────────────────────────────────────────────────────────
+// Canned email bodies for one-to-one sending (care-home outreach + similar).
+// Stored in the settings key-value store under 'email_templates' as
+//   { templates: [{ id, label, subject, body, branch }] }
+// and surfaced as a picker in SendEmailModal. Kept here (not Brevo) because the
+// funnel is one-to-one and stage-aware — it belongs next to the contact record
+// where Jesse already works. Brevo remains the send rail underneath.
+
+// fillTemplate: substitute {token} placeholders from the recipient's record.
+// Only a small, safe allowlist is replaced. UNKNOWN tokens (e.g. {day}, the
+// square-bracket [day]/[area] human-edit markers) are deliberately left intact
+// so they're visible in the draft and Jesse fills them before sending.
+export const fillTemplate = (text, person = {}) => {
+  if (!text) return '';
+  const firstName = (person.name || '').trim().split(/\s+/)[0] || '';
+  const tokens = {
+    name: person.name || '',
+    firstName,
+    first_name: firstName,
+  };
+  return text.replace(/\{(\w+)\}/g, (whole, key) =>
+    Object.prototype.hasOwnProperty.call(tokens, key) ? tokens[key] : whole
+  );
+};
+
+// scoreTemplates: stable ranking so the most relevant template floats to the
+// top of the picker while ALL templates stay visible (the chosen UX: show all,
+// sort relevant first). Relevance = template.branch matching the recipient's
+// situation. A care-home contact (org type 'care_home', or a 'resident' role)
+// lifts branch==='care_home' templates; everything else keeps definition order.
+// Returns a NEW sorted array; does not mutate the input.
+export const scoreTemplates = (templates = [], { person, org } = {}) => {
+  const isCareHome =
+    (org && org.type === 'care_home') ||
+    (person && Array.isArray(person.roles) && person.roles.includes('resident'));
+  const rank = (t) => {
+    if (isCareHome && t.branch === 'care_home') return 0;
+    return 1;
+  };
+  // Stable sort: decorate with original index, sort by (rank, index).
+  return templates
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => (rank(a.t) - rank(b.t)) || (a.i - b.i))
+    .map((x) => x.t);
+};
