@@ -798,13 +798,18 @@ export const invoices = {
     }
     return invoiceFromDb(row, lines);
   },
-  // Status change is the most common edit — its own targeted method
+  // Status change is the most common edit — its own targeted method.
+  // Stamps paid_date with today's date when moving to 'paid', and clears it
+  // on any other status (revert to draft / back to sent) so a re-paid invoice
+  // gets a fresh date rather than a stale one.
   async setStatus(id, status) {
-    const row = await supabase.from('invoices').update({ status })
+    const patch = { status };
+    patch.paid_date = status === 'paid' ? new Date().toISOString().slice(0, 10) : null;
+    const row = await supabase.from('invoices').update(patch)
       .eq('id', id).select().single().then(ok);
     // Return shape needs lineItems; caller should already have them in state.
     // Returning without lines forces UI to merge the patch instead of replacing wholesale.
-    return { id: row.id, status: row.status };
+    return { id: row.id, status: row.status, paidDate: row.paid_date || null };
   },
   delete: (id) => softDelete('invoices', id),
 };

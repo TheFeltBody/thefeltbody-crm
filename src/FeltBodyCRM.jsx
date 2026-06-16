@@ -961,8 +961,12 @@ export default function FeltBodyCRM() {
     .then(saved => setInvoices(p => p.map(x => x.id === id ? saved : x)))
     .catch(onError('Update invoice'));
   const setInvoiceStatus = (id, status) => {
-    setInvoices(p => p.map(x => x.id === id ? { ...x, status } : x));
-    data.invoices.setStatus(id, status).catch(onError('Set invoice status'));
+    // Mirror the data layer: stamp paid_date on →paid, clear it otherwise.
+    const optimisticPaidDate = status === 'paid' ? new Date().toISOString().slice(0, 10) : null;
+    setInvoices(p => p.map(x => x.id === id ? { ...x, status, paidDate: optimisticPaidDate } : x));
+    data.invoices.setStatus(id, status)
+      .then(patch => setInvoices(p => p.map(x => x.id === id ? { ...x, status: patch.status, paidDate: patch.paidDate } : x)))
+      .catch(onError('Set invoice status'));
   };
 
   // ── Custom types
@@ -1231,7 +1235,7 @@ export default function FeltBodyCRM() {
         if (mode === 'personal') return <PersonalDashboard people={people} orgs={orgs} classes={classes}
           households={households} householdMembers={householdMembers} contactDates={contactDates}
           notes={notes} projects={projects} nav={nav} />;
-        return <Dashboard orgs={orgs} people={people} classes={classes} attendance={attendance} notes={notes} packages={packages} invoices={invoices} projects={projects} nav={nav}
+        return <Dashboard orgs={orgs} people={people} classes={classes} attendance={attendance} notes={notes} packages={packages} invoices={invoices} projects={projects} contactDates={contactDates} nav={nav}
         onAddClass={(date)=>setModal({type:'add_class', date})}
         onCompleteNote={clearNoteAction}
         onReopenNote={reopenNote}

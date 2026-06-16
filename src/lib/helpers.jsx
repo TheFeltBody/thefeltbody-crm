@@ -78,6 +78,9 @@ export const useLocalStorage = (key, initial) => {
 };
 
 export const fmt = d => d ? new Date(d+'T12:00').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) : '—';
+// Day + month only, no year — e.g. "14 Mar". Used for birthdays where the year
+// is either unknown (sentinel) or deliberately not shown on the contact record.
+export const fmtDayMonth = d => d ? new Date(d+'T12:00').toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : '—';
 // Relative time for activity-feed rows. Takes a YYYY-MM-DD string and
 // resolves to "today", "yesterday", "N days ago", "last week", "N weeks
 // ago", falling back to the absolute fmt() for anything older than ~6

@@ -482,6 +482,7 @@ export const invoiceFromDb = (row, lineItems = []) => ({
   issueDate: row.issue_date,
   dueDate: row.due_date,
   status: row.status,
+  paidDate: row.paid_date || null,
   notes: row.notes || '',
   total: Number(row.total) || 0,
   lineItems: lineItems
@@ -496,6 +497,7 @@ export const invoiceToDb = (inv) => ({
   issue_date: inv.issueDate,
   due_date: inv.dueDate,
   status: inv.status || 'draft',
+  paid_date: inv.paidDate || null,
   notes: inv.notes || null,
   total: parseFloat(inv.total) || 0,
 });

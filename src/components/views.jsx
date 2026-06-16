@@ -477,7 +477,7 @@ export function QuickTodoModal({ people, projects=[], onSave, onClose }) {
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 
-export function Dashboard({ orgs, people, classes, attendance, notes, packages, invoices, projects=[], nav, onAddClass, onCompleteNote, onReopenNote, onAddTodo, onMarkWebRead }) {
+export function Dashboard({ orgs, people, classes, attendance, notes, packages, invoices, projects=[], contactDates=[], nav, onAddClass, onCompleteNote, onReopenNote, onAddTodo, onMarkWebRead }) {
   const { personRoles } = useTypes();
   const [selectedDate, setSelectedDate] = useState(today());
   const isToday = selectedDate === today();
@@ -827,7 +827,7 @@ export function Dashboard({ orgs, people, classes, attendance, notes, packages, 
           Open →
         </button>
       ),
-      body: () => <MiniWeek classes={classes} notes={notes} mode="client" nav={nav} />,
+      body: () => <MiniWeek classes={classes} notes={notes} people={people} contactDates={contactDates} mode="client" nav={nav} />,
     },
     {
       key: 'web',
@@ -984,7 +984,7 @@ export function Dashboard({ orgs, people, classes, attendance, notes, packages, 
       </div>
 
       <div style={{marginTop:32,marginBottom:32}}>
-        <MiniWeek classes={classes} notes={notes} mode="client" nav={nav} />
+        <MiniWeek classes={classes} notes={notes} people={people} contactDates={contactDates} mode="client" nav={nav} />
       </div>
 
       <div style={{marginTop:32}}>
@@ -2218,7 +2218,7 @@ export function PersonalDashboard({ people, orgs, classes=[], households, househ
       {isMobile ? <MobileHeader>Personal</MobileHeader> : <PageHead>Personal</PageHead>}
 
       <div style={{marginBottom:18}}>
-        <MiniWeek classes={classes} notes={notes} mode="personal" nav={nav} />
+        <MiniWeek classes={classes} notes={notes} people={people} contactDates={contactDates} mode="personal" nav={nav} />
       </div>
 
       <Card title={homeHousehold ? homeHousehold.name : 'Household'} onMore={()=>nav('households')}>
@@ -3014,13 +3014,21 @@ export function ClassList({ classes, orgs, series, attendance, nav, onAdd }) {
 // the grid (or the header) jumps to the full Week View. Fixed 7am–9pm window
 // (no auto-extend) keeps it predictably small; anything outside falls into a
 // compact "all-day / off-hours" count rather than stretching the widget.
-export function MiniWeek({ classes, notes, mode='client', nav }) {
+export function MiniWeek({ classes, notes, people=[], contactDates=[], mode='client', nav }) {
   const t = today();
   const personalMode = mode === 'personal';
   const [offset, setOffset] = useState(0); // weeks from current
   const anchor = useMemo(() => addDays(startOfWeek(t), offset*7), [t, offset]);
   const days = useMemo(() => Array.from({length:7}, (_,i) => addDays(anchor, i)), [anchor]);
   const weekEnd = days[6];
+
+  // Birthdays + anniversaries + one-off dates falling in the visible week.
+  // Shown as a compact all-day strip above the time grid (these are date-only,
+  // so they don't belong in the timed columns). Same source as the full Week
+  // view's DATES row, so the two stay consistent.
+  const dateEvents = useMemo(() =>
+    calendarDateEvents(people, contactDates, anchor, weekEnd),
+    [people, contactDates, anchor, weekEnd]);
 
   const SLOT_MIN = 30, SLOT_HEIGHT = 9;       // tight vertical scale
   const G_START = 7*60, G_END = 21*60;        // fixed 7am–9pm
@@ -3078,6 +3086,30 @@ export function MiniWeek({ classes, notes, mode='client', nav }) {
           );
         })}
       </div>
+
+      {/* All-day date strip — birthdays / anniversaries / one-off dates. Only
+          renders when at least one event falls in the visible week, so it costs
+          no vertical space on empty weeks. Each cell shows the event emoji(s)
+          with a native tooltip naming them; clicking jumps to the full view. */}
+      {dateEvents.length>0 && (
+        <div onClick={()=>nav('week_view')}
+          style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,marginBottom:3,cursor:'pointer'}}>
+          {days.map(d=>{
+            const evs = dateEvents.filter(e => e.date===d);
+            const tip = evs.map(e => `${e.emoji} ${e.label}`).join('\n');
+            return (
+              <div key={d} title={tip||undefined}
+                style={{minHeight:13,borderRadius:3,background:evs.length?C.goldBg+'55':'transparent',
+                  display:'flex',alignItems:'center',justifyContent:'center',gap:1,overflow:'hidden'}}>
+                {evs.slice(0,3).map(e=>(
+                  <span key={e.id} style={{fontSize:9,lineHeight:1}}>{e.emoji}</span>
+                ))}
+                {evs.length>3 && <span style={{fontSize:7,color:C.muted}}>+{evs.length-3}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Mini grid — read-only; clicking jumps to full Week View */}
       <div onClick={()=>nav('week_view')}
@@ -3933,6 +3965,7 @@ export function InvoiceDetail({ inv, org, onEdit, onStatusChange, nav, backInfo 
             <span style={{background:sm.bg,color:sm.color,fontSize:11,fontWeight:600,padding:'3px 12px',borderRadius:20,letterSpacing:'0.7px',textTransform:'uppercase'}}>{sm.label}</span>
             <div style={{color:C.muted,fontSize:12,marginTop:8}}>Issued: {fmt(inv.issueDate)}</div>
             <div style={{color:C.muted,fontSize:12}}>Due: {fmt(inv.dueDate)}</div>
+            {inv.status==='paid'&&inv.paidDate&&<div style={{color:C.green,fontSize:12,marginTop:2}}>Paid: {fmt(inv.paidDate)}</div>}
           </div>
         </div>
         <div style={{border:`1px solid ${C.border}`,borderRadius:6,overflow:'hidden',marginBottom:20}}>
@@ -3965,7 +3998,7 @@ export function InvoiceDetail({ inv, org, onEdit, onStatusChange, nav, backInfo 
         <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
           {inv.status==='draft'&&<Btn onClick={()=>onStatusChange('sent')}>Mark as Sent</Btn>}
           {inv.status==='sent'&&<Btn onClick={()=>onStatusChange('paid')}>Mark as Paid</Btn>}
-          {inv.status==='paid'&&<div style={{color:C.green,fontSize:14,fontWeight:500,display:'flex',alignItems:'center',gap:6}}>✓ Paid</div>}
+          {inv.status==='paid'&&<div style={{color:C.green,fontSize:14,fontWeight:500,display:'flex',alignItems:'center',gap:6}}>✓ Paid{inv.paidDate&&<span style={{color:C.muted,fontWeight:400}}>· {fmt(inv.paidDate)}</span>}</div>}
           {inv.status!=='draft'&&<Btn variant="ghost" onClick={()=>onStatusChange('draft')}>Revert to Draft</Btn>}
         </div>
       </div>
