@@ -2,10 +2,10 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "./lib/supabase.js";
 import * as data from "./lib/dataLayer.js";
 import { C, ORG_META, PERSON_ROLES, SEED, SELF_PERSON_ID } from "./lib/constants.js";
-import { MobileUIContext, TypesContext, buildOrgTypes, buildPersonRoles, fmt, generateSeriesClasses, isWebEvent, today, useLocalStorage } from "./lib/helpers.jsx";
+import { MobileUIContext, TypesContext, buildOrgTypes, buildPersonRoles, fmt, generateSeriesClasses, isWebEvent, today, uid, useLocalStorage } from "./lib/helpers.jsx";
 import { Empty } from "./components/primitives.jsx";
-import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, DiaryModal, EditNoteForm, EditPackageForm, EditSeriesClassForm, MergePeopleForm, PackageTemplateForm } from "./components/forms.jsx";
-import { BirthdaysView, ClassList, Dashboard, FormsList, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackageTemplatesView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
+import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, DiaryModal, EditNoteForm, EditPackageForm, EditSeriesClassForm, EmailTemplateForm, MergePeopleForm, PackageTemplateForm } from "./components/forms.jsx";
+import { BirthdaysView, ClassList, Dashboard, EmailTemplatesView, FormsList, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackageTemplatesView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
 import { ClassDetail, HouseholdModal, OrgDetail, PersonDetail, ProjectDetail } from "./components/details.jsx";
 import { CareHomeResourcesView, DocumentsView } from "./components/documents.jsx";
 
@@ -269,6 +269,7 @@ export default function FeltBodyCRM() {
       case 'threads': label = 'Threads'; break;
       case 'comms_log': label = 'Recent Activity'; break;
       case 'package_templates': label = 'Package Templates'; break;
+      case 'email_templates': label = 'Email Templates'; break;
       case 'web_activity': label = 'Web Activity'; break;
       case 'projects': label = 'Projects'; break;
       case 'households': label = 'Households'; break;
@@ -925,6 +926,33 @@ export default function FeltBodyCRM() {
     data.packageTemplates.hardDelete(id).catch(onError('Delete template'));
   };
 
+  // ── Email templates (settings.email_templates.templates array)
+  // Stored as ONE settings row (key 'email_templates', value { templates:[...] }).
+  // Every mutation rewrites the whole array and persists it, then reconciles
+  // local settings from the server-confirmed value so the picker + manager stay
+  // in sync. Optimistic-then-confirm: we compute the next array, set it locally,
+  // write it, and on success replace local state with the saved value.
+  const persistEmailTemplates = (nextTemplates) => {
+    setSettings(prev => ({ ...prev, email_templates: { ...(prev.email_templates||{}), templates: nextTemplates } }));
+    return data.settings.set('email_templates', { templates: nextTemplates })
+      .then(saved => { setSettings(prev => ({ ...prev, email_templates: saved.value })); return saved; })
+      .catch(onError('Save email template'));
+  };
+  const emailTemplatesArr = () => settings.email_templates?.templates || [];
+  const addEmailTemplate = (t) => {
+    const row = { active: true, branch: '', ...t, id: t.id || uid() };
+    return persistEmailTemplates([...emailTemplatesArr(), row]);
+  };
+  const updateEmailTemplate = (id, t) =>
+    persistEmailTemplates(emailTemplatesArr().map(x => x.id === id ? { ...x, ...t, id } : x));
+  const setEmailTemplateActive = (id, active) =>
+    persistEmailTemplates(emailTemplatesArr().map(x => x.id === id ? { ...x, active } : x));
+  const deleteEmailTemplate = (id) =>
+    persistEmailTemplates(emailTemplatesArr().filter(x => x.id !== id));
+  // From the compose modal's "Save as template" — mints an id and appends.
+  const saveDraftAsTemplate = ({ label, subject, body }) =>
+    addEmailTemplate({ label, subject, body });
+
   // ── Invoices
   const addInvoice = (inv) => data.invoices.create(inv)
     .then(saved => setInvoices(p => [...p, saved]))
@@ -1097,6 +1125,12 @@ export default function FeltBodyCRM() {
         if(!t) return null;
         return <PackageTemplateForm existing={t} onSave={u => updateTemplate(t.id, u)} onClose={close} />;
       }
+      case 'add_email_template': return <EmailTemplateForm onSave={addEmailTemplate} onClose={close} />;
+      case 'edit_email_template': {
+        const t = (settings.email_templates?.templates || []).find(x => x.id === modal.templateId);
+        if(!t) return null;
+        return <EmailTemplateForm existing={t} onSave={u => updateEmailTemplate(t.id, u)} onClose={close} />;
+      }
       case 'book': {
         const person = people.find(p => p.id === modal.personId);
         if(!person) return null;
@@ -1213,6 +1247,11 @@ export default function FeltBodyCRM() {
         onEdit={(id)=>setModal({type:'edit_template',templateId:id})}
         onSetActive={setTemplateActive}
         onDelete={deleteTemplate} />;
+      case 'email_templates': return <EmailTemplatesView templates={settings.email_templates?.templates || []}
+        onAdd={()=>setModal({type:'add_email_template'})}
+        onEdit={(id)=>setModal({type:'edit_email_template',templateId:id})}
+        onSetActive={setEmailTemplateActive}
+        onDelete={deleteEmailTemplate} />;
       case 'web_activity': return <WebActivityView notes={notes} people={people} nav={nav}
         onMarkRead={markWebEventRead} onMarkAllRead={markAllWebEventsRead} />;
       case 'documents': return <DocumentsView files={files} people={people} orgs={orgs}
@@ -1233,7 +1272,7 @@ export default function FeltBodyCRM() {
           onSetStatus={setProjectStatus}
           onUpdateProject={updateProject} />;
       }
-      case 'threads': return <ThreadsView notes={notes} people={people} nav={nav} onMarkThreadRead={markThreadRead} initialThreadKey={view.threadKey} onSendEmail={sendEmail} emailTemplates={settings.email_templates?.templates || []} />;
+      case 'threads': return <ThreadsView notes={notes} people={people} nav={nav} onMarkThreadRead={markThreadRead} initialThreadKey={view.threadKey} onSendEmail={sendEmail} emailTemplates={settings.email_templates?.templates || []} onSaveAsTemplate={saveDraftAsTemplate} />;
       case 'birthdays': return <BirthdaysView people={people} orgs={orgs} nav={nav} />;
       case 'households': return <HouseholdsList households={households} householdMembers={householdMembers} people={people} nav={nav} onEditHousehold={(id)=>setModal({type:'household_manage',householdId:id})} />;
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;
@@ -1262,7 +1301,7 @@ export default function FeltBodyCRM() {
         const org=orgs.find(o=>o.id===person.orgId);
         const pn=notes.filter(n=>n.personId===person.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
         const pc=attendance.filter(a=>a.personId===person.id).map(a=>classes.find(c=>c.id===a.classId)).filter(Boolean).sort((a,b)=>b.date.localeCompare(a.date));
-        return <PersonDetail person={person} org={org} pNotes={pn} pClasses={pc} attendance={attendance} packages={packages} classes={classes} notes={notes} orgs={orgs} nav={nav} backInfo={backInfo} highlightNoteId={highlightNoteId} emailTemplates={settings.email_templates?.templates || []}
+        return <PersonDetail person={person} org={org} pNotes={pn} pClasses={pc} attendance={attendance} packages={packages} classes={classes} notes={notes} orgs={orgs} nav={nav} backInfo={backInfo} highlightNoteId={highlightNoteId} emailTemplates={settings.email_templates?.templates || []} onSaveAsTemplate={saveDraftAsTemplate}
           people={people} households={households} householdMembers={householdMembers} contactDates={contactDates}
           onCreateHousehold={createHousehold}
           onRenameHousehold={renameHousehold}
@@ -1291,14 +1330,14 @@ export default function FeltBodyCRM() {
           onReturnSession={id=>adjustSessionsUsed(id, -1)} />;
       }
       case 'classes': return <ClassList classes={classes} orgs={orgs} series={series} attendance={attendance} nav={nav} onAdd={()=>setModal({type:'add_class'})} />;
-      case 'week_view': return <WeekView classes={classes} orgs={orgs} notes={notes} people={people} nav={nav} backInfo={backInfo} mode={mode}
+      case 'week_view': return <WeekView classes={classes} orgs={orgs} notes={notes} people={people} contactDates={contactDates} nav={nav} backInfo={backInfo} mode={mode}
         onAddClass={(date)=>setModal({type:'add_class', date})}
         onAddDiary={(date,time)=>setModal({type:'add_diary', date, time, personal: mode==='personal'})}
         onEditDiary={(entry)=>setModal({type:'add_diary', entry})}
         onUpdateActionDate={updateNoteAction}
         onClearAction={clearNoteAction}
         onToggleImportant={toggleNoteImportant} />;
-      case 'month_view': return <MonthView classes={classes} orgs={orgs} notes={notes} nav={nav} backInfo={backInfo} mode={mode}
+      case 'month_view': return <MonthView classes={classes} orgs={orgs} notes={notes} people={people} contactDates={contactDates} nav={nav} backInfo={backInfo} mode={mode}
         onAddClass={(date)=>setModal({type:'add_class', date})}
         onAddDiary={(date)=>setModal({type:'add_diary', date, personal: mode==='personal'})}
         onEditDiary={(entry)=>setModal({type:'add_diary', entry})} />;

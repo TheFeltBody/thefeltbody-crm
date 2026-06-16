@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { C, INTERACTION_KINDS, PAYMENT_MODELS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, SOURCES, TYPE_ICONS, TYPE_PALETTE } from "../lib/constants.js";
-import { addDays, addMonths, classKindKey, currentHourTime, fillTemplate, fmt, fmtMoney, isCountlessPkg, nextInvoiceNumber, packageRemaining, primaryRole, scoreTemplates, today, uid, useTypes } from "../lib/helpers.jsx";
+import { addDays, addMonths, BIRTHDAY_NO_YEAR, classKindKey, currentHourTime, fillTemplate, fmt, fmtMoney, isCountlessPkg, makeBirthdayNoYear, nextInvoiceNumber, packageRemaining, parseBirthday, primaryRole, scoreTemplates, today, uid, useTypes } from "../lib/helpers.jsx";
 import { Avatar, Btn, FI, KindBadge, Modal, RoleBadge, SearchSelect } from "./primitives.jsx";
 
 export function AddOrgForm({ existing, onSave, onClose, defaultType }) {
@@ -21,6 +21,70 @@ export function AddOrgForm({ existing, onSave, onClose, defaultType }) {
         <Btn onClick={()=>{if(f.name.trim()){onSave(f);onClose();}}}>{existing?'Save Changes':'Add Organisation'}</Btn>
       </div>
     </Modal>
+  );
+}
+
+
+// BirthdayField — date-of-birth entry that supports a known full date OR a
+// day-only birthday (month + day, year unknown). The DOB column is a Postgres
+// DATE, so the year-less case is stored under the BIRTHDAY_NO_YEAR sentinel
+// (see helpers); this component hides that encoding behind a checkbox. When
+// "year unknown" is ticked it swaps the native date input for month + day
+// selects and emits `0004-MM-DD`; unticked, it's a normal date input.
+// Controlled: `value` is the stored ISO string ('' when unset), `onChange`
+// receives the next ISO string (or '').
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+function BirthdayField({ value, onChange, half }) {
+  const parsed = parseBirthday(value);
+  const noYear = !!parsed && !parsed.hasYear;
+  // Local month/day while in no-year mode, seeded from the stored sentinel.
+  const mo = parsed ? parsed.month : '';
+  const d  = parsed ? parsed.day : '';
+  const daysInMonth = mo ? new Date(2004, mo, 0).getDate() : 31; // 2004 leap year → 29 Feb allowed
+
+  const toggleNoYear = (on) => {
+    if (on) {
+      // Switch to day-only. Keep month/day if we already have them, else blank.
+      if (parsed) onChange(makeBirthdayNoYear(parsed.month, parsed.day));
+      else onChange('');  // nothing entered yet; selects start empty
+    } else {
+      // Switch back to full date. We don't know the year, so clear — the user
+      // picks a real date. (Silently inventing a year would be wrong.)
+      onChange('');
+    }
+  };
+  const setPart = (nextMo, nextD) => {
+    const m2 = nextMo || mo, d2 = nextD || d;
+    if (m2 && d2) onChange(makeBirthdayNoYear(m2, d2));
+    // If only one part is set we can't form a valid date yet; hold until both.
+  };
+
+  return (
+    <div style={{flex: half ? '1 1 0' : '1 1 100%'}}>
+      <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>DATE OF BIRTH</label>
+      {noYear ? (
+        <div style={{display:'flex',gap:8}}>
+          <select value={mo||''} onChange={e=>setPart(parseInt(e.target.value)||'', null)}
+            style={{flex:2,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:mo?C.text:C.muted,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}}>
+            <option value="">Month</option>
+            {MONTHS.map((name,i)=><option key={i} value={i+1} style={{color:C.text}}>{name}</option>)}
+          </select>
+          <select value={d||''} onChange={e=>setPart(null, parseInt(e.target.value)||'')}
+            style={{flex:1,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:d?C.text:C.muted,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}}>
+            <option value="">Day</option>
+            {Array.from({length:daysInMonth},(_,i)=><option key={i+1} value={i+1} style={{color:C.text}}>{i+1}</option>)}
+          </select>
+        </div>
+      ) : (
+        <input type="date" value={value||''} onChange={e=>onChange(e.target.value)}
+          style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}} />
+      )}
+      <label style={{display:'flex',alignItems:'center',gap:7,marginTop:7,cursor:'pointer',color:C.muted,fontSize:12}}>
+        <span onClick={()=>toggleNoYear(!noYear)}
+          style={{width:15,height:15,borderRadius:4,border:`1px solid ${noYear?C.gold:C.border}`,background:noYear?C.gold:'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:C.bg,fontSize:10,fontWeight:700,flexShrink:0}}>{noYear?'✓':''}</span>
+        <span onClick={()=>toggleNoYear(!noYear)}>I don’t know the year</span>
+      </label>
+    </div>
   );
 }
 
@@ -213,7 +277,7 @@ export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, de
       <FI label="WEBSITE" value={f.website||''} onChange={s('website')} />
       <FI label="ADDRESS" value={f.address||''} onChange={s('address')} />
       <div style={{display:'flex',gap:12}}>
-        <FI label="DATE OF BIRTH" value={f.dateOfBirth||''} onChange={s('dateOfBirth')} type="date" half />
+        <BirthdayField value={f.dateOfBirth||''} onChange={s('dateOfBirth')} half />
         <div style={{flex:'1 1 0'}} />
       </div>
       <div style={{display:'flex',gap:12}}>
@@ -1151,6 +1215,43 @@ export function PackageTemplateForm({ existing, onSave, onClose }) {
   );
 }
 
+// EmailTemplateForm — add/edit a canned email body for the compose picker.
+// Shape: { id, label, subject, body, branch, active }. `id` is minted on create
+// (uid). `branch` is an optional relevance hint: 'care_home' floats the template
+// to the top of the picker for care-home recipients; '' (None) keeps definition
+// order. The parent owns persistence (writes the whole templates array to the
+// settings row); this form just emits the row via onSave.
+export function EmailTemplateForm({ existing, onSave, onClose }) {
+  const [f, setF] = useState(existing || {
+    id: uid(), label:'', subject:'', body:'', branch:'', active:true,
+  });
+  const s = k => v => setF(x=>({...x,[k]:v}));
+  const valid = f.label.trim().length > 0 && f.body.trim().length > 0;
+  const branchOpts = [
+    { v:'', l:'None (general)' },
+    { v:'care_home', l:'Care home (float to top for care-home contacts)' },
+  ];
+  return (
+    <Modal title={existing?`Edit Template: ${existing.label||'(untitled)'}`:"Add Email Template"} onClose={onClose} wide>
+      <FI label="TEMPLATE NAME" value={f.label} onChange={s('label')} />
+      <FI label="RELEVANCE" value={f.branch} onChange={s('branch')} opts={branchOpts} />
+      <FI label="SUBJECT" value={f.subject} onChange={s('subject')} />
+      <FI label="BODY" value={f.body} onChange={s('body')} rows={10} />
+      <div style={{color:C.muted,fontSize:11,marginTop:-6,marginBottom:14,lineHeight:1.5}}>
+        Tokens: <span style={{color:C.text}}>{'{name}'}</span> and <span style={{color:C.text}}>{'{firstName}'}</span> fill from the contact when inserted. Leave [square-bracket] notes for parts you’ll edit by hand each time.
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14,cursor:'pointer'}} onClick={()=>s('active')(!f.active)}>
+        <span style={{width:16,height:16,borderRadius:4,border:`1px solid ${f.active?C.gold:C.border}`,background:f.active?C.gold:'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:C.bg,fontSize:11,fontWeight:700}}>{f.active?'✓':''}</span>
+        <span style={{color:C.text,fontSize:13}}>Active (shown in the compose picker)</span>
+      </div>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
+        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn onClick={()=>{if(valid){onSave({...f,label:f.label.trim()});onClose();}}} disabled={!valid}>{existing?'Save Changes':'Add Template'}</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 export const recommendedKindForPerson = (person) => {
   const role = (person.roles || [])[0];
   if(role === 'resident') return 'care_class';
@@ -1773,7 +1874,7 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
 // and returned to the caller via onSend, which is expected to splice it into
 // the parent's notes state so it appears on PersonDetail immediately.
 
-export function SendEmailModal({ person, org, templates = [], onSend, onClose, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey }) {
+export function SendEmailModal({ person, org, templates = [], onSend, onClose, onSaveAsTemplate, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey }) {
   // Draft persistence: if a draftKey is supplied, the in-progress subject AND
   // body survive closing/reopening the modal (and navigating away) via
   // localStorage. Stored as a single JSON blob {subject, body}. Falls back to
@@ -1812,7 +1913,7 @@ export function SendEmailModal({ person, org, templates = [], onSend, onClose, i
   // markers like [day] intact). If the draft already has content, confirm
   // before overwriting so nothing typed is lost silently.
   const rankedTemplates = useMemo(
-    () => scoreTemplates(templates, { person, org }),
+    () => scoreTemplates(templates.filter(t => t.active !== false), { person, org }),
     [templates, person, org]
   );
   const applyTemplate = (id) => {
@@ -1825,6 +1926,21 @@ export function SendEmailModal({ person, org, templates = [], onSend, onClose, i
     }
     setSubject(fillTemplate(tpl.subject || '', person));
     setBody(fillTemplate(tpl.body || '', person));
+  };
+
+  // Save the current draft as a reusable template. Prompts for a name, then
+  // hands a new template row to the parent (which mints persistence). The body
+  // is stored verbatim — any {name}/{firstName} the user typed becomes a token
+  // for next time. We don't try to re-tokenise the recipient's actual name out
+  // of the text; that's lossy and surprising. The parent shows its own success
+  // path; here we just confirm inline.
+  const saveAsTemplate = () => {
+    if (!onSaveAsTemplate) return;
+    if (!(subject.trim() || body.trim())) return;
+    const label = window.prompt('Name this template:', subject.trim().slice(0, 60));
+    if (label == null) return; // cancelled
+    if (!label.trim()) { alert('A template needs a name.'); return; }
+    onSaveAsTemplate({ label: label.trim(), subject: subject.trim(), body });
   };
 
   const send = async () => {
@@ -1856,23 +1972,40 @@ export function SendEmailModal({ person, org, templates = [], onSend, onClose, i
           ? <span style={{color:C.text}}>{person.email}</span>
           : <span style={{color:C.gold}}>⚠ No primary email — set one on this contact before sending</span>}
       </div>
-      {rankedTemplates.length > 0 && (
-        <div style={{marginBottom:10}}>
-          <select
-            value=""
-            onChange={e => { applyTemplate(e.target.value); e.target.value = ''; }}
-            disabled={busy}
-            style={{
-              width:'100%',background:C.card,border:`1px solid ${C.border}`,
-              borderRadius:6,color:C.muted,fontSize:13,padding:'8px 12px',
-              fontFamily:"'Jost',sans-serif",outline:'none',cursor:'pointer',
-            }}
-          >
-            <option value="">Insert template…</option>
-            {rankedTemplates.map(t => (
-              <option key={t.id} value={t.id} style={{color:C.text}}>{t.label}</option>
-            ))}
-          </select>
+      {(rankedTemplates.length > 0 || onSaveAsTemplate) && (
+        <div style={{marginBottom:10,display:'flex',gap:8,alignItems:'center'}}>
+          {rankedTemplates.length > 0 && (
+            <select
+              value=""
+              onChange={e => { applyTemplate(e.target.value); e.target.value = ''; }}
+              disabled={busy}
+              style={{
+                flex:1,background:C.card,border:`1px solid ${C.border}`,
+                borderRadius:6,color:C.muted,fontSize:13,padding:'8px 12px',
+                fontFamily:"'Jost',sans-serif",outline:'none',cursor:'pointer',
+              }}
+            >
+              <option value="">Insert template…</option>
+              {rankedTemplates.map(t => (
+                <option key={t.id} value={t.id} style={{color:C.text}}>{t.label}</option>
+              ))}
+            </select>
+          )}
+          {onSaveAsTemplate && (
+            <button
+              onClick={saveAsTemplate}
+              disabled={busy || !(subject.trim() || body.trim())}
+              title="Save the current subject + body as a reusable template"
+              style={{
+                flexShrink:0,background:'none',border:`1px solid ${C.border}`,
+                color:(subject.trim()||body.trim())?C.gold:C.muted,
+                cursor:(subject.trim()||body.trim())?'pointer':'default',
+                borderRadius:6,fontSize:12,padding:'8px 12px',
+                fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',whiteSpace:'nowrap',
+              }}>
+              + Save as template
+            </button>
+          )}
         </div>
       )}
       <input

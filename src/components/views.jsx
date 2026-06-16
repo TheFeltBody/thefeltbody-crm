@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { BANK_DETAILS, C, CLIENT_ROLES, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
-import { PrintInvoiceOverlay, addDays, birthdayInfo, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
+import { PrintInvoiceOverlay, addDays, birthdayInfo, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
 import { Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
 
@@ -351,6 +351,7 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
 
       {!isPersonal && <Item name="comms_log" label="Recent Activity" icon="◷" />}
       {!isPersonal && <Item name="package_templates" label="Package Templates" icon="❒" />}
+      {!isPersonal && <Item name="email_templates" label="Email Templates" icon="✉" />}
 
       {/* Pushed to the bottom; flex:column on the parent + marginTop:auto on this wrapper */}
       <div style={{marginTop:'auto',padding:'14px 20px',borderTop:`1px solid ${C.border}`}}>
@@ -1351,7 +1352,7 @@ export function BirthdaysView({ people, orgs, nav }) {
               {b.label}{orgName(p.orgId) && <span style={{opacity:0.7}}> · {orgName(p.orgId)}</span>}
             </div>
           </div>
-          <div style={{color:C.muted,fontSize:12,flexShrink:0}}>{p.dateOfBirth}</div>
+          <div style={{color:C.muted,fontSize:12,flexShrink:0}}>{isBirthdayYearKnown(p.dateOfBirth) ? p.dateOfBirth : String(p.dateOfBirth).slice(5)}</div>
         </div>
       ))}
 
@@ -1392,7 +1393,7 @@ export function BirthdaysView({ people, orgs, nav }) {
 // their own single-message pseudo-thread (key `solo:<id>`). Reads the shared
 // `notes` array (kept fresh by the 60s poll) — no extra fetching.
 
-export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey, onSendEmail, emailTemplates=[] }) {
+export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey, onSendEmail, emailTemplates=[], onSaveAsTemplate }) {
   const isMobile = useIsMobile();
   const [selectedKey, setSelectedKey] = useState(initialThreadKey || null);
   const [search, setSearch] = useState('');
@@ -1483,6 +1484,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
     <SendEmailModal
       person={replyTo.person}
       templates={emailTemplates}
+      onSaveAsTemplate={onSaveAsTemplate}
       onSend={onSendEmail}
       onClose={() => setReplyTo(null)}
       initialSubject={replyTo.initialSubject}
@@ -2504,6 +2506,94 @@ export function PackageTemplatesView({ templates, nav, onAdd, onEdit, onSetActiv
   );
 }
 
+// ─── EMAIL TEMPLATES ──────────────────────────────────────────────────────────
+// Manage the canned email bodies surfaced in SendEmailModal's picker. Mirrors
+// PackageTemplatesView: active list + collapsible archived section, with
+// add/edit/archive/restore/delete. A template is { id, label, subject, body,
+// branch, active }. `branch` (optional) lifts a template to the top of the
+// picker for matching recipients (currently 'care_home'). Stored as one settings
+// row (key 'email_templates', value { templates:[...] }) — the parent handlers
+// own the array mutation + persistence; this view is presentational.
+export function EmailTemplatesView({ templates, onAdd, onEdit, onSetActive, onDelete }) {
+  const isMobile = useIsMobile();
+  const [showArchived, setShowArchived] = useState(false);
+  const active = templates.filter(t => t.active !== false);
+  const archived = templates.filter(t => t.active === false);
+
+  const Card = ({ t }) => {
+    const [armed, setArmed] = useState(false);
+    const branchLabel = t.branch === 'care_home' ? 'Care home' : (t.branch || '');
+    const snippet = String(t.body || '').replace(/\s+/g, ' ').trim().slice(0, 110);
+    const on = t.active !== false;
+    return (
+      <div style={{background:C.card,border:`1px solid ${on?C.gold+'55':C.border}`,borderRadius:8,padding:'14px 16px',display:'flex',alignItems:'flex-start',gap:14}}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{color:C.text,fontSize:15,fontWeight:500}}>
+            {t.label || '(untitled)'}
+            {branchLabel && <span style={{color:C.muted,fontSize:11,marginLeft:8,fontWeight:400}}>· {branchLabel}</span>}
+          </div>
+          {t.subject && <div style={{color:C.muted,fontSize:12,marginTop:3,fontStyle:'italic'}}>“{t.subject}”</div>}
+          {snippet && <div style={{color:C.muted,fontSize:12,marginTop:3,lineHeight:1.4}}>{snippet}{t.body && t.body.length>110?'…':''}</div>}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
+          <Btn variant="ghost" small onClick={()=>onEdit(t.id)}>Edit</Btn>
+          {on
+            ? <Btn variant="secondary" small onClick={()=>onSetActive(t.id, false)}>Archive</Btn>
+            : <Btn variant="secondary" small onClick={()=>onSetActive(t.id, true)}>Restore</Btn>}
+          {armed ? (
+            <button onClick={()=>onDelete(t.id)}
+              style={{background:C.red,border:'none',color:'#fff',cursor:'pointer',borderRadius:4,fontSize:11,padding:'4px 9px',fontFamily:"'Jost',sans-serif",fontWeight:500}}>
+              Confirm
+            </button>
+          ) : (
+            <button onClick={()=>setArmed(true)}
+              style={{background:'none',border:`1px solid ${C.red}66`,color:C.red,cursor:'pointer',borderRadius:4,fontSize:11,padding:'4px 9px',fontFamily:"'Jost',sans-serif"}}>
+              Delete
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{padding: isMobile ? '12px 12px 24px' : '24px 32px', maxWidth:760}}>
+      <PageHead subInfo={`${active.length} active`}
+        action={<Btn small onClick={onAdd}>+ New Template</Btn>}>
+        Email Templates
+      </PageHead>
+      {!isMobile && (
+        <p style={{color:C.muted,fontSize:13,marginTop:-12,marginBottom:22,lineHeight:1.5,maxWidth:560}}>
+          Canned messages for the compose window. Use <span style={{color:C.text}}>{'{name}'}</span> or <span style={{color:C.text}}>{'{firstName}'}</span> and they’ll fill from the contact; leave [square-bracket] notes for anything you’ll edit by hand.
+        </p>
+      )}
+
+      {templates.length === 0 ? (
+        <Empty text="No email templates yet." action="+ New Template" onAction={onAdd} />
+      ) : (
+        <>
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {active.map(t => <Card key={t.id} t={t} />)}
+            {active.length === 0 && <div style={{color:C.muted,fontSize:13,fontStyle:'italic',padding:'8px 2px'}}>No active templates.</div>}
+          </div>
+          {archived.length > 0 && (
+            <div style={{marginTop:24}}>
+              <div onClick={()=>setShowArchived(s=>!s)} style={{color:C.muted,fontSize:12,cursor:'pointer',marginBottom:10,letterSpacing:'0.5px',userSelect:'none'}}>
+                {showArchived?'▾':'▸'} Archived ({archived.length})
+              </div>
+              {showArchived && (
+                <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                  {archived.map(t => <Card key={t.id} t={t} />)}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── PROJECT DETAIL ─────────────────────────────────────────────────────────
 // One project: its name + status, its todos (notes carrying projectId), and a
 // free-text notes field. Todos can be added inline, completed, reopened, deleted.
@@ -3029,7 +3119,7 @@ export function MiniWeek({ classes, notes, mode='client', nav }) {
 }
 
 
-export function WeekView({ classes, orgs, notes, people, nav, backInfo, mode='client', onAddClass, onAddDiary, onEditDiary, onUpdateActionDate, onClearAction, onToggleImportant }) {
+export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, backInfo, mode='client', onAddClass, onAddDiary, onEditDiary, onUpdateActionDate, onClearAction, onToggleImportant }) {
   const isMobile = useIsMobile();
   const t = today();
   const personalMode = mode === 'personal';
@@ -3064,6 +3154,13 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, mode='cl
         location: '',
       })),
     [notes, anchor, weekEnd]);
+  // Birthdays + anniversaries falling in the visible week, as all-day banner
+  // items. Shown in both modes (personal life-admin AND business — a client's
+  // birthday is worth a nudge either way). Rendered in the DATES row, not the
+  // time grid, since these are date-only events.
+  const weekDates = useMemo(() =>
+    calendarDateEvents(people, contactDates, anchor, weekEnd),
+    [people, contactDates, anchor, weekEnd]);
   // Action notes for this week — only active (non-completed) ones surface here.
   const weekActionNotes = useMemo(() =>
     notes.filter(n => n.actionDate && !n.completed && n.actionDate >= anchor && n.actionDate <= weekEnd)
@@ -3176,6 +3273,29 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, mode='cl
           );
         })}
       </div>
+
+      {/* Birthdays / anniversaries row — all-day banner, both modes. Click → contact. */}
+      {weekDates.length > 0 && (
+        <div style={{display:'grid',gridTemplateColumns:'56px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`,marginBottom:6}}>
+          <div style={{color:C.muted,fontSize:9,letterSpacing:'1.2px',padding:'6px 4px',textAlign:'right',fontWeight:600}}>DATES</div>
+          {days.map(d => {
+            const items = weekDates.filter(e => e.date === d);
+            return (
+              <div key={d} style={{padding:'4px',display:'flex',flexDirection:'column',gap:3,minHeight:24}}>
+                {items.map(e => (
+                  <div key={e.id} onClick={()=>e.personId&&nav('person_detail',{personId:e.personId})}
+                    title={e.label}
+                    style={{background:C.gold+'18',border:`1px solid ${C.gold}55`,borderRadius:4,
+                      padding:'3px 6px',cursor:e.personId?'pointer':'default',fontSize:11,color:C.text,
+                      lineHeight:1.3,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                    {e.emoji} {e.label}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Untimed (all-day) row — shown only if any class in the week has no time set */}
       {weekClasses.some(c => !timeToMin(c.time)) && (
@@ -3389,7 +3509,7 @@ export function WeekView({ classes, orgs, notes, people, nav, backInfo, mode='cl
 // the class on click; days overflow to "+N more". Mirrors WeekView's header and
 // Monday-start convention, and the OrgDetail MonthCalendar's grid mechanics.
 
-export function MonthView({ classes, orgs, notes, nav, backInfo, mode='client', onAddClass, onAddDiary, onEditDiary }) {
+export function MonthView({ classes, orgs, notes, people=[], contactDates=[], nav, backInfo, mode='client', onAddClass, onAddDiary, onEditDiary }) {
   const isMobile = useIsMobile();
   const t = today();
   const personalMode = mode === 'personal';
@@ -3415,6 +3535,15 @@ export function MonthView({ classes, orgs, notes, nav, backInfo, mode='client', 
     Object.values(map).forEach(list => list.sort((x,y)=>(x.time||'').localeCompare(y.time||'')));
     return map;
   }, [notes]);
+  // Birthdays + anniversaries across the visible 6-week grid, grouped by date.
+  // Shown as gold banner pills at the top of each day cell, both modes.
+  const datesByDate = useMemo(() => {
+    const map = {};
+    const gridEndCell = cells[cells.length-1];
+    calendarDateEvents(people, contactDates, gridStart, gridEndCell)
+      .forEach(e => { (map[e.date]||(map[e.date]=[])).push(e); });
+    return map;
+  }, [people, contactDates, gridStart, cells]);
   const monthCount = classes.filter(c => { const d=new Date(c.date+'T12:00'); return d.getFullYear()===year && d.getMonth()===month; }).length;
 
   const DOW = isMobile ? ['M','T','W','T','F','S','S'] : ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -3478,6 +3607,20 @@ export function MonthView({ classes, orgs, notes, nav, backInfo, mode='client', 
     );
   };
 
+  // Birthday / anniversary pill — gold banner, emoji + label. Click → contact.
+  // Not counted against the per-cell pill cap (celebrations are few per day and
+  // worth always seeing). On mobile, emoji-only to fit the narrow cell.
+  const DatePill = ({ e }) => (
+    <div onClick={(ev)=>{ ev.stopPropagation(); if(e.personId) nav('person_detail',{personId:e.personId}); }}
+      title={e.label}
+      style={{background:C.gold+'18',borderLeft:`2px solid ${C.gold}`,borderRadius:3,
+        padding:isMobile?'1px 3px':'1px 4px',marginBottom:2,cursor:e.personId?'pointer':'default',
+        display:'flex',alignItems:'center',gap:4,overflow:'hidden'}}>
+      <span style={{fontSize:9,flexShrink:0}}>{e.emoji}</span>
+      {!isMobile && <span style={{color:C.text,fontSize:10,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.label}</span>}
+    </div>
+  );
+
   return (
     <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={
@@ -3539,6 +3682,7 @@ export function MonthView({ classes, orgs, notes, nav, backInfo, mode='client', 
                 {dd.getDate()}
               </div>
               {(() => {
+                const dayDates = datesByDate[d] || [];
                 const dayDiary = diaryByDate[d] || [];
                 const shownClasses = dayClasses.slice(0, maxPills);
                 const remainingSlots = Math.max(0, maxPills - shownClasses.length);
@@ -3546,6 +3690,7 @@ export function MonthView({ classes, orgs, notes, nav, backInfo, mode='client', 
                 const overflow = (dayClasses.length - shownClasses.length) + (dayDiary.length - shownDiary.length);
                 return (
                   <>
+                    {dayDates.map(e=><DatePill key={e.id} e={e} />)}
                     {shownClasses.map(c=><Pill key={c.id} c={c} />)}
                     {shownDiary.map(n=><DiaryPill key={n.id} n={n} />)}
                     {overflow>0 && <div style={{color:C.muted,fontSize:9,paddingLeft:2}}>+{overflow}</div>}

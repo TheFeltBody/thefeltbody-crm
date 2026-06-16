@@ -121,15 +121,40 @@ export const timeToMin = t => {
 };
 export const fmtMoney = n => typeof n==='number' ? `£${n.toFixed(2).replace(/\.00$/,'')}` : '—';
 
-// Given an ISO date string 'YYYY-MM-DD', return { age, label } where label is a
-// human birthday line, e.g. "turns 8 in 12 days" or "today! 🎂". Returns null for
-// blank/invalid input so callers can render nothing. Computed at read time — no
-// stored age to drift. Uses local date parts to avoid timezone-shift off-by-one.
+// Sentinel year for a "day-only" birthday — we know the month + day but not the
+// year. date_of_birth is a Postgres DATE (needs a full YYYY-MM-DD), so we store
+// the day under this fake year and treat it as "year unknown" everywhere. 0004
+// is chosen because (a) it's an obviously-fake sentinel no real DOB will hit and
+// (b) it's a leap year, so 29 Feb survives a round-trip. The convention lives
+// here only — no other module should hardcode '0004'. Use parseBirthday()/
+// isBirthdayYearKnown() to read, makeBirthdayNoYear() to write.
+export const BIRTHDAY_NO_YEAR = '0004';
+export const makeBirthdayNoYear = (mo, d) =>
+  `${BIRTHDAY_NO_YEAR}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+export const isBirthdayYearKnown = (iso) =>
+  !!iso && String(iso).slice(0,4) !== BIRTHDAY_NO_YEAR;
+// Parse a stored DOB into parts. hasYear=false when it's the sentinel.
+// Returns null on blank/invalid input.
+export const parseBirthday = (iso) => {
+  if (!iso) return null;
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const [, y, mo, d] = m.map(Number);
+  return { year: y, month: mo, day: d, hasYear: String(iso).slice(0,4) !== BIRTHDAY_NO_YEAR };
+};
+
+// Given an ISO date string 'YYYY-MM-DD', return { age, days, label, hasYear }
+// where label is a human birthday line, e.g. "turns 8 in 12 days" or "today 🎂".
+// When the year is the no-year sentinel, age is null and the label omits it
+// ("birthday in 12 days"). Returns null for blank/invalid input so callers can
+// render nothing. Computed at read time — no stored age to drift. Uses local
+// date parts to avoid timezone-shift off-by-one.
 export const birthdayInfo = (iso) => {
   if (!iso) return null;
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return null;
   const [, y, mo, d] = m.map(Number);
+  const hasYear = String(iso).slice(0,4) !== BIRTHDAY_NO_YEAR;
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   let age = today.getFullYear() - y;
@@ -138,13 +163,21 @@ export const birthdayInfo = (iso) => {
   if (next < today) { next = new Date(today.getFullYear() + 1, mo - 1, d); }
   else if (next > today) { age -= 1; } // haven't had this year's birthday yet
   const days = Math.round((next - today) / 86400000);
-  const turning = age + 1;
   let label;
-  if (days === 0) label = `${turning} today 🎂`;
-  else if (days === 1) label = `turns ${turning} tomorrow`;
-  else if (days <= 30) label = `turns ${turning} in ${days} days`;
-  else label = `age ${age}`;
-  return { age, days, label };
+  if (hasYear) {
+    const turning = age + 1;
+    if (days === 0) label = `${turning} today 🎂`;
+    else if (days === 1) label = `turns ${turning} tomorrow`;
+    else if (days <= 30) label = `turns ${turning} in ${days} days`;
+    else label = `age ${age}`;
+  } else {
+    // Year unknown — no age, just the day.
+    if (days === 0) label = `birthday today 🎂`;
+    else if (days === 1) label = `birthday tomorrow`;
+    else if (days <= 30) label = `birthday in ${days} days`;
+    else label = `birthday ${mo}/${d}`;
+  }
+  return { age: hasYear ? age : null, days, label, hasYear };
 };
 
 // Days-until info for a contact_date. Recurring dates (anniversaries) roll to
@@ -667,4 +700,57 @@ export const scoreTemplates = (templates = [], { person, org } = {}) => {
     .map((t, i) => ({ t, i }))
     .sort((a, b) => (rank(a.t) - rank(b.t)) || (a.i - b.i))
     .map((x) => x.t);
+};
+
+// ─── Calendar date-events (birthdays + anniversaries on the grid) ─────────────
+// Given the people list and the contact_dates rows, return every birthday /
+// anniversary / one-off date that falls within [startISO, endISO] inclusive,
+// as flat banner items the calendar can render. Recurring events (birthdays —
+// always recurring, year known or not — and contact_dates with recurring=true)
+// are projected onto whichever year(s) the visible range covers by matching
+// month+day; one-off contact_dates match only their exact ISO date. Each item:
+//   { id, date, label, kind:'birthday'|'anniversary'|'date', personId, emoji }
+// `date` is the concrete YYYY-MM-DD the occurrence lands on inside the range,
+// so the caller filters by exact-date equality per day column. Cheap O(range ·
+// events); ranges are a week or a month so this stays trivial.
+export const calendarDateEvents = (people = [], contactDates = [], startISO, endISO) => {
+  if (!startISO || !endISO) return [];
+  const out = [];
+  // Enumerate the concrete dates in the range once.
+  const dates = [];
+  for (let d = startISO; d <= endISO; d = addDays(d, 1)) dates.push(d);
+  const md = (iso) => String(iso).slice(5, 10); // 'MM-DD'
+
+  // Birthdays — one per person with a date_of_birth, recurring by month+day.
+  // The label carries the age only when the year is known; year-less birthdays
+  // (sentinel year) just say "birthday".
+  people.forEach(p => {
+    if (!p.dateOfBirth) return;
+    const bmd = md(p.dateOfBirth);
+    dates.forEach(dt => {
+      if (md(dt) === bmd) {
+        out.push({ id:`bd_${p.id}_${dt}`, date:dt, label:`${p.name}’s birthday`,
+          kind:'birthday', personId:p.id, emoji:'🎂' });
+      }
+    });
+  });
+
+  // Contact dates — recurring match by month+day; one-off match exact ISO.
+  contactDates.forEach(cd => {
+    if (!cd.date || !cd.personId) return; // person-anchored only on the grid
+    if (cd.recurring) {
+      const cmd = md(cd.date);
+      dates.forEach(dt => {
+        if (md(dt) === cmd) {
+          out.push({ id:`cd_${cd.id}_${dt}`, date:dt, label:cd.label || 'Anniversary',
+            kind:'anniversary', personId:cd.personId, emoji:'🎉' });
+        }
+      });
+    } else if (cd.date >= startISO && cd.date <= endISO) {
+      out.push({ id:`cd_${cd.id}`, date:cd.date, label:cd.label || 'Date',
+        kind:'date', personId:cd.personId, emoji:'📌' });
+    }
+  });
+
+  return out;
 };

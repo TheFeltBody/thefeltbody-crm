@@ -1105,7 +1105,7 @@ export function ContactDatesCard({ anchor, contactDates, onAdd, onUpdate, onRemo
 }
 
 
-export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], orgs, nav, backInfo, highlightNoteId, emailTemplates=[], people, households, householdMembers, contactDates=[], onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onAddToCalendar, onSendEmail, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {
+export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], orgs, nav, backInfo, highlightNoteId, emailTemplates=[], onSaveAsTemplate, people, households, householdMembers, contactDates=[], onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onAddToCalendar, onSendEmail, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {
   const isMobile = useIsMobile();  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
@@ -1118,6 +1118,10 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
   const [filterKind, setFilterKind] = useState('all');
   // Which booking rows are expanded to show their session note(s) inline.
   const [bookingNotesOpen, setBookingNotesOpen] = useState(()=>new Set());
+  // Bookings tab quick-filter: all | past | future. `today` counts as future
+  // (an appointment later today is still upcoming). Persisted per-device so the
+  // tab reopens on the last-used filter.
+  const [bookingWhen, setBookingWhen] = useLocalStorage('felt.personDetail.bookingWhen', 'all');
   const toggleBookingNotes = (cid) => setBookingNotesOpen(s=>{ const n=new Set(s); n.has(cid)?n.delete(cid):n.add(cid); return n; });
   // Notes shown on a booking row: interaction notes anchored to that session
   // (session_id == classId), plus the session's own reflection (Class Log text),
@@ -1228,10 +1232,41 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
   // Bookings list, shared between the desktop left-column card and the mobile
   // tab. `scroll` caps height + scrolls (desktop card); off-mobile the tab body
   // grows naturally. Logic is identical to the previous inline render.
-  const bookingsList = (scroll) => (
-    pClasses.length ? (
+  const bookingsList = (scroll) => {
+    const todayStr = today();
+    // today counts as future — an appointment later today is still upcoming.
+    const filtered = bookingWhen==='future' ? pClasses.filter(c=>c.date>=todayStr)
+                   : bookingWhen==='past'   ? pClasses.filter(c=>c.date<todayStr)
+                   : pClasses;
+    // Future reads more naturally soonest-first; all/past stay newest-first
+    // (pClasses arrives newest-first from the parent).
+    const rows = bookingWhen==='future' ? [...filtered].sort((a,b)=>a.date.localeCompare(b.date)) : filtered;
+    const pills = [
+      {v:'all',    l:'All',    n:pClasses.length},
+      {v:'past',   l:'Past',   n:pClasses.filter(c=>c.date<todayStr).length},
+      {v:'future', l:'Future', n:pClasses.filter(c=>c.date>=todayStr).length},
+    ];
+    return (
+      <>
+      {pClasses.length > 0 && (
+        <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}}>
+          {pills.map(p=>{
+            const on = bookingWhen===p.v;
+            return (
+              <button key={p.v} onClick={()=>setBookingWhen(p.v)}
+                style={{background:on?C.gold+'22':C.card,border:`1px solid ${on?C.gold:C.border}`,
+                  color:on?C.gold:C.muted,cursor:'pointer',borderRadius:20,fontSize:11,
+                  padding:'4px 12px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',
+                  transition:'all 0.12s'}}>
+                {p.l} <span style={{opacity:0.7}}>{p.n}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {rows.length ? (
       <div style={scroll ? {maxHeight:304,overflowY:'auto',paddingRight:4} : undefined}>
-        {pClasses.map(c=>{
+        {rows.map(c=>{
           const att=attendance.find(a=>a.classId===c.id&&a.personId===person.id);
           // Light payment-status hint. Jesse is undecided on showing this —
           // to remove it, delete the `payInfo`/`payHint` lines and the
@@ -1256,8 +1291,10 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
           </div>);
         })}
       </div>
-    ) : <div style={{color:C.muted,fontSize:13}}>No bookings yet</div>
-  );
+      ) : <div style={{color:C.muted,fontSize:13}}>{pClasses.length ? `No ${bookingWhen==='past'?'past':'future'} bookings` : 'No bookings yet'}</div>}
+      </>
+    );
+  };
 
   // Household block — rendered as a line inside the contact card, beneath the
   // person notes, on both mobile and desktop. Collapsed: "HOUSEHOLD  <name>"
@@ -1735,6 +1772,7 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
         person={person}
         org={org}
         templates={emailTemplates}
+        onSaveAsTemplate={onSaveAsTemplate}
         onSend={onSendEmail}
         draftKey={`felt.compose.draft.${person.id}`}
         onClose={()=>setComposeOpen(false)}
