@@ -31,9 +31,9 @@ export const PERSON_ROLES = {
   private_client:{ label:'Private Client', color:'#a07fd4', bg:'#1a1428' },
   website_student:{ label:'Student', color:'#6ba3d4', bg:'#131d2a' },
   tt_prospect:{ label:'TT Prospect', color:'#c9a84c', bg:'#1b2213' },
+  care_prospect:{ label:'Care Home Lead', color:'#4db879', bg:'#132413' },
   retreat_interest:{ label:'Retreat Interest', color:'#c97070', bg:'#2a1313' },
   workshop_interest:{ label:'Workshop Interest', color:'#6ab86a', bg:'#132413' },
-  web_booking:{ label:'Web Booking', color:'#7fc4b8', bg:'#13282a' },
   personal_contact:{ label:'Personal Contact', color:'#c98fd4', bg:'#241328' },
 };
 export const SOURCES = {
@@ -170,7 +170,7 @@ export const TYPE_ICONS = ['◇','⌂','◎','▦','⬡','◈','◉','⊙','◍'
 // (residents are reached via their care home org). Same for 'other' org category —
 // keep it in the merged map and as a sidebar item, just at the bottom of built-ins.
 export const ORG_SIDEBAR_TYPES = ['care_home','gym','other'];
-export const PERSON_SIDEBAR_ROLES = ['private_client','website_student','tt_prospect','retreat_interest','workshop_interest'];
+export const PERSON_SIDEBAR_ROLES = ['private_client','website_student','tt_prospect','care_prospect','retreat_interest','workshop_interest'];
 // ─── Personal contacts (Sienna World, Neighbours, etc.) ──────────────────────
 // Personal contacts are tagged with the `personal_contact` role and filed under
 // an org of type `personal`. Both the role and the org type are created through
@@ -184,7 +184,7 @@ export const PERSON_SIDEBAR_ROLES = ['private_client','website_student','tt_pros
 // views, get emailed per their client relationship, and also appear under their
 // personal org. doNotEmail is left as a manual per-person flag (set true by hand on
 // pure personal contacts); it is intentionally not driven by these predicates.
-export const CLIENT_ROLES = ['private_client','website_student','tt_prospect','retreat_interest','workshop_interest','resident'];
+export const CLIENT_ROLES = ['private_client','website_student','tt_prospect','care_prospect','retreat_interest','workshop_interest','resident'];
 
 // PERSONAL_PARENT: the role-parent key that files a contact into the Personal
 // Record System. Any role parented to this counts as personal — letting you
