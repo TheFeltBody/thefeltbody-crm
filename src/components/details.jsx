@@ -1139,8 +1139,13 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
   // If the active filter points at a kind with no items (e.g. the last call
   // was deleted and its chip vanished), fall back to showing all — otherwise
   // the user is stranded on an empty list with no chip to click back to.
-  const effectiveFilter = (filterKind!=='all' && !pNotes.some(n => (n.kind||'note')===filterKind)) ? 'all' : filterKind;
-  const visibleNotes = effectiveFilter==='all' ? pNotes : pNotes.filter(n => (n.kind||'note')===effectiveFilter);
+  // Comms shows human communication only — booking/payment interaction rows are
+  // transactional (the booking already appears in the Bookings tab, derived from
+  // attendance), so they're filtered out here to keep the comms feed uncluttered.
+  // The chip bar already excludes these kinds; this makes the rendered list match.
+  const commsNotes = pNotes.filter(n => !['booking','payment'].includes(n.kind));
+  const effectiveFilter = (filterKind!=='all' && !commsNotes.some(n => (n.kind||'note')===filterKind)) ? 'all' : filterKind;
+  const visibleNotes = effectiveFilter==='all' ? commsNotes : commsNotes.filter(n => (n.kind||'note')===effectiveFilter);
   const impNotes = visibleNotes.filter(n=>n.important), regNotes = visibleNotes.filter(n=>!n.important);
 
   // ── Household derivation. A contact may belong to MULTIPLE households (the
@@ -1279,8 +1284,16 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
           const payHint = orgBilled ? null : <span style={{fontSize:10,color:payInfo.c,opacity:0.85,letterSpacing:'0.3px'}}>{payInfo.t}</span>;
           const cn = classNotes(c);
           const open = bookingNotesOpen.has(c.id);
+          // Web-booking badge: true if a booking interaction exists for this
+          // person+session that was made online (form-worker writes "via the
+          // website" into the booking interaction text). The booking itself is
+          // shown here via the derived attendance row; this badge just marks
+          // provenance so online self-bookings are distinguishable from manual.
+          const webBooked = notes.some(n => n.kind==='booking' && n.classId===c.id
+            && (n.personId===person.id || !n.personId)
+            && /via the website/i.test(n.text||''));
           return (<div key={c.id}>
-            <div onClick={()=>nav('class_detail',{classId:c.id})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:open?'none':`1px solid ${C.border}`,cursor:'pointer'}}><div><div style={{color:C.text,fontSize:13}}>{c.name}</div><div style={{color:C.muted,fontSize:11}}>{fmt(c.date)}</div></div><div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}><NoteIndicator count={cn.length} expanded={open} previewText={cn[0]?.text||''} onToggle={()=>toggleBookingNotes(c.id)} />{payHint}<div title={att?.attended?'Attended':'Did not attend'} style={{width:8,height:8,borderRadius:'50%',background:att?.attended?C.green:C.red}} /></div></div>
+            <div onClick={()=>nav('class_detail',{classId:c.id})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:open?'none':`1px solid ${C.border}`,cursor:'pointer'}}><div><div style={{color:C.text,fontSize:13}}>{c.name}</div><div style={{color:C.muted,fontSize:11}}>{fmt(c.date)}</div></div><div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>{webBooked&&<span title="Booked online via the website" style={{fontSize:9,fontWeight:600,letterSpacing:'0.4px',textTransform:'uppercase',color:INTERACTION_KINDS.booking.color,background:INTERACTION_KINDS.booking.bg,border:`1px solid ${INTERACTION_KINDS.booking.color}33`,borderRadius:4,padding:'2px 6px'}}>🌐 Web</span>}<NoteIndicator count={cn.length} expanded={open} previewText={cn[0]?.text||''} onToggle={()=>toggleBookingNotes(c.id)} />{payHint}<div title={att?.attended?'Attended':'Did not attend'} style={{width:8,height:8,borderRadius:'50%',background:att?.attended?C.green:C.red}} /></div></div>
             {open && cn.length>0 && (
               <div style={{background:C.surf,borderBottom:`1px solid ${C.border}`,padding:'8px 10px 10px',marginBottom:0}} onClick={e=>e.stopPropagation()}>
                 {cn.map(n=>(
@@ -1467,13 +1480,13 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
         <div>
           {isMobile ? (
             <MobileTabBar topOffset={97} active={tab} onChange={setTab} tabs={[
-              {id:'notes',    icon:'💬', name:'Comms',    count:pNotes.length},
+              {id:'notes',    icon:'💬', name:'Comms',    count:commsNotes.length},
               {id:'bookings', icon:'📅', name:'Bookings', count:pClasses.length},
               {id:'packages', icon:'🎟', name:'Packages', count:pPkgs.length},
               {id:'payments', icon:'💷', name:'Payments', count:pPayments.length},
             ]} />
           ) : (
-            <Tabs tabs={[{id:'notes',label:`Comms (${pNotes.length})`},{id:'bookings',label:`Bookings (${pClasses.length})`},{id:'packages',label:`Packages (${pPkgs.length})`},{id:'payments',label:`Payments (${pPayments.length})`}]} active={tab} onChange={setTab} />
+            <Tabs tabs={[{id:'notes',label:`Comms (${commsNotes.length})`},{id:'bookings',label:`Bookings (${pClasses.length})`},{id:'packages',label:`Packages (${pPkgs.length})`},{id:'payments',label:`Payments (${pPayments.length})`}]} active={tab} onChange={setTab} />
           )}
           {tab==='bookings'&&<>
             {bookingsList(false)}
@@ -1487,13 +1500,13 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
                   // We also hide any chip with zero items so the bar stays short:
                   // only 'All' plus kinds actually present on this contact show.
                   const COMMS_KINDS = ['note','call','email','meeting','form'];
-                  const chips = ['all', ...COMMS_KINDS.filter(k => pNotes.some(n => (n.kind||'note')===k))];
+                  const chips = ['all', ...COMMS_KINDS.filter(k => commsNotes.some(n => (n.kind||'note')===k))];
                   return chips.map(k => {
                     const active = effectiveFilter === k;
                     const meta = k==='all' ? null : INTERACTION_KINDS[k];
                     const label = k==='all' ? 'All' : meta.label + 's';
                     const icon = k==='all' ? '◯' : meta.icon;
-                    const count = k==='all' ? pNotes.length : pNotes.filter(n=>(n.kind||'note')===k).length;
+                    const count = k==='all' ? commsNotes.length : commsNotes.filter(n=>(n.kind||'note')===k).length;
                     return (
                       <button key={k} onClick={()=>setFilterKind(k)} title={label} style={{
                         background: active ? (meta?meta.bg:C.surf) : 'transparent',

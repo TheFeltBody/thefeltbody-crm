@@ -33,6 +33,7 @@ export const PERSON_ROLES = {
   tt_prospect:{ label:'TT Prospect', color:'#c9a84c', bg:'#1b2213' },
   retreat_interest:{ label:'Retreat Interest', color:'#c97070', bg:'#2a1313' },
   workshop_interest:{ label:'Workshop Interest', color:'#6ab86a', bg:'#132413' },
+  web_booking:{ label:'Web Booking', color:'#7fc4b8', bg:'#13282a' },
   personal_contact:{ label:'Personal Contact', color:'#c98fd4', bg:'#241328' },
 };
 export const SOURCES = {
