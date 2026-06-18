@@ -453,6 +453,10 @@ export const packageTemplateFromDb = (row) => ({
   active: row.active ?? true,
   stripePriceId: row.stripe_price_id || '',
   position: row.position ?? 0,
+  // Website publishing (online self-serve package sales).
+  showOnWebsite: row.show_on_website ?? false,
+  publicDescription: row.public_description || '',
+  publicSlug: row.public_slug || '',
   createdAt: row.created_at,
 });
 
@@ -470,6 +474,11 @@ export const packageTemplateToDb = (t) => ({
   active: t.active ?? true,
   stripe_price_id: t.stripePriceId ? String(t.stripePriceId).trim() || null : null,
   position: t.position ?? 0,
+  // Website publishing. Slug normalised to lowercase kebab; blank → null so the
+  // partial unique index (WHERE public_slug IS NOT NULL) ignores unpublished rows.
+  show_on_website: t.showOnWebsite ?? false,
+  public_description: t.publicDescription ? String(t.publicDescription).trim() || null : null,
+  public_slug: t.publicSlug ? String(t.publicSlug).trim().toLowerCase() || null : null,
 });
 
 // ─── Invoices + Line Items ───────────────────────────────────────────────────

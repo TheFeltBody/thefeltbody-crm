@@ -1184,9 +1184,15 @@ export function PackageTemplateForm({ existing, onSave, onClose }) {
   const [f, setF] = useState(existing || {
     type:'class_package', name:'', totalSessions:10, defaultAmount:'',
     paidVia:'stripe_tfb', validityDays:'', notes:'', active:true, stripePriceId:'',
+    showOnWebsite:false, publicDescription:'', publicSlug:'',
   });
   const s = k => v => setF(x=>({...x,[k]:v}));
-  const valid = f.name.trim().length > 0;
+  // Auto-suggest a kebab slug from the name while the slug is untouched/blank,
+  // so publishing is one click. User can override; once edited we leave it.
+  const slugify = (str) => String(str||'').trim().toLowerCase()
+    .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+  const valid = f.name.trim().length > 0
+    && (!f.showOnWebsite || (slugify(f.publicSlug || f.name).length > 0));
   return (
     <Modal title={existing?`Edit Template: ${existing.name}`:"Add Package Template"} onClose={onClose} wide>
       <FI label="TYPE" value={f.type} onChange={s('type')} opts={Object.entries(PKG_TYPES).map(([v,m])=>({v,l:m.label}))} />
@@ -1200,16 +1206,41 @@ export function PackageTemplateForm({ existing, onSave, onClose }) {
       </div>
       <FI label="VALIDITY (DAYS — blank = never expires)" value={f.validityDays} onChange={v=>s('validityDays')(v===''?'':(parseInt(v)||''))} type="number" />
       <FI label="NOTES" value={f.notes} onChange={s('notes')} rows={2} />
-      {/* Stripe price ID — populated in Phase 7. Shown now so templates can be
-          wired ahead of the webhook; safe to leave blank. */}
-      <FI label="STRIPE PRICE ID (Phase 7 — optional)" value={f.stripePriceId} onChange={s('stripePriceId')} />
+      {/* Stripe price ID — optional. The webhook prices server-side from the
+          template's DEFAULT PRICE, so this is only needed if you later switch to
+          pre-created Stripe Prices; safe to leave blank. */}
+      <FI label="STRIPE PRICE ID (optional)" value={f.stripePriceId} onChange={s('stripePriceId')} />
       <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14,cursor:'pointer'}} onClick={()=>s('active')(!f.active)}>
         <span style={{width:16,height:16,borderRadius:4,border:`1px solid ${f.active?C.gold:C.border}`,background:f.active?C.gold:'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:C.bg,fontSize:11,fontWeight:700}}>{f.active?'✓':''}</span>
         <span style={{color:C.text,fontSize:13}}>Active (shown in the package picker)</span>
       </div>
+      {/* ── Website publishing ──────────────────────────────────────────────
+          show_on_website gates the public /packages listing. When ticked, a
+          public_slug is required (auto-suggested from the name) and a public
+          description can be shown to buyers instead of internal NOTES. */}
+      <div style={{borderTop:`1px solid ${C.border}`,marginTop:4,paddingTop:14}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:f.showOnWebsite?14:2,cursor:'pointer'}} onClick={()=>{
+          const next = !f.showOnWebsite;
+          // ticking with no slug yet → seed from the name so it's publish-ready
+          setF(x=>({...x, showOnWebsite:next, publicSlug: (next && !x.publicSlug) ? slugify(x.name) : x.publicSlug }));
+        }}>
+          <span style={{width:16,height:16,borderRadius:4,border:`1px solid ${f.showOnWebsite?C.gold:C.border}`,background:f.showOnWebsite?C.gold:'transparent',display:'inline-flex',alignItems:'center',justifyContent:'center',color:C.bg,fontSize:11,fontWeight:700}}>{f.showOnWebsite?'✓':''}</span>
+          <span style={{color:C.text,fontSize:13}}>Sell on website (public /packages page)</span>
+        </div>
+        {f.showOnWebsite && (
+          <>
+            <FI label="PUBLIC SLUG (URL — lowercase, kebab-case)" value={f.publicSlug} onChange={v=>s('publicSlug')(slugify(v))} />
+            <FI label="PUBLIC DESCRIPTION (shown to buyers; blank = use name)" value={f.publicDescription} onChange={s('publicDescription')} rows={2} />
+          </>
+        )}
+      </div>
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn onClick={()=>{if(valid){onSave({...f,totalSessions:parseInt(f.totalSessions)||0});onClose();}}} disabled={!valid}>{existing?'Save Changes':'Add Template'}</Btn>
+        <Btn onClick={()=>{if(valid){
+          const slug = f.showOnWebsite ? (slugify(f.publicSlug) || slugify(f.name)) : f.publicSlug;
+          onSave({...f, totalSessions:parseInt(f.totalSessions)||0, publicSlug:slug});
+          onClose();
+        }}} disabled={!valid}>{existing?'Save Changes':'Add Template'}</Btn>
       </div>
     </Modal>
   );
