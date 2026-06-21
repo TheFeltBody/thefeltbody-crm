@@ -2866,13 +2866,17 @@ export function ClassList({ classes, orgs, series, attendance, nav, onAdd }) {
 
   // Sort: upcoming asc (soonest first), past desc (most recent first); 'all' splits both
   const sorted = useMemo(() => {
+    // Time tiebreaker within a day must parse the clock, not compare strings:
+    // "2:00pm" string-sorts before "9:30am" (leading digit, am/pm ignored).
+    // timeToMin gives minutes-since-midnight; untimed (null) sorts to day's end.
+    const tmin = (c) => { const m = timeToMin(c.time); return m === null ? Infinity : m; };
     const upcoming = baseFiltered.filter(c => c.date >= t).sort((a,b) => {
       if(a.date !== b.date) return a.date.localeCompare(b.date);
-      return (a.time||'').localeCompare(b.time||'');
+      return tmin(a) - tmin(b);
     });
     const past = baseFiltered.filter(c => c.date < t).sort((a,b) => {
       if(a.date !== b.date) return b.date.localeCompare(a.date);
-      return (b.time||'').localeCompare(a.time||'');
+      return tmin(b) - tmin(a);
     });
     if(filter === 'past') return past;
     if(filter === 'upcoming' || filter === 'today') return upcoming;
@@ -3151,7 +3155,7 @@ export function MiniWeek({ classes, notes, people=[], contactDates=[], mode='cli
 }
 
 
-export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, backInfo, mode='client', onAddClass, onAddDiary, onEditDiary, onUpdateActionDate, onClearAction, onToggleImportant }) {
+export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, backInfo, mode='client', onAddClass, onAddPrivate, onAddDiary, onEditDiary, onUpdateActionDate, onClearAction, onToggleImportant }) {
   const isMobile = useIsMobile();
   const t = today();
   const personalMode = mode === 'personal';
@@ -3287,6 +3291,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={
         <div style={{display:'flex',gap:8}}>
           {onAddDiary && <Btn small variant="secondary" onClick={()=>onAddDiary(t, currentHourTime())}>+ Diary</Btn>}
+          {onAddPrivate && <Btn small variant="secondary" onClick={()=>onAddPrivate(t)}>+ PS</Btn>}
           <Btn small onClick={()=>onAddClass && onAddClass(t)}>+ Class</Btn>
         </div>
       }>Week View</PageHead>
@@ -3583,7 +3588,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
 // the class on click; days overflow to "+N more". Mirrors WeekView's header and
 // Monday-start convention, and the OrgDetail MonthCalendar's grid mechanics.
 
-export function MonthView({ classes, orgs, notes, people=[], contactDates=[], nav, backInfo, mode='client', onAddClass, onAddDiary, onEditDiary }) {
+export function MonthView({ classes, orgs, notes, people=[], contactDates=[], nav, backInfo, mode='client', onAddClass, onAddPrivate, onAddDiary, onEditDiary }) {
   const isMobile = useIsMobile();
   const t = today();
   const personalMode = mode === 'personal';
@@ -3611,14 +3616,32 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
   const byDate = useMemo(() => {
     const map = {};
     classes.forEach(c => { (map[c.date]||(map[c.date]=[])).push(c); });
-    Object.values(map).forEach(list => list.sort((x,y)=>(x.time||'').localeCompare(y.time||'')));
+    // Sort by real clock time (minutes since midnight), NOT raw string: a string
+    // compare puts "2:00pm" before "9:30am" because it only sees the leading
+    // digit and ignores am/pm. timeToMin parses the 12h format correctly.
+    // Untimed entries (null) sort to the end of the day.
+    const byTime = (x,y) => {
+      const mx = timeToMin(x.time), my = timeToMin(y.time);
+      if(mx === my) return 0;
+      if(mx === null) return 1;
+      if(my === null) return -1;
+      return mx - my;
+    };
+    Object.values(map).forEach(list => list.sort(byTime));
     return map;
   }, [classes]);
   // Diary entries grouped by date for the month grid.
   const diaryByDate = useMemo(() => {
     const map = {};
     (notes||[]).forEach(n => { if(n.kind==='diary') (map[n.date]||(map[n.date]=[])).push(n); });
-    Object.values(map).forEach(list => list.sort((x,y)=>(x.time||'').localeCompare(y.time||'')));
+    const byTime = (x,y) => {
+      const mx = timeToMin(x.time), my = timeToMin(y.time);
+      if(mx === my) return 0;
+      if(mx === null) return 1;
+      if(my === null) return -1;
+      return mx - my;
+    };
+    Object.values(map).forEach(list => list.sort(byTime));
     return map;
   }, [notes]);
   // Diary layer visibility — same localStorage key as WeekView so toggling a
@@ -3674,14 +3697,14 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
       // because mobile cells are narrow and we want several pills to fit.
       return (
         <div onClick={(e)=>{ e.stopPropagation(); nav('class_detail',{classId:c.id}); }} title={tip}
-          style={{background:color+'22',borderLeft:`2px solid ${color}`,borderRadius:3,padding:'1px 3px',marginBottom:2,cursor:'pointer',color,fontSize:10,fontWeight:600,letterSpacing:'0.2px',lineHeight:1.3,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>
+          style={{background:color+'22',borderLeft:`2px solid ${color}`,borderRadius:3,padding:'1px 3px',marginBottom:2,cursor:'pointer',color,fontSize:10,fontWeight:600,letterSpacing:'0.2px',lineHeight:1.3,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',flexShrink:0}}>
           {timeLbl}
         </div>
       );
     }
     return (
       <div onClick={(e)=>{ e.stopPropagation(); nav('class_detail',{classId:c.id}); }} title={tip}
-        style={{background:color+'22',borderLeft:`2px solid ${color}`,borderRadius:3,padding:'1px 4px',marginBottom:2,cursor:'pointer',display:'flex',alignItems:'center',gap:4,overflow:'hidden',minWidth:0}}>
+        style={{background:color+'22',borderLeft:`2px solid ${color}`,borderRadius:3,padding:'1px 4px',marginBottom:2,cursor:'pointer',display:'flex',alignItems:'center',gap:4,overflow:'hidden',minWidth:0,flexShrink:0}}>
         {c.time && <span style={{color,fontSize:9,fontWeight:600,flexShrink:0}}>{fmtTime(c.time)}</span>}
         <span style={{color:C.text,fontSize:10,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0,flex:1}}>{c.name}</span>
       </div>
@@ -3705,7 +3728,7 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
     };
     return (
       <div onClick={go} title={tip}
-        style={{background:offMode?'transparent':accent+'18',borderLeft:`2px dashed ${accent}`,borderRadius:3,padding:isMobile?'1px 3px':'1px 4px',marginBottom:2,cursor:'pointer',opacity:offMode?0.55:1,display:'flex',alignItems:'center',gap:4,overflow:'hidden',minWidth:0}}>
+        style={{background:offMode?'transparent':accent+'18',borderLeft:`2px dashed ${accent}`,borderRadius:3,padding:isMobile?'1px 3px':'1px 4px',marginBottom:2,cursor:'pointer',opacity:offMode?0.55:1,display:'flex',alignItems:'center',gap:4,overflow:'hidden',minWidth:0,flexShrink:0}}>
         {!isMobile && n.time && <span style={{color:accent,fontSize:9,fontWeight:600,flexShrink:0}}>{fmtTime(n.time)}</span>}
         <span style={{color:offMode?C.muted:C.text,fontSize:10,fontStyle:'italic',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0,flex:1}}>{isMobile ? (fmtTime(n.time)||label) : label}</span>
       </div>
@@ -3720,7 +3743,7 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
       title={e.label}
       style={{background:C.gold+'18',borderLeft:`2px solid ${C.gold}`,borderRadius:3,
         padding:isMobile?'1px 3px':'1px 4px',marginBottom:2,cursor:e.personId?'pointer':'default',
-        display:'flex',alignItems:'center',gap:4,overflow:'hidden',minWidth:0}}>
+        display:'flex',alignItems:'center',gap:4,overflow:'hidden',minWidth:0,flexShrink:0}}>
       <span style={{fontSize:9,flexShrink:0}}>{e.emoji}</span>
       {!isMobile && <span style={{color:C.text,fontSize:10,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0,flex:1}}>{e.label}</span>}
     </div>
@@ -3731,6 +3754,7 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={
         <div style={{display:'flex',gap:8}}>
           {onAddDiary && <Btn small variant="secondary" onClick={()=>onAddDiary(t)}>+ Diary</Btn>}
+          {onAddPrivate && <Btn small variant="secondary" onClick={()=>onAddPrivate(t)}>+ PS</Btn>}
           <Btn small onClick={()=>onAddClass && onAddClass(t)}>+ Class</Btn>
         </div>
       }>Month View</PageHead>
@@ -3823,11 +3847,22 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
                 {(() => {
                   const dayDates = datesByDate[d] || [];
                   const dayDiary = (diaryByDate[d] || []).filter(diaryVisible);
+                  // Merge classes + diary into ONE time-sorted stream so a 2pm
+                  // diary entry sits between an 11am and a 7pm class rather than
+                  // below every class. Date-events (birthdays etc.) have no time
+                  // and stay pinned on top as all-day markers. Tag each item with
+                  // its render type; untimed entries sort to the end of the day.
+                  const tmin = (x) => { const m = timeToMin(x.time); return m === null ? Infinity : m; };
+                  const timed = [
+                    ...dayClasses.map(c => ({ kind:'class', item:c, t:tmin(c) })),
+                    ...dayDiary.map(n => ({ kind:'diary', item:n, t:tmin(n) })),
+                  ].sort((a,b) => a.t - b.t);
                   return (
                     <>
                       {dayDates.map(e=><DatePill key={e.id} e={e} />)}
-                      {dayClasses.map(c=><Pill key={c.id} c={c} />)}
-                      {dayDiary.map(n=><DiaryPill key={n.id} n={n} />)}
+                      {timed.map(x => x.kind==='class'
+                        ? <Pill key={'c_'+x.item.id} c={x.item} />
+                        : <DiaryPill key={'d_'+x.item.id} n={x.item} />)}
                     </>
                   );
                 })()}

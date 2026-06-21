@@ -4,7 +4,7 @@ import * as data from "./lib/dataLayer.js";
 import { C, ORG_META, PERSON_ROLES, SEED, SELF_PERSON_ID } from "./lib/constants.js";
 import { MobileUIContext, TypesContext, buildOrgTypes, buildPersonRoles, fmt, generateSeriesClasses, isWebEvent, today, uid, useLocalStorage } from "./lib/helpers.jsx";
 import { Empty } from "./components/primitives.jsx";
-import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, DiaryModal, EditNoteForm, EditPackageForm, EditSeriesClassForm, EmailTemplateForm, MergePeopleForm, PackageTemplateForm } from "./components/forms.jsx";
+import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, DiaryModal, EditNoteForm, EditPackageForm, EditSeriesClassForm, EmailTemplateForm, MergePeopleForm, PackageTemplateForm, PickPersonModal } from "./components/forms.jsx";
 import { BirthdaysView, ClassList, Dashboard, EmailTemplatesView, FormsList, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackageTemplatesView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
 import { ClassDetail, HouseholdModal, OrgDetail, PersonDetail, ProjectDetail } from "./components/details.jsx";
 import { CareHomeResourcesView, DocumentsView } from "./components/documents.jsx";
@@ -1076,8 +1076,8 @@ export default function FeltBodyCRM() {
           onSave={(t)=>editPersonRole(t.key, { label:t.label, color:t.color, bg:t.bg, parentKey:t.parentKey })}
           onClose={close} />;
       }
-      case 'add_class': return <AddClassForm orgs={orgs} defaultOrgId={modal.orgId} defaultDate={modal.date} onSave={handleAddClass} onClose={close} />;
-      case 'add_diary': return <DiaryModal people={people} projects={projects} selfPersonId={SELF_PERSON_ID} existing={modal.entry || null} prefill={modal.prefill || null} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={modal.entry ? handleEditDiary : handleAddDiary} onCopy={handleAddDiary} onClose={close} nav={nav} />;
+      case 'add_class': return <AddClassForm orgs={orgs} defaultOrgId={modal.orgId} defaultDate={modal.date} defaultPaymentModel={modal.paymentModel} onSave={handleAddClass} onClose={close} />;
+      case 'add_diary': return <DiaryModal people={people} projects={projects} selfPersonId={SELF_PERSON_ID} existing={modal.entry || null} prefill={modal.prefill || null} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={modal.entry ? handleEditDiary : handleAddDiary} onCopy={handleAddDiary} onDelete={deleteNote} onClose={close} nav={nav} />;
       case 'edit_class': {
         const cls=modal.cls;
         if(cls.seriesId) return <EditSeriesClassForm cls={cls} orgs={orgs} onSaveThis={u=>handleEditClass(cls,u,'this')} onSaveFuture={u=>handleEditClass(cls,u,'future')} onClose={close} />;
@@ -1157,6 +1157,13 @@ export default function FeltBodyCRM() {
           }}
           onClose={close} />;
       }
+      case 'pick_person_for_ps': return <PickPersonModal
+        people={people}
+        attendance={attendance}
+        classes={classes}
+        onPick={(person)=>setModal({ type:'book_create_private', personId: person.id, defaultDate: modal.date })}
+        onSkip={()=>setModal({ type:'add_class', date: modal.date, paymentModel:'private' })}
+        onClose={close} />;
       case 'book_create_private': {
         const person = people.find(p => p.id === modal.personId);
         if(!person) return null;
@@ -1164,6 +1171,7 @@ export default function FeltBodyCRM() {
           orgs={orgs}
           packages={packages}
           allAttendance={attendance}
+          defaultDate={modal.defaultDate}
           bookingFor={{ personId: person.id, name: person.name, defaultSessionRate: person.defaultSessionRate }}
           defaultPaymentModel="private"
           onSave={async (f) => {
@@ -1337,6 +1345,7 @@ export default function FeltBodyCRM() {
       case 'classes': return <ClassList classes={classes} orgs={orgs} series={series} attendance={attendance} nav={nav} onAdd={()=>setModal({type:'add_class'})} />;
       case 'week_view': return <WeekView classes={classes} orgs={orgs} notes={notes} people={people} contactDates={contactDates} nav={nav} backInfo={backInfo} mode={mode}
         onAddClass={(date)=>setModal({type:'add_class', date})}
+        onAddPrivate={(date)=>setModal({type:'pick_person_for_ps', date})}
         onAddDiary={(date,time)=>setModal({type:'add_diary', date, time, personal: mode==='personal'})}
         onEditDiary={(entry)=>setModal({type:'add_diary', entry})}
         onUpdateActionDate={updateNoteAction}
@@ -1344,6 +1353,7 @@ export default function FeltBodyCRM() {
         onToggleImportant={toggleNoteImportant} />;
       case 'month_view': return <MonthView classes={classes} orgs={orgs} notes={notes} people={people} contactDates={contactDates} nav={nav} backInfo={backInfo} mode={mode}
         onAddClass={(date)=>setModal({type:'add_class', date})}
+        onAddPrivate={(date)=>setModal({type:'pick_person_for_ps', date})}
         onAddDiary={(date)=>setModal({type:'add_diary', date, personal: mode==='personal'})}
         onEditDiary={(entry)=>setModal({type:'add_diary', entry})} />;
       case 'forms_list': return <FormsList forms={forms} classes={classes} onAdd={addForm} onUpdate={updateForm} onRemove={removeForm} onMove={moveForm} />;

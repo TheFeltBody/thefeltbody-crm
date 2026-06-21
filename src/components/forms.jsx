@@ -1794,8 +1794,9 @@ export function EditNoteForm({ note, onSave, onClose }) {
 // record (selfPersonId) so interactions_anchored is always satisfied. The little
 // "open ↗" links jump to the linked record without making the block-click itself
 // navigate away.
-export function DiaryModal({ people, projects=[], selfPersonId, existing=null, prefill=null, defaultDate, defaultTime, defaultPersonal=false, onSave, onCopy, onClose, nav }) {
+export function DiaryModal({ people, projects=[], selfPersonId, existing=null, prefill=null, defaultDate, defaultTime, defaultPersonal=false, onSave, onCopy, onDelete, onClose, nav }) {
   const isEdit = !!existing;
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [f, setF] = useState({
     title: existing?.subject || '',
     text: existing?.text || prefill?.text || '',
@@ -1976,16 +1977,67 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
           </div>
         </div>
       )}
-      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn onClick={save}>{isEdit ? 'Save changes' : 'Add entry'}</Btn>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginTop:4}}>
+        <div>
+          {isEdit && onDelete && (
+            confirmDelete ? (
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <span style={{color:C.muted,fontSize:12}}>Delete this entry?</span>
+                <button onClick={()=>{ onDelete(existing.id); onClose(); }}
+                  style={{background:C.red+'22',border:`1px solid ${C.red}`,color:C.red,cursor:'pointer',
+                    borderRadius:6,fontSize:12,padding:'6px 12px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>
+                  Yes, delete
+                </button>
+                <button onClick={()=>setConfirmDelete(false)}
+                  style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,
+                    fontFamily:"'Jost',sans-serif",textDecoration:'underline',padding:0}}>
+                  keep
+                </button>
+              </div>
+            ) : (
+              <button onClick={()=>setConfirmDelete(true)}
+                style={{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:12,
+                  fontFamily:"'Jost',sans-serif",padding:0}}>
+                Delete
+              </button>
+            )
+          )}
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={save}>{isEdit ? 'Save changes' : 'Add entry'}</Btn>
+        </div>
       </div>
     </Modal>
   );
 }
 
-// Compose-and-send modal for the CRM adhoc email feature. Plain-text v1: the
-// form-worker handles HTML escaping + \n -> <br>, and sends via Brevo with no
+// Lightweight client picker for the calendar "+ PS" flow. Private sessions are
+// normally booked from a person's record (the person is already known); booking
+// from the calendar reverses that — you have a date and need to choose who. This
+// modal picks the client, then the parent routes into the existing private-
+// booking path (book_create_private) with the date pre-filled, so the package
+// picker + attendance link all work as they do from PersonDetail. The "no person
+// yet" option falls back to creating an empty private slot you can attach a
+// client to later.
+export function PickPersonModal({ people, attendance, classes, onPick, onSkip, onClose }) {
+  return (
+    <Modal title="Private session — who for?" onClose={onClose}>
+      <SearchSelect people={people} attendance={attendance} classes={classes} onSelect={onPick} />
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:16}}>
+        {onSkip
+          ? <button onClick={onSkip}
+              style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,
+                fontFamily:"'Jost',sans-serif",textDecoration:'underline',padding:0}}>
+              Block out a slot without a client →
+            </button>
+          : <span />}
+        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 // template (htmlContent direct). Errors from the worker (validation, missing
 // primary email, Brevo failure) surface inline so the user can fix and retry
 // without losing their draft. The outbound interaction is written server-side
