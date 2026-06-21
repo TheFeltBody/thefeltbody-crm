@@ -536,6 +536,19 @@ export const notes = {
   },
   delete: (id) => softDelete('interactions', id),
 
+  // Bulk soft-delete every diary entry sharing a repeat-group id. Used when the
+  // user deletes a "repeat daily ×N" batch as a whole. Mirrors softDelete but
+  // keyed on diary_group instead of id, so all N rows go in one update. No-op
+  // on a falsy id (a standalone entry has diary_group=null and must never match
+  // here — that would wipe every other standalone entry). Returns nothing; the
+  // UI removes the rows from local state optimistically.
+  async deleteGroup(groupId) {
+    if (!groupId) return;
+    await supabase.from('interactions')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('diary_group', groupId).then(ok);
+  },
+
   // Mark every unread message in a thread as read. Called when a thread is
   // opened in ThreadsView. Single bulk update keyed on thread_id; only stamps
   // rows that aren't already read (idempotent, avoids needless writes). No

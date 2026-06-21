@@ -311,6 +311,11 @@ export const noteFromDb = (row) => ({
   // meaningful for kind='diary' rows but harmless on others. Drives the
   // colour-coded calendar layering + show/hide toggles in personal mode.
   calendar: row.calendar || 'mine',
+  // Diary repeat-group link. N entries created by one "repeat daily ×N" batch
+  // share a UUID here so they can be deleted as a group. null for standalone
+  // entries. Also the groundwork for future all-day multi-day events (a span is
+  // just N consecutive all-day rows sharing a diary_group).
+  diaryGroup: row.diary_group || null,
   externalId: row.external_id || null,
   threadId: row.thread_id || null,
   // Phase 8 Half A additions: raw addresses + ingestion source. fromEmail and
@@ -350,6 +355,7 @@ export const noteToDb = (n) => ({
   time: n.time || null,                  // '' / undefined → null
   is_personal: n.isPersonal ?? false,    // DB default false; belt-and-braces
   calendar: n.calendar || 'mine',        // DB default 'mine'; belt-and-braces
+  diary_group: n.diaryGroup || null,     // repeat-batch link; null = standalone
   external_id: n.externalId || null,
   thread_id: n.threadId || null,
   // Phase 8 Half A additions
@@ -387,6 +393,7 @@ export const notePatchToDb = (patch) => {
   if (patch.time !== undefined) out.time = patch.time || null;
   if (patch.isPersonal !== undefined) out.is_personal = patch.isPersonal ?? false;
   if (patch.calendar !== undefined) out.calendar = patch.calendar || 'mine';
+  if (patch.diaryGroup !== undefined) out.diary_group = patch.diaryGroup || null;
   if (patch.threadId !== undefined) out.thread_id = patch.threadId || null;
   if (patch.fromEmail !== undefined) out.from_email = patch.fromEmail || null;
   if (patch.toEmail !== undefined) out.to_email = patch.toEmail || null;

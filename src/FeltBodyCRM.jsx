@@ -514,6 +514,16 @@ export default function FeltBodyCRM() {
   const handleAddDiary = (entry) => data.notes.create(entry)
     .then(saved => setNotes(p => [...p, saved]))
     .catch(onError('Add diary entry'));
+  // Grouped create for "repeat daily ×N": insert all entries, append all to
+  // local state. Sequential awaits keep it simple and order-stable; the batch is
+  // small (≤60). If one fails the rest still land — acceptable for a diary batch.
+  const handleAddDiaryMany = async (entries) => {
+    try {
+      const saved = [];
+      for (const e of entries) saved.push(await data.notes.create(e));
+      setNotes(p => [...p, ...saved]);
+    } catch (e) { onError('Add repeating diary entries')(e); }
+  };
   // Edit an existing diary entry. Patches the FULL diary field set (time,
   // isPersonal, personId, projectId, duration) — the generic updateNote patch
   // omits these, which would silently strip a diary entry off the calendar.
@@ -529,6 +539,7 @@ export default function FeltBodyCRM() {
       personId: entry.personId || null,
       projectId: entry.projectId || null,
       calendar: entry.calendar || 'mine',
+      diaryGroup: entry.diaryGroup || null,
     };
     setNotes(p => p.map(n => n.id === entry.id ? { ...n, ...patch } : n));
     data.notes.patch(entry.id, patch).catch(onError('Update diary entry'));
@@ -577,6 +588,13 @@ export default function FeltBodyCRM() {
   const deleteNote = (id) => {
     setNotes(p => p.filter(n => n.id !== id));  // optimistic
     data.notes.delete(id).catch(onError('Delete note'));
+  };
+  // Delete a whole repeat-group of diary entries at once. Optimistic local
+  // removal of every row sharing the group, then one bulk server soft-delete.
+  const deleteNoteGroup = (groupId) => {
+    if (!groupId) return;
+    setNotes(p => p.filter(n => n.diaryGroup !== groupId));  // optimistic
+    data.notes.deleteGroup(groupId).catch(onError('Delete repeating entries'));
   };
   const updateNoteAction = (id, newDate) => {
     setNotes(p => p.map(n => n.id === id ? { ...n, actionDate: newDate || null } : n));
@@ -1077,7 +1095,7 @@ export default function FeltBodyCRM() {
           onClose={close} />;
       }
       case 'add_class': return <AddClassForm orgs={orgs} defaultOrgId={modal.orgId} defaultDate={modal.date} defaultPaymentModel={modal.paymentModel} onSave={handleAddClass} onClose={close} />;
-      case 'add_diary': return <DiaryModal people={people} projects={projects} selfPersonId={SELF_PERSON_ID} existing={modal.entry || null} prefill={modal.prefill || null} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={modal.entry ? handleEditDiary : handleAddDiary} onCopy={handleAddDiary} onDelete={deleteNote} onClose={close} nav={nav} />;
+      case 'add_diary': return <DiaryModal people={people} projects={projects} selfPersonId={SELF_PERSON_ID} existing={modal.entry || null} prefill={modal.prefill || null} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={modal.entry ? handleEditDiary : handleAddDiary} onSaveMany={handleAddDiaryMany} onCopy={handleAddDiary} onDelete={deleteNote} onDeleteGroup={deleteNoteGroup} onClose={close} nav={nav} />;
       case 'edit_class': {
         const cls=modal.cls;
         if(cls.seriesId) return <EditSeriesClassForm cls={cls} orgs={orgs} onSaveThis={u=>handleEditClass(cls,u,'this')} onSaveFuture={u=>handleEditClass(cls,u,'future')} onClose={close} />;

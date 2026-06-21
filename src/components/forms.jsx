@@ -1794,7 +1794,7 @@ export function EditNoteForm({ note, onSave, onClose }) {
 // record (selfPersonId) so interactions_anchored is always satisfied. The little
 // "open ↗" links jump to the linked record without making the block-click itself
 // navigate away.
-export function DiaryModal({ people, projects=[], selfPersonId, existing=null, prefill=null, defaultDate, defaultTime, defaultPersonal=false, onSave, onCopy, onDelete, onClose, nav }) {
+export function DiaryModal({ people, projects=[], selfPersonId, existing=null, prefill=null, defaultDate, defaultTime, defaultPersonal=false, onSave, onSaveMany, onCopy, onDelete, onDeleteGroup, onClose, nav }) {
   const isEdit = !!existing;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [f, setF] = useState({
@@ -1803,6 +1803,10 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
     date: existing?.date || prefill?.date || defaultDate || today(),
     time: existing?.time || defaultTime || currentHourTime(),
     duration: existing?.durationMins || 60,
+    // Display unit for the duration field. Stored value is always minutes; this
+    // just lets the user enter "2 hours" instead of "120". Seed to hours when an
+    // existing entry is a clean whole-hour, else minutes.
+    durationUnit: (existing?.durationMins && existing.durationMins % 60 === 0) ? 'hours' : 'mins',
     isPersonal: existing ? !!existing.isPersonal : (prefill ? !!prefill.isPersonal : defaultPersonal),
     // Which named layer this diary entry belongs to ('mine' / 'sienna' / 'rosie').
     // Only surfaced when isPersonal is true. New entries seed from the prefill
@@ -1812,6 +1816,25 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
     projectId: existing?.projectId || prefill?.projectId || '',
   });
   const s = k => v => setF(x=>({...x,[k]:v}));
+  // "Repeat daily ×N" — only offered when creating (not editing). Creates N
+  // consecutive single-day entries sharing one diary_group so they delete as a
+  // group. Off by default; count is the TOTAL number of days (incl. the first).
+  const [repeat, setRepeat] = useState(false);
+  const [repeatDays, setRepeatDays] = useState(3);
+
+  // Resolve the duration field (value + unit) down to stored minutes.
+  const durationToMins = () => {
+    const v = parseInt(f.duration) || (f.durationUnit === 'hours' ? 1 : 60);
+    return f.durationUnit === 'hours' ? v * 60 : v;
+  };
+  // Add whole days to a YYYY-MM-DD string without timezone drift (string math,
+  // same reasoning as the month-nav fix — never round-trip through Date/UTC).
+  const addDaysStr = (iso, n) => {
+    const [y,m,d] = iso.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m-1, d));
+    dt.setUTCDate(dt.getUTCDate() + n);
+    return dt.toISOString().slice(0,10);
+  };
 
   const save = () => {
     // Title is the calendar label and is required. Body is the optional longer
@@ -1826,18 +1849,33 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
     let personId = f.personId || null;
     const projectId = f.projectId || null;
     if(!personId && !projectId) personId = selfPersonId || null;
-    const payload = {
+    const base = {
       kind: 'diary',
       subject: title || text,   // ensure the calendar always has a label
       text,
-      date: f.date,
       time: f.time || null,
-      durationMins: parseInt(f.duration) || 60,
+      durationMins: durationToMins(),
       isPersonal: !!f.isPersonal,
       personId,
       projectId,
       calendar: f.calendar || 'mine',
     };
+    // Repeat daily ×N (create-only): N consecutive single-day entries sharing one
+    // diary_group so they can be deleted together. Guard the count to a sane
+    // range. When off (or editing), behave exactly as before — one entry.
+    if (!isEdit && repeat && onSaveMany) {
+      const n = Math.max(2, Math.min(60, parseInt(repeatDays) || 2));
+      const group = crypto.randomUUID();
+      const entries = Array.from({length:n}, (_,i) => ({
+        ...base,
+        date: addDaysStr(f.date, i),
+        diaryGroup: group,
+      }));
+      onSaveMany(entries);
+      onClose();
+      return;
+    }
+    const payload = { ...base, date: f.date, diaryGroup: existing?.diaryGroup || null };
     onSave(isEdit ? { ...existing, ...payload } : payload);
     onClose();
   };
@@ -1865,7 +1903,7 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
       text,
       date: f.date,
       time: f.time || null,
-      durationMins: parseInt(f.duration) || 60,
+      durationMins: durationToMins(),
       isPersonal: true,        // copies always land on a personal layer
       personId,
       projectId,
@@ -1885,7 +1923,60 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
         <FI label="DATE" value={f.date} onChange={s('date')} type="date" half />
         <FI label="TIME" value={f.time} onChange={s('time')} type="time" half />
       </div>
-      <FI label="DURATION (mins)" value={f.duration} onChange={v=>s('duration')(parseInt(v)||60)} type="number" />
+      {/* Duration: a number plus a min/hour unit. Stored value is always minutes
+          (durationToMins converts on save); the unit is purely an input grain. */}
+      <div>
+        <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:6}}>DURATION</div>
+        <div style={{display:'flex',gap:8,alignItems:'stretch'}}>
+          <input type="number" min="1" value={f.duration}
+            onChange={e=>s('duration')(parseInt(e.target.value)||1)}
+            style={{flex:1,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,
+              color:C.text,fontSize:14,padding:'9px 12px',fontFamily:"'Jost',sans-serif"}} />
+          <div style={{display:'flex',gap:0,borderRadius:6,overflow:'hidden',border:`1px solid ${C.border}`}}>
+            {[{v:'mins',l:'min'},{v:'hours',l:'hr'}].map(u=>{
+              const on = f.durationUnit===u.v;
+              return (
+                <button key={u.v} onClick={()=>{
+                  // Convert the displayed number so the real duration is unchanged.
+                  if(u.v===f.durationUnit) return;
+                  const cur = parseInt(f.duration)||0;
+                  if(u.v==='hours') s('duration')(Math.max(1, Math.round(cur/60)));
+                  else s('duration')(cur*60);
+                  s('durationUnit')(u.v);
+                }}
+                  style={{padding:'0 16px',cursor:'pointer',fontSize:13,fontFamily:"'Jost',sans-serif",
+                    background: on ? C.gold+'22' : C.card, color: on ? C.gold : C.muted, border:'none'}}>
+                  {u.l}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Repeat daily ×N — create-only. Makes N consecutive single-day entries
+          sharing a group so they delete together. Useful for a multi-day course,
+          holiday, or block of cover. Editing an existing entry hides this. */}
+      {!isEdit && onSaveMany && (
+        <div style={{marginTop:4}}>
+          <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',color:C.muted,fontSize:12}}>
+            <input type="checkbox" checked={repeat} onChange={e=>setRepeat(e.target.checked)} />
+            Repeat daily
+          </label>
+          {repeat && (
+            <div style={{display:'flex',alignItems:'center',gap:8,marginTop:8}}>
+              <span style={{color:C.muted,fontSize:12}}>for</span>
+              <input type="number" min="2" max="60" value={repeatDays}
+                onChange={e=>setRepeatDays(parseInt(e.target.value)||2)}
+                style={{width:64,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,
+                  color:C.text,fontSize:14,padding:'7px 10px',fontFamily:"'Jost',sans-serif"}} />
+              <span style={{color:C.muted,fontSize:12}}>
+                days — {f.date} to {addDaysStr(f.date, Math.max(2,Math.min(60,parseInt(repeatDays)||2))-1)}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Person link (optional) + jump-out */}
       <div>
@@ -1981,19 +2072,40 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
         <div>
           {isEdit && onDelete && (
             confirmDelete ? (
-              <div style={{display:'flex',alignItems:'center',gap:8}}>
-                <span style={{color:C.muted,fontSize:12}}>Delete this entry?</span>
-                <button onClick={()=>{ onDelete(existing.id); onClose(); }}
-                  style={{background:C.red+'22',border:`1px solid ${C.red}`,color:C.red,cursor:'pointer',
-                    borderRadius:6,fontSize:12,padding:'6px 12px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>
-                  Yes, delete
-                </button>
-                <button onClick={()=>setConfirmDelete(false)}
-                  style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,
-                    fontFamily:"'Jost',sans-serif",textDecoration:'underline',padding:0}}>
-                  keep
-                </button>
-              </div>
+              existing.diaryGroup && onDeleteGroup ? (
+                <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                  <span style={{color:C.muted,fontSize:12}}>This is a repeating entry —</span>
+                  <button onClick={()=>{ onDelete(existing.id); onClose(); }}
+                    style={{background:C.red+'22',border:`1px solid ${C.red}`,color:C.red,cursor:'pointer',
+                      borderRadius:6,fontSize:12,padding:'6px 12px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>
+                    Delete this day
+                  </button>
+                  <button onClick={()=>{ onDeleteGroup(existing.diaryGroup); onClose(); }}
+                    style={{background:C.red+'22',border:`1px solid ${C.red}`,color:C.red,cursor:'pointer',
+                      borderRadius:6,fontSize:12,padding:'6px 12px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>
+                    Delete all repeats
+                  </button>
+                  <button onClick={()=>setConfirmDelete(false)}
+                    style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,
+                      fontFamily:"'Jost',sans-serif",textDecoration:'underline',padding:0}}>
+                    keep
+                  </button>
+                </div>
+              ) : (
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <span style={{color:C.muted,fontSize:12}}>Delete this entry?</span>
+                  <button onClick={()=>{ onDelete(existing.id); onClose(); }}
+                    style={{background:C.red+'22',border:`1px solid ${C.red}`,color:C.red,cursor:'pointer',
+                      borderRadius:6,fontSize:12,padding:'6px 12px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>
+                    Yes, delete
+                  </button>
+                  <button onClick={()=>setConfirmDelete(false)}
+                    style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,
+                      fontFamily:"'Jost',sans-serif",textDecoration:'underline',padding:0}}>
+                    keep
+                  </button>
+                </div>
+              )
             ) : (
               <button onClick={()=>setConfirmDelete(true)}
                 style={{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:12,
