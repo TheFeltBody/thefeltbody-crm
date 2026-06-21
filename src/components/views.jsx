@@ -3157,7 +3157,14 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
   const personalMode = mode === 'personal';
   // Anchor the week to Monday (UK convention).
   const initialAnchor = useMemo(() => startOfWeek(t), [t]);
-  const [anchor, setAnchor] = useState(initialAnchor);
+  // Shared "last viewed date" across Week + Month. We persist a plain date and
+  // each view derives its own anchor from it (Week → its Monday, Month → its
+  // 1st), so switching views keeps you in the same stretch of time. Defaults to
+  // this week on first ever use. The "This week" button still jumps to today.
+  const [lastDate, setLastDate] = useLocalStorage('fbc.calendar.lastDate', t);
+  const [anchor, setAnchorRaw] = useState(() => startOfWeek(lastDate || t));
+  // Wrap setAnchor so every navigation also records the shared date.
+  const setAnchor = (next) => { setAnchorRaw(next); setLastDate(next); };
   const days = useMemo(() => Array.from({length:7}, (_,i) => addDays(anchor, i)), [anchor]);
   const weekEnd = days[6];
 
@@ -3580,13 +3587,25 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
   const isMobile = useIsMobile();
   const t = today();
   const personalMode = mode === 'personal';
-  const [anchor, setAnchor] = useState(() => t); // any date inside the shown month
+  // Shared "last viewed date" with WeekView (same localStorage key). The stored
+  // date can be any day; the month grid just uses the month that contains it,
+  // so landing here from a week in (say) August shows August. setAnchor records
+  // the date so Week picks up where Month left off. "This month" jumps to today.
+  const [lastDate, setLastDate] = useLocalStorage('fbc.calendar.lastDate', t);
+  const [anchor, setAnchorRaw] = useState(() => lastDate || t); // any date inside the shown month
+  const setAnchor = (next) => { setAnchorRaw(next); setLastDate(next); };
   const a = new Date(anchor+'T12:00');
   const year = a.getFullYear(), month = a.getMonth();
   const monthLabel = a.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
 
   // 6 weeks × 7 days starting from the Monday on/before the 1st.
-  const gridStart = useMemo(() => startOfWeek(new Date(year, month, 1).toISOString().slice(0,10)), [year, month]);
+  // First-of-month as a plain YYYY-MM-01 string. Same reason as monthAnchor:
+  // never build this via new Date(y,m,1).toISOString() — under BST that yields
+  // the previous day and threw the whole grid a week early. startOfWeek is then
+  // safe because it works off a T12:00 date that survives the UTC conversion.
+  const gridStart = useMemo(
+    () => startOfWeek(`${year}-${String(month+1).padStart(2,'0')}-01`),
+    [year, month]);
   const cells = useMemo(() => Array.from({length:42}, (_,i) => addDays(gridStart, i)), [gridStart]);
 
   const byDate = useMemo(() => {
@@ -3621,8 +3640,19 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
   const monthCount = classes.filter(c => { const d=new Date(c.date+'T12:00'); return d.getFullYear()===year && d.getMonth()===month; }).length;
 
   const DOW = isMobile ? ['M','T','W','T','F','S','S'] : ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  const prevMonth = () => setAnchor(new Date(year, month-1, 1).toISOString().slice(0,10));
-  const nextMonth = () => setAnchor(new Date(year, month+1, 1).toISOString().slice(0,10));
+  // Build a YYYY-MM-01 string directly from year/month, normalising overflow
+  // (month 12 → next Jan, month -1 → prev Dec). Crucially we do NOT round-trip
+  // through new Date(...).toISOString(): that converts local midnight to UTC,
+  // which under BST (UTC+1) rolls the date back to 23:00 the previous day and
+  // slices to the wrong month — that bug made "next" a no-op and "previous"
+  // jump two months. String arithmetic keeps it timezone-proof.
+  const monthAnchor = (y, m) => {
+    const yy = y + Math.floor(m / 12);
+    const mm = ((m % 12) + 12) % 12;            // 0..11
+    return `${yy}-${String(mm + 1).padStart(2,'0')}-01`;
+  };
+  const prevMonth = () => setAnchor(monthAnchor(year, month-1));
+  const nextMonth = () => setAnchor(monthAnchor(year, month+1));
 
   // Jump to that calendar week. Week-view doesn't take an anchor date arg as
   // a routing param right now (it derives from `today()`), so on mobile-tap
@@ -3651,9 +3681,9 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
     }
     return (
       <div onClick={(e)=>{ e.stopPropagation(); nav('class_detail',{classId:c.id}); }} title={tip}
-        style={{background:color+'22',borderLeft:`2px solid ${color}`,borderRadius:3,padding:'1px 4px',marginBottom:2,cursor:'pointer',display:'flex',alignItems:'center',gap:4,overflow:'hidden'}}>
+        style={{background:color+'22',borderLeft:`2px solid ${color}`,borderRadius:3,padding:'1px 4px',marginBottom:2,cursor:'pointer',display:'flex',alignItems:'center',gap:4,overflow:'hidden',minWidth:0}}>
         {c.time && <span style={{color,fontSize:9,fontWeight:600,flexShrink:0}}>{fmtTime(c.time)}</span>}
-        <span style={{color:C.text,fontSize:10,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{c.name}</span>
+        <span style={{color:C.text,fontSize:10,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0,flex:1}}>{c.name}</span>
       </div>
     );
   };
@@ -3675,9 +3705,9 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
     };
     return (
       <div onClick={go} title={tip}
-        style={{background:offMode?'transparent':accent+'18',borderLeft:`2px dashed ${accent}`,borderRadius:3,padding:isMobile?'1px 3px':'1px 4px',marginBottom:2,cursor:'pointer',opacity:offMode?0.55:1,display:'flex',alignItems:'center',gap:4,overflow:'hidden'}}>
+        style={{background:offMode?'transparent':accent+'18',borderLeft:`2px dashed ${accent}`,borderRadius:3,padding:isMobile?'1px 3px':'1px 4px',marginBottom:2,cursor:'pointer',opacity:offMode?0.55:1,display:'flex',alignItems:'center',gap:4,overflow:'hidden',minWidth:0}}>
         {!isMobile && n.time && <span style={{color:accent,fontSize:9,fontWeight:600,flexShrink:0}}>{fmtTime(n.time)}</span>}
-        <span style={{color:offMode?C.muted:C.text,fontSize:10,fontStyle:'italic',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{isMobile ? (fmtTime(n.time)||label) : label}</span>
+        <span style={{color:offMode?C.muted:C.text,fontSize:10,fontStyle:'italic',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0,flex:1}}>{isMobile ? (fmtTime(n.time)||label) : label}</span>
       </div>
     );
   };
@@ -3690,9 +3720,9 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
       title={e.label}
       style={{background:C.gold+'18',borderLeft:`2px solid ${C.gold}`,borderRadius:3,
         padding:isMobile?'1px 3px':'1px 4px',marginBottom:2,cursor:e.personId?'pointer':'default',
-        display:'flex',alignItems:'center',gap:4,overflow:'hidden'}}>
+        display:'flex',alignItems:'center',gap:4,overflow:'hidden',minWidth:0}}>
       <span style={{fontSize:9,flexShrink:0}}>{e.emoji}</span>
-      {!isMobile && <span style={{color:C.text,fontSize:10,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.label}</span>}
+      {!isMobile && <span style={{color:C.text,fontSize:10,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0,flex:1}}>{e.label}</span>}
     </div>
   );
 
@@ -3748,17 +3778,19 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
           const inMonth = dd.getMonth()===month;
           const isToday = d===t;
           const dayClasses = byDate[d]||[];
-          const maxPills = isMobile ? 3 : 4;
           return (
             <div key={d} onClick={()=>onAddClass && onAddClass(d)}
               style={{
                 border:`1px solid ${isToday?C.gold+'88':C.border}`,
                 borderRadius:6,
-                minHeight: isMobile ? 64 : 104,
+                height: isMobile ? 96 : 150,
                 padding: isMobile ? 3 : 6,
                 background:isToday?C.goldBg:(inMonth?C.card:'transparent'),
                 opacity:inMonth?1:0.4,
                 cursor:'pointer',
+                display:'flex',
+                flexDirection:'column',
+                overflow:'hidden',
               }}>
               {/* Date number — tappable on mobile to jump to that calendar week.
                   stopPropagation prevents the cell's add-class handler firing. */}
@@ -3770,6 +3802,7 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
                   fontWeight:isToday?600:400,
                   marginBottom: isMobile ? 2 : 4,
                   textAlign:'right',
+                  flexShrink:0,
                   cursor: isMobile ? 'pointer' : 'inherit',
                   // Subtle hint that the date is tappable on mobile.
                   textDecoration: isMobile ? 'underline' : 'none',
@@ -3778,22 +3811,27 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
                 }}>
                 {dd.getDate()}
               </div>
-              {(() => {
-                const dayDates = datesByDate[d] || [];
-                const dayDiary = (diaryByDate[d] || []).filter(diaryVisible);
-                const shownClasses = dayClasses.slice(0, maxPills);
-                const remainingSlots = Math.max(0, maxPills - shownClasses.length);
-                const shownDiary = dayDiary.slice(0, remainingSlots);
-                const overflow = (dayClasses.length - shownClasses.length) + (dayDiary.length - shownDiary.length);
-                return (
-                  <>
-                    {dayDates.map(e=><DatePill key={e.id} e={e} />)}
-                    {shownClasses.map(c=><Pill key={c.id} c={c} />)}
-                    {shownDiary.map(n=><DiaryPill key={n.id} n={n} />)}
-                    {overflow>0 && <div style={{color:C.muted,fontSize:9,paddingLeft:2}}>+{overflow}</div>}
-                  </>
-                );
-              })()}
+              {/* Scrollable pill area. Cell height is fixed, so a busy day scrolls
+                  internally instead of stretching its grid row or hiding behind a
+                  "+N more" — every entry is reachable without leaving the page.
+                  All pills are one-line cropped (minWidth:0 ellipsis) with full
+                  text on hover. Native scroll-chaining lets the page keep scrolling
+                  once a cell reaches its own scroll boundary. */}
+              <div
+                style={{flex:1,overflowY:'auto',overflowX:'hidden',minHeight:0,
+                  display:'flex',flexDirection:'column'}}>
+                {(() => {
+                  const dayDates = datesByDate[d] || [];
+                  const dayDiary = (diaryByDate[d] || []).filter(diaryVisible);
+                  return (
+                    <>
+                      {dayDates.map(e=><DatePill key={e.id} e={e} />)}
+                      {dayClasses.map(c=><Pill key={c.id} c={c} />)}
+                      {dayDiary.map(n=><DiaryPill key={n.id} n={n} />)}
+                    </>
+                  );
+                })()}
+              </div>
             </div>
           );
         })}
