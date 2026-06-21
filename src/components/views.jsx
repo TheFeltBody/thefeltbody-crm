@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BANK_DETAILS, C, CLIENT_ROLES, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
+import { BANK_DETAILS, C, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
 import { PrintInvoiceOverlay, addDays, birthdayInfo, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
 import { Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
@@ -3046,7 +3046,7 @@ export function MiniWeek({ classes, notes, people=[], contactDates=[], mode='cli
     (notes||[]).forEach(n => {
       if(n.kind !== 'diary' || n.date < anchor || n.date > weekEnd) return;
       const m = timeToMin(n.time); if(m === null) return;
-      out.push({ id:'d_'+n.id, date:n.date, min:m, dur:n.durationMins||60, name:(n.subject||n.text||''), isPersonal:!!n.isPersonal, diary:true });
+      out.push({ id:'d_'+n.id, date:n.date, min:m, dur:n.durationMins||60, name:(n.subject||n.text||''), isPersonal:!!n.isPersonal, calendar:n.calendar||'mine', diary:true });
     });
     return out;
   }, [classes, notes, anchor, weekEnd]);
@@ -3121,7 +3121,7 @@ export function MiniWeek({ classes, notes, people=[], contactDates=[], mode='cli
             <div key={d} style={{position:'relative',height:gridHeight,borderRadius:4,background:isToday?C.goldBg+'33':C.bg,border:`1px solid ${C.border}`,overflow:'hidden'}}>
               {dayItems.map(it=>{
                 const offMode = it.diary ? (it.isPersonal !== personalMode) : (personalMode); // classes are business; off-mode in personal
-                const accent = offMode ? C.muted : (it.diary ? (it.isPersonal?C.blue:C.gold) : C.gold);
+                const accent = offMode ? C.muted : (it.diary ? diaryCalColor(it.calendar) : C.gold);
                 const top = Math.max(0, ((it.min - G_START)/SLOT_MIN)*SLOT_HEIGHT);
                 const h = Math.max(8, (it.dur/SLOT_MIN)*SLOT_HEIGHT - 1);
                 if(it.min >= G_END || it.min+it.dur <= G_START) return null;
@@ -3183,9 +3183,21 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
         time: n.time || null,
         duration: n.durationMins || 60,
         isPersonal: !!n.isPersonal,
+        calendar: n.calendar || 'mine',
         location: '',
       })),
     [notes, anchor, weekEnd]);
+  // Diary layer visibility (personal mode only). A sticky per-layer on/off map
+  // so hiding Rosie's layer persists across reloads. Defaults all-on. Layers
+  // are hidden entirely when toggled off (cleaner than greying for a calendar
+  // that may carry three stacked colours). Business mode ignores this — diary
+  // is greyed off-mode there regardless.
+  const [calVis, setCalVis] = useLocalStorage('fbc.diary.layerVis', {});
+  const layerOn = (k) => calVis[k] !== false; // undefined → on
+  const toggleLayer = (k) => setCalVis({ ...calVis, [k]: !layerOn(k) });
+  const weekDiaryVisible = useMemo(
+    () => personalMode ? weekDiary.filter(d => layerOn(d.calendar)) : weekDiary,
+    [weekDiary, personalMode, calVis]);
   // Birthdays + anniversaries falling in the visible week, as all-day banner
   // items. Shown in both modes (personal life-admin AND business — a client's
   // birthday is worth a nudge either way). Rendered in the DATES row, not the
@@ -3217,9 +3229,9 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
       if(endSlot > e) e = endSlot;
     };
     weekClasses.forEach(scan);
-    weekDiary.forEach(scan);
+    weekDiaryVisible.forEach(scan);
     return { gridStart: s, gridEnd: e };
-  }, [weekClasses, weekDiary]);
+  }, [weekClasses, weekDiaryVisible]);
   const totalSlots = (gridEnd - gridStart) / SLOT_MIN;
   const gridHeight = totalSlots * SLOT_HEIGHT;
 
@@ -3284,7 +3296,29 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
             style={{background:C.goldBg,border:`1px solid ${C.gold}88`,color:C.gold,cursor:'pointer',borderRadius:6,fontSize:12,padding:'4px 11px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>This week</button>
         )}
         <div style={{flex:1}} />
-        <div style={{color:C.muted,fontSize:12}}>{weekClasses.length} class{weekClasses.length!==1?'es':''}</div>
+        {personalMode ? (
+          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+            {DIARY_CALENDAR_KEYS.map(k=>{
+              const cal = DIARY_CALENDARS[k];
+              const on = layerOn(k);
+              return (
+                <button key={k} onClick={()=>toggleLayer(k)}
+                  title={on ? `Hide ${cal.label}` : `Show ${cal.label}`}
+                  style={{display:'flex',alignItems:'center',gap:5,cursor:'pointer',borderRadius:20,
+                    fontSize:11,padding:'3px 11px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',
+                    background: on ? cal.color+'22' : 'transparent',
+                    border:`1px solid ${on ? cal.color+'88' : C.border}`,
+                    color: on ? cal.color : C.muted, opacity: on ? 1 : 0.6}}>
+                  <span style={{width:8,height:8,borderRadius:'50%',background: on ? cal.color : 'transparent',
+                    border:`1.5px solid ${cal.color}`,display:'inline-block'}} />
+                  {cal.label}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{color:C.muted,fontSize:12}}>{weekClasses.length} class{weekClasses.length!==1?'es':''}</div>
+        )}
       </div>
 
       {/* Header row of day names */}
@@ -3383,7 +3417,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
         {days.map((d,i) => {
           const lbl = dayLabel(d, i);
           const dayItems = weekClasses.filter(c => c.date === d && timeToMin(c.time) !== null);
-          const dayDiary = weekDiary.filter(e => e.date === d && timeToMin(e.time) !== null);
+          const dayDiary = weekDiaryVisible.filter(e => e.date === d && timeToMin(e.time) !== null);
           // Click an empty part of the column → quick-add a diary entry, with the
           // time derived from the click's vertical position (snapped to 30 min).
           const onColumnClick = (ev) => {
@@ -3461,7 +3495,8 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                 const block = classBlock(e);
                 if(!block) return null;
                 const offMode = e.isPersonal !== personalMode;
-                const accent = offMode ? C.muted : (e.isPersonal ? C.blue : C.gold);
+                const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
+                const calLbl = DIARY_CALENDARS[e.calendar]?.label || '';
                 const compact = block.height < 28;
                 const onClick = () => {
                   if(onEditDiary) onEditDiary(e.__note);
@@ -3484,7 +3519,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                     }}
                     onMouseEnter={ev=>{ev.currentTarget.style.opacity=1;ev.currentTarget.style.zIndex=3;}}
                     onMouseLeave={ev=>{ev.currentTarget.style.opacity=offMode?0.5:1;ev.currentTarget.style.zIndex=1;}}
-                    title={`${e.name}${fmtTime(e.time)?` · ${fmtTime(e.time)} · ${e.duration} min`:''}${offMode?` · ${e.isPersonal?'personal':'business'}`:''}${e.body?`\n\n${e.body}`:''}`}>
+                    title={`${e.name}${calLbl&&!offMode?` · ${calLbl}`:''}${fmtTime(e.time)?` · ${fmtTime(e.time)} · ${e.duration} min`:''}${offMode?` · ${e.isPersonal?'personal':'business'}`:''}${e.body?`\n\n${e.body}`:''}`}>
                     <div style={{color:offMode?C.muted:C.text,fontSize:11,fontWeight:500,lineHeight:1.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',fontStyle:'italic'}}>{e.name}</div>
                   </div>
                 );
@@ -3567,6 +3602,13 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
     Object.values(map).forEach(list => list.sort((x,y)=>(x.time||'').localeCompare(y.time||'')));
     return map;
   }, [notes]);
+  // Diary layer visibility — same localStorage key as WeekView so toggling a
+  // layer in one view reflects in the other. Personal mode only; business mode
+  // greys diary off-mode regardless. layerOn(undefined-key) defaults to on.
+  const [calVis, setCalVis] = useLocalStorage('fbc.diary.layerVis', {});
+  const layerOn = (k) => calVis[k] !== false;
+  const toggleLayer = (k) => setCalVis({ ...calVis, [k]: !layerOn(k) });
+  const diaryVisible = (n) => !personalMode || layerOn(n.calendar || 'mine');
   // Birthdays + anniversaries across the visible 6-week grid, grouped by date.
   // Shown as gold banner pills at the top of each day cell, both modes.
   const datesByDate = useMemo(() => {
@@ -3620,10 +3662,11 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
   // to the linked contact (or project), mirroring WeekView.
   const DiaryPill = ({ n }) => {
     const offMode = !!n.isPersonal !== personalMode;
-    const accent = offMode ? C.muted : (n.isPersonal ? C.blue : C.gold);
+    const accent = offMode ? C.muted : (n.isPersonal ? diaryCalColor(n.calendar) : C.gold);
+    const calLbl = DIARY_CALENDARS[n.calendar]?.label || '';
     const label = n.subject || n.text;       // title is the label
     const body = n.subject ? (n.text || '') : '';  // longer note for tooltip
-    const tip = `${label}${fmtTime(n.time)?` · ${fmtTime(n.time)}`:''}${offMode?` · ${n.isPersonal?'personal':'business'}`:''}${body?`\n\n${body}`:''}`;
+    const tip = `${label}${calLbl&&!offMode?` · ${calLbl}`:''}${fmtTime(n.time)?` · ${fmtTime(n.time)}`:''}${offMode?` · ${n.isPersonal?'personal':'business'}`:''}${body?`\n\n${body}`:''}`;
     const go = (e) => {
       e.stopPropagation();
       if(onEditDiary) onEditDiary(n);
@@ -3671,7 +3714,29 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
           <button onClick={()=>setAnchor(t)} style={{background:C.goldBg,border:`1px solid ${C.gold}88`,color:C.gold,cursor:'pointer',borderRadius:6,fontSize:12,padding:'4px 11px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>This month</button>
         )}
         <div style={{flex:1}} />
-        <div style={{color:C.muted,fontSize:12}}>{monthCount} class{monthCount!==1?'es':''}</div>
+        {personalMode ? (
+          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+            {DIARY_CALENDAR_KEYS.map(k=>{
+              const cal = DIARY_CALENDARS[k];
+              const on = layerOn(k);
+              return (
+                <button key={k} onClick={()=>toggleLayer(k)}
+                  title={on ? `Hide ${cal.label}` : `Show ${cal.label}`}
+                  style={{display:'flex',alignItems:'center',gap:5,cursor:'pointer',borderRadius:20,
+                    fontSize:11,padding:'3px 11px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',
+                    background: on ? cal.color+'22' : 'transparent',
+                    border:`1px solid ${on ? cal.color+'88' : C.border}`,
+                    color: on ? cal.color : C.muted, opacity: on ? 1 : 0.6}}>
+                  <span style={{width:8,height:8,borderRadius:'50%',background: on ? cal.color : 'transparent',
+                    border:`1.5px solid ${cal.color}`,display:'inline-block'}} />
+                  {cal.label}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{color:C.muted,fontSize:12}}>{monthCount} class{monthCount!==1?'es':''}</div>
+        )}
       </div>
 
       <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:1,marginBottom:4}}>
@@ -3715,7 +3780,7 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
               </div>
               {(() => {
                 const dayDates = datesByDate[d] || [];
-                const dayDiary = diaryByDate[d] || [];
+                const dayDiary = (diaryByDate[d] || []).filter(diaryVisible);
                 const shownClasses = dayClasses.slice(0, maxPills);
                 const remainingSlots = Math.max(0, maxPills - shownClasses.length);
                 const shownDiary = dayDiary.slice(0, remainingSlots);

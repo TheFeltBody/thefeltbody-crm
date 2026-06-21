@@ -139,6 +139,31 @@ export const HOME_HOUSEHOLD_NAME = '10 Osmington';
 // config — if the owner's contact row ever changes, update here only.
 export const SELF_PERSON_ID = '5974b9b3-1aa2-4a33-947f-ea0425a7f5c5';
 
+// ─── Diary calendar layers (personal mode) ──────────────────────────────────
+// Personal-mode diary entries belong to one named layer via the `calendar`
+// text column on interactions (DB default 'mine'). The colour here drives the
+// block accent in Week/Month views; each layer is independently show/hide-able
+// via a useLocalStorage visibility map. 'mine' keeps the legacy personal-blue
+// so every pre-existing diary entry looks unchanged after migration.
+//
+// This is the single source of truth for the layer set. Adding a fourth layer
+// is a one-line edit here + the key in DIARY_CALENDAR_KEYS — no migration,
+// because the column is free-text and code owns the valid values.
+//
+// Colours chosen to stay distinct when stacked: blue (Mine, legacy), purple
+// (Sienna, matches the private-client family), amber (Rosie). Teal is
+// deliberately avoided — it's already the web_booking provenance marker.
+export const DIARY_CALENDARS = {
+  mine:   { label: 'Mine',   color: C.blue,    bg: '#131d2a' },
+  sienna: { label: 'Sienna', color: '#a07fd4', bg: '#1a1428' },
+  rosie:  { label: 'Rosie',  color: '#d49966', bg: '#2a1d10' },
+};
+// Render/iteration order for pickers, toggles and copy-to menus.
+export const DIARY_CALENDAR_KEYS = ['mine','sienna','rosie'];
+// Resolve a layer's colour, falling back to legacy personal-blue for any
+// unknown/legacy value so nothing ever renders colourless.
+export const diaryCalColor = (key) => (DIARY_CALENDARS[key]?.color || C.blue);
+
 export const RELATIONSHIP_LABELS = {
   adult:       'Adult',
   child:       'Child',

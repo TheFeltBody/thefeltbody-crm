@@ -307,6 +307,10 @@ export const noteFromDb = (row) => ({
   // drives the personal/business calendar split and the greyed off-mode blocks.
   time: row.time || null,
   isPersonal: row.is_personal ?? false,
+  // Named diary layer ('mine' / 'sienna' / 'rosie'). DB default 'mine'; only
+  // meaningful for kind='diary' rows but harmless on others. Drives the
+  // colour-coded calendar layering + show/hide toggles in personal mode.
+  calendar: row.calendar || 'mine',
   externalId: row.external_id || null,
   threadId: row.thread_id || null,
   // Phase 8 Half A additions: raw addresses + ingestion source. fromEmail and
@@ -345,6 +349,7 @@ export const noteToDb = (n) => ({
   // Diary fields
   time: n.time || null,                  // '' / undefined → null
   is_personal: n.isPersonal ?? false,    // DB default false; belt-and-braces
+  calendar: n.calendar || 'mine',        // DB default 'mine'; belt-and-braces
   external_id: n.externalId || null,
   thread_id: n.threadId || null,
   // Phase 8 Half A additions
@@ -381,6 +386,7 @@ export const notePatchToDb = (patch) => {
   if (patch.externalId !== undefined) out.external_id = patch.externalId || null;
   if (patch.time !== undefined) out.time = patch.time || null;
   if (patch.isPersonal !== undefined) out.is_personal = patch.isPersonal ?? false;
+  if (patch.calendar !== undefined) out.calendar = patch.calendar || 'mine';
   if (patch.threadId !== undefined) out.thread_id = patch.threadId || null;
   if (patch.fromEmail !== undefined) out.from_email = patch.fromEmail || null;
   if (patch.toEmail !== undefined) out.to_email = patch.toEmail || null;

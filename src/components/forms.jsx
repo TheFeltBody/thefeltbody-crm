@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { C, INTERACTION_KINDS, PAYMENT_MODELS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, SOURCES, TYPE_ICONS, TYPE_PALETTE } from "../lib/constants.js";
+import { C, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, INTERACTION_KINDS, PAYMENT_MODELS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, SOURCES, TYPE_ICONS, TYPE_PALETTE } from "../lib/constants.js";
 import { addDays, addMonths, BIRTHDAY_NO_YEAR, classKindKey, currentHourTime, fillTemplate, fmt, fmtMoney, isCountlessPkg, makeBirthdayNoYear, nextInvoiceNumber, packageRemaining, parseBirthday, primaryRole, scoreTemplates, today, uid, useTypes } from "../lib/helpers.jsx";
 import { Avatar, Btn, FI, KindBadge, Modal, RoleBadge, SearchSelect } from "./primitives.jsx";
 
@@ -1794,7 +1794,7 @@ export function EditNoteForm({ note, onSave, onClose }) {
 // record (selfPersonId) so interactions_anchored is always satisfied. The little
 // "open ↗" links jump to the linked record without making the block-click itself
 // navigate away.
-export function DiaryModal({ people, projects=[], selfPersonId, existing=null, prefill=null, defaultDate, defaultTime, defaultPersonal=false, onSave, onClose, nav }) {
+export function DiaryModal({ people, projects=[], selfPersonId, existing=null, prefill=null, defaultDate, defaultTime, defaultPersonal=false, onSave, onCopy, onClose, nav }) {
   const isEdit = !!existing;
   const [f, setF] = useState({
     title: existing?.subject || '',
@@ -1803,6 +1803,10 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
     time: existing?.time || defaultTime || currentHourTime(),
     duration: existing?.durationMins || 60,
     isPersonal: existing ? !!existing.isPersonal : (prefill ? !!prefill.isPersonal : defaultPersonal),
+    // Which named layer this diary entry belongs to ('mine' / 'sienna' / 'rosie').
+    // Only surfaced when isPersonal is true. New entries seed from the prefill
+    // (so quick-add from a layer's toggle could pre-pick it later) else 'mine'.
+    calendar: existing?.calendar || prefill?.calendar || 'mine',
     personId: existing ? (existing.personId || '') : (prefill?.personId ?? (selfPersonId || '')),
     projectId: existing?.projectId || prefill?.projectId || '',
   });
@@ -1831,8 +1835,41 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
       isPersonal: !!f.isPersonal,
       personId,
       projectId,
+      calendar: f.calendar || 'mine',
     };
     onSave(isEdit ? { ...existing, ...payload } : payload);
+    onClose();
+  };
+
+  // Copy this entry onto another layer as an INDEPENDENT new entry. Sienna's
+  // calendar stays the source of truth for what's happening in her life; copying
+  // to Mine or Rosie creates a separate row on the responsibility-holder's layer
+  // ("I've got this one") that can later diverge without touching the original.
+  // CRITICAL: this must go through onCopy, NOT onSave. In edit mode onSave is
+  // bound to the parent's edit/patch handler, which would try to patch by id —
+  // a copy has no id and must be a fresh insert. onCopy always routes to the
+  // create path. We take current form values so unsaved title/time edits carry
+  // across, but never touch the source row.
+  const copyTo = (calKey) => {
+    if (!onCopy) return;
+    const title = f.title.trim();
+    const text = f.text.trim();
+    if(!title && !text) return;
+    let personId = f.personId || null;
+    const projectId = f.projectId || null;
+    if(!personId && !projectId) personId = selfPersonId || null;
+    onCopy({
+      kind: 'diary',
+      subject: title || text,
+      text,
+      date: f.date,
+      time: f.time || null,
+      durationMins: parseInt(f.duration) || 60,
+      isPersonal: true,        // copies always land on a personal layer
+      personId,
+      projectId,
+      calendar: calKey,
+    });
     onClose();
   };
 
@@ -1889,6 +1926,56 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
           ))}
         </div>
       </div>
+
+      {/* Layer picker — only meaningful for personal entries. Files the entry
+          onto Mine / Sienna / Rosie. Colour-coded to match the calendar render. */}
+      {f.isPersonal && (
+        <div style={{marginTop:4,marginBottom:14}}>
+          <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:8}}>WHOSE CALENDAR</div>
+          <div style={{display:'flex',gap:8}}>
+            {DIARY_CALENDAR_KEYS.map(k=>{
+              const cal = DIARY_CALENDARS[k];
+              const on = f.calendar===k;
+              return (
+                <button key={k} onClick={()=>s('calendar')(k)}
+                  style={{flex:1,padding:'9px 12px',borderRadius:6,cursor:'pointer',fontSize:13,
+                    fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',
+                    background: on ? cal.color+'22' : C.card,
+                    border:`1px solid ${on ? cal.color : C.border}`,
+                    color: on ? cal.color : C.muted}}>
+                  {on ? '● ' : '○ '}{cal.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Copy-to — only when editing an existing personal entry. One-click
+          duplicate onto another layer as an independent entry (responsibility
+          housekeeping). Offers every layer except the one we're already on.
+          Closes the modal after copying; the source entry is left untouched. */}
+      {isEdit && f.isPersonal && onCopy && (
+        <div style={{marginTop:4,marginBottom:14,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
+          <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:8}}>COPY THIS ENTRY TO</div>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            {DIARY_CALENDAR_KEYS.filter(k=>k!==f.calendar).map(k=>{
+              const cal = DIARY_CALENDARS[k];
+              return (
+                <button key={k} onClick={()=>copyTo(k)}
+                  style={{padding:'7px 14px',borderRadius:6,cursor:'pointer',fontSize:12,
+                    fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',
+                    background:C.card, border:`1px solid ${cal.color}88`, color:cal.color}}>
+                  + {cal.label}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{color:C.muted,fontSize:10,marginTop:7,fontStyle:'italic',opacity:0.8}}>
+            Creates a separate copy — this entry stays as is.
+          </div>
+        </div>
+      )}
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
         <Btn onClick={save}>{isEdit ? 'Save changes' : 'Add entry'}</Btn>

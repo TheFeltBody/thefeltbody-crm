@@ -528,6 +528,7 @@ export default function FeltBodyCRM() {
       isPersonal: !!entry.isPersonal,
       personId: entry.personId || null,
       projectId: entry.projectId || null,
+      calendar: entry.calendar || 'mine',
     };
     setNotes(p => p.map(n => n.id === entry.id ? { ...n, ...patch } : n));
     data.notes.patch(entry.id, patch).catch(onError('Update diary entry'));
@@ -1076,7 +1077,7 @@ export default function FeltBodyCRM() {
           onClose={close} />;
       }
       case 'add_class': return <AddClassForm orgs={orgs} defaultOrgId={modal.orgId} defaultDate={modal.date} onSave={handleAddClass} onClose={close} />;
-      case 'add_diary': return <DiaryModal people={people} projects={projects} selfPersonId={SELF_PERSON_ID} existing={modal.entry || null} prefill={modal.prefill || null} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={modal.entry ? handleEditDiary : handleAddDiary} onClose={close} nav={nav} />;
+      case 'add_diary': return <DiaryModal people={people} projects={projects} selfPersonId={SELF_PERSON_ID} existing={modal.entry || null} prefill={modal.prefill || null} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={modal.entry ? handleEditDiary : handleAddDiary} onCopy={handleAddDiary} onClose={close} nav={nav} />;
       case 'edit_class': {
         const cls=modal.cls;
         if(cls.seriesId) return <EditSeriesClassForm cls={cls} orgs={orgs} onSaveThis={u=>handleEditClass(cls,u,'this')} onSaveFuture={u=>handleEditClass(cls,u,'future')} onClose={close} />;
