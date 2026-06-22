@@ -3207,7 +3207,15 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
   // is greyed off-mode there regardless.
   const [calVis, setCalVis] = useLocalStorage('fbc.diary.layerVis', {});
   const layerOn = (k) => calVis[k] !== false; // undefined → on
-  const toggleLayer = (k) => setCalVis({ ...calVis, [k]: !layerOn(k) });
+  // Stacking order, bottom→top. Most-recently-shown sits on top: toggling a layer
+  // ON moves it to the end of this array. Shared key so Week + 3-Week agree.
+  const [layerOrder, setLayerOrder] = useLocalStorage('fbc.diary.layerOrder', DIARY_CALENDAR_KEYS);
+  const orderOf = (k) => { const i = layerOrder.indexOf(k); return i === -1 ? 0 : i; };
+  const toggleLayer = (k) => {
+    const turningOn = !layerOn(k);
+    setCalVis({ ...calVis, [k]: turningOn });
+    if (turningOn) setLayerOrder([...layerOrder.filter(x => x !== k), k]); // to top
+  };
   const weekDiaryVisible = useMemo(
     () => personalMode ? weekDiary.filter(d => layerOn(d.calendar)) : weekDiary,
     [weekDiary, personalMode, calVis]);
@@ -3512,6 +3520,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                 const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
                 const calLbl = DIARY_CALENDARS[e.calendar]?.label || '';
                 const compact = block.height < 28;
+                const z = 2 + orderOf(e.calendar); // base stack rank by layer order
                 const onClick = () => {
                   if(onEditDiary) onEditDiary(e.__note);
                   else if(e.__personId) nav('person_detail',{personId:e.__personId,highlightNoteId:e.__noteId});
@@ -3521,6 +3530,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                   <div key={e.id} onClick={onClick}
                     style={{
                       position:'absolute', top:block.top, height:block.height, left:3, right:3,
+                      zIndex: z,
                       background: offMode ? C.card : accent+'1e',
                       border:`1px dashed ${accent}${offMode?'55':'88'}`,
                       borderLeft:`3px solid ${accent}`,
@@ -3531,8 +3541,8 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                       transition:'all 0.12s',
                       display:'flex', flexDirection:'column', justifyContent: compact ? 'center' : 'flex-start',
                     }}
-                    onMouseEnter={ev=>{ev.currentTarget.style.opacity=1;ev.currentTarget.style.zIndex=3;}}
-                    onMouseLeave={ev=>{ev.currentTarget.style.opacity=offMode?0.5:1;ev.currentTarget.style.zIndex=1;}}
+                    onMouseEnter={ev=>{ev.currentTarget.style.opacity=1;ev.currentTarget.style.zIndex=20;}}
+                    onMouseLeave={ev=>{ev.currentTarget.style.opacity=offMode?0.5:1;ev.currentTarget.style.zIndex=z;}}
                     title={`${e.name}${calLbl&&!offMode?` · ${calLbl}`:''}${fmtTime(e.time)?` · ${fmtTime(e.time)} · ${e.duration} min`:''}${offMode?` · ${e.isPersonal?'personal':'business'}`:''}${e.body?`\n\n${e.body}`:''}`}>
                     <div style={{color:offMode?C.muted:C.text,fontSize:11,fontWeight:500,lineHeight:1.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',fontStyle:'italic'}}>{e.name}</div>
                   </div>
@@ -3651,7 +3661,12 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
   // greys diary off-mode regardless. layerOn(undefined-key) defaults to on.
   const [calVis, setCalVis] = useLocalStorage('fbc.diary.layerVis', {});
   const layerOn = (k) => calVis[k] !== false;
-  const toggleLayer = (k) => setCalVis({ ...calVis, [k]: !layerOn(k) });
+  const [layerOrder, setLayerOrder] = useLocalStorage('fbc.diary.layerOrder', DIARY_CALENDAR_KEYS);
+  const toggleLayer = (k) => {
+    const turningOn = !layerOn(k);
+    setCalVis({ ...calVis, [k]: turningOn });
+    if (turningOn) setLayerOrder([...layerOrder.filter(x => x !== k), k]);
+  };
   const diaryVisible = (n) => !personalMode || layerOn(n.calendar || 'mine');
   // Birthdays + anniversaries across the visible 6-week grid, grouped by date.
   // Shown as gold banner pills at the top of each day cell, both modes.
@@ -4173,7 +4188,13 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
   // Diary layer visibility — shared with Week/Month.
   const [calVis, setCalVis] = useLocalStorage('fbc.diary.layerVis', {});
   const layerOn = (k) => calVis[k] !== false;
-  const toggleLayer = (k) => setCalVis({ ...calVis, [k]: !layerOn(k) });
+  const [layerOrder, setLayerOrder] = useLocalStorage('fbc.diary.layerOrder', DIARY_CALENDAR_KEYS);
+  const orderOf = (k) => { const i = layerOrder.indexOf(k); return i === -1 ? 0 : i; };
+  const toggleLayer = (k) => {
+    const turningOn = !layerOn(k);
+    setCalVis({ ...calVis, [k]: turningOn });
+    if (turningOn) setLayerOrder([...layerOrder.filter(x => x !== k), k]);
+  };
 
   // The N week-anchors (Mondays) starting at the current anchor.
   const weekAnchors = useMemo(
@@ -4264,41 +4285,43 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
   // ─── One week's grid (header row of days, dates banner, time grid) ──────────
   const WeekBlock = ({ wk, weekIndex }) => {
     const days = Array.from({length:7}, (_,i) => addDays(wk.wAnchor, i));
-    const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
     return (
-      <div className={`fw-week${weekIndex===2?' fw-week-break':''}`} style={{marginBottom:10}}>
-        {/* Day-name header */}
-        <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)'}}>
-          <div />
+      <div className={`fw-week${weekIndex===2?' fw-week-break':''}`} style={{marginBottom:8}}>
+        {/* Dates row: left gutter labelled DATES. Each day is a fixed 2-column
+            cell — event names (cropped, stacked) on the left, the day-of-month
+            number (fixed width, always shown) on the right. Content crops to keep
+            the column grid rigid; multiple events stack and grow the row. */}
+        <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`}}>
+          <div style={{color:C.muted,fontSize:8,letterSpacing:'1px',padding:'3px 4px 0',textAlign:'right',fontWeight:600}}>DATES</div>
           {days.map((d,i) => {
             const dt = new Date(d+'T12:00');
             const isToday = d === t;
+            const items = wk.wDates.filter(e => e.date === d);
             return (
-              <div key={d} style={{textAlign:'center',padding:'2px 2px 4px'}}>
-                <div style={{color:isToday?C.gold:C.muted,fontSize:9,fontWeight:600,letterSpacing:'1.2px'}}>{DOW[i]}</div>
-                <div style={{color:isToday?C.gold:C.text,fontSize:15,fontWeight:isToday?600:400,fontFamily:"'Cormorant Garamond',serif"}}>{dt.getDate()}</div>
-              </div>
-            );
-          })}
-        </div>
-        {/* Dates banner (birthdays/anniversaries) */}
-        {wk.wDates.length > 0 && (
-          <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`,marginBottom:2}}>
-            <div style={{color:C.muted,fontSize:8,letterSpacing:'1px',padding:'2px',textAlign:'right',fontWeight:600}}>DATES</div>
-            {days.map(d => {
-              const items = wk.wDates.filter(e => e.date === d);
-              return (
-                <div key={d} style={{padding:'2px',display:'flex',flexDirection:'column',gap:2}}>
+              <div key={d} style={{display:'grid',gridTemplateColumns:'1fr 22px',gap:3,alignItems:'start',
+                padding:'2px 3px 3px',minHeight:18,borderRight:i<6?`1px solid ${C.border}`:'none'}}>
+                {/* Col 1 — event names, cropped, stacked */}
+                <div style={{minWidth:0,display:'flex',flexDirection:'column',gap:2,overflow:'hidden'}}>
                   {items.map((e,idx) => (
-                    <div key={idx} className="fw-block" style={{background:C.gold+'18',borderLeft:`2px solid ${C.gold}`,borderRadius:3,padding:'1px 4px',fontSize:9,color:C.text,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}} title={e.label}>
+                    <div key={idx} className="fw-block" title={e.label}
+                      style={{background:C.gold+'18',borderLeft:`2px solid ${C.gold}`,borderRadius:3,
+                        padding:'0 4px',fontSize:9,color:C.text,whiteSpace:'nowrap',overflow:'hidden',
+                        textOverflow:'ellipsis',minWidth:0}}>
                       {e.emoji} {e.label}
                     </div>
                   ))}
                 </div>
-              );
-            })}
-          </div>
-        )}
+                {/* Col 2 — day number, fixed width */}
+                <div style={{
+                  width:22,textAlign:'center',borderRadius:3,padding:'0 2px',justifySelf:'end',
+                  fontFamily:"'Cormorant Garamond',serif",fontSize:14,fontWeight:600,lineHeight:1.3,
+                  color: isToday ? C.bg : C.text,
+                  background: isToday ? C.gold : C.border+'66',
+                }}>{dt.getDate()}</div>
+              </div>
+            );
+          })}
+        </div>
         {/* Time grid */}
         <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',border:`1px solid ${C.border}`,borderRadius:6,overflow:'hidden'}}>
           {/* Hour axis */}
@@ -4353,6 +4376,7 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
                   const offMode = e.isPersonal !== personalMode;
                   const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
                   const calLbl = DIARY_CALENDARS[e.calendar]?.label || '';
+                  const z = 2 + orderOf(e.calendar);
                   const onClick = () => {
                     if(onEditDiary) onEditDiary(e.__note);
                     else if(e.__personId) nav('person_detail',{personId:e.__personId});
@@ -4360,7 +4384,7 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
                   return (
                     <div key={e.id} onClick={onClick}
                       className="fw-block fw-diary" data-accent={accent}
-                      style={{position:'absolute',top:block.top,height:block.height,left:2,right:2,
+                      style={{position:'absolute',top:block.top,height:block.height,left:2,right:2,zIndex:z,
                         background: offMode ? C.card : accent+'1e',
                         border:`1px dashed ${accent}${offMode?'55':'88'}`,
                         borderLeft:`3px solid ${accent}`,borderRadius:3,padding:'1px 5px 0',
@@ -4413,7 +4437,8 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
       .fw-print-root, .fw-print-root * { visibility: visible; }
       .fw-print-root { position: absolute; left: 0; top: 0; width: 100%; padding: 0 !important; }
       .fw-noprint { display: none !important; }
-      .fw-print-head { margin-bottom: 6mm; }
+      .fw-print-head { margin-bottom: 3mm; padding: 0 !important; }
+      .fw-dayhead { margin-bottom: 1mm !important; }
       /* Print shows 2 weeks only; the 3rd week is screen-only. */
       .fw-week { break-inside: avoid; page-break-inside: avoid; }
       .fw-week-break { display: none !important; }
@@ -4458,12 +4483,30 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
 
       {/* Print-only header: title + date range + legend (no nav). */}
       <div className="fw-print-head" style={{display:'none'}}>
-        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:600,marginBottom:4}}>The Felt Body — Schedule</div>
-        <div style={{fontSize:12,color:C.muted,marginBottom:8}}>{weekRangeLabel(weeks[0].wAnchor, weeks[Math.min(1, weeks.length-1)].wEnd)}</div>
-        {legend}
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:12}}>
+          <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:14,fontWeight:600}}>
+            {weekRangeLabel(weeks[0].wAnchor, weeks[Math.min(1, weeks.length-1)].wEnd)}
+          </div>
+          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+            {personalMode
+              ? DIARY_CALENDAR_KEYS.filter(k=>layerOn(k)).map(k=>{
+                  const cal = DIARY_CALENDARS[k];
+                  return <span key={k} style={{fontSize:9,fontWeight:600,padding:'1px 7px',borderRadius:10,background:cal.color+'33',color:cal.color,border:`1px solid ${cal.color}`}}>{cal.label}</span>;
+                })
+              : <span style={{fontSize:9,fontWeight:600,padding:'1px 7px',borderRadius:10,background:C.gold+'33',color:C.gold,border:`1px solid ${C.gold}`}}>Classes</span>}
+          </div>
+        </div>
       </div>
 
       {/* The stacked weeks */}
+      {/* Single Mon–Sun header for all weeks (not repeated per week). */}
+      <div className="fw-dayhead" style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',marginBottom:4}}>
+        <div />
+        {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(dn => (
+          <div key={dn} style={{textAlign:'center',color:C.muted,fontSize:10,fontWeight:600,letterSpacing:'1.5px',padding:'2px'}}>{dn}</div>
+        ))}
+      </div>
+
       {weeks.map((wk, i) => <WeekBlock key={wk.wAnchor} wk={wk} weekIndex={i} />)}
     </div>
   );
