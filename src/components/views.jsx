@@ -4196,6 +4196,14 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
     if (turningOn) setLayerOrder([...layerOrder.filter(x => x !== k), k]);
   };
 
+  // Print controls.
+  const [showTitle, setShowTitle] = useLocalStorage('fbc.fw.showTitle', true);
+  const [printTitle, setPrintTitle] = useLocalStorage('fbc.fw.printTitle', 'The Felt Body');
+  // In personal mode, classes are off by default (clear the colour clash); a
+  // toggle lets them back in. In business mode classes always show.
+  const [showClasses, setShowClasses] = useLocalStorage('fbc.fw.showClasses', false);
+  const classesVisible = !personalMode || showClasses;
+
   // The N week-anchors (Mondays) starting at the current anchor.
   const weekAnchors = useMemo(
     () => Array.from({length:WEEKS}, (_,w) => addDays(anchor, w*7)),
@@ -4292,7 +4300,7 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
             number (fixed width, always shown) on the right. Content crops to keep
             the column grid rigid; multiple events stack and grow the row. */}
         <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`}}>
-          <div style={{color:C.muted,fontSize:8,letterSpacing:'1px',padding:'3px 4px 0',textAlign:'right',fontWeight:600}}>DATES</div>
+          <div className="fw-dates-label" style={{color:C.muted,fontSize:8,letterSpacing:'1px',padding:'3px 4px 0',textAlign:'right',fontWeight:600}}>DATES</div>
           {days.map((d,i) => {
             const dt = new Date(d+'T12:00');
             const isToday = d === t;
@@ -4311,23 +4319,27 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
                     </div>
                   ))}
                 </div>
-                {/* Col 2 — day number, fixed width */}
-                <div style={{
-                  width:22,textAlign:'center',borderRadius:3,padding:'0 2px',justifySelf:'end',
-                  fontFamily:"'Cormorant Garamond',serif",fontSize:14,fontWeight:600,lineHeight:1.3,
-                  color: isToday ? C.bg : C.text,
-                  background: isToday ? C.gold : C.border+'66',
+                {/* Col 2 — day number in an open-top line box (pen-on-paper). No
+                    today-highlight; weekends sit a touch lighter. */}
+                <div className="fw-daynum" style={{
+                  width:22,textAlign:'center',padding:'0 2px 1px',justifySelf:'end',
+                  fontFamily:"'Cormorant Garamond',serif",fontSize:14,fontWeight:600,lineHeight:1.25,
+                  color: i>=5 ? C.muted : C.text,
+                  borderLeft:`1px solid ${C.border}`,
+                  borderBottom:`1px solid ${C.border}`,
+                  borderTop:'none',
+                  borderRight:'none',
                 }}>{dt.getDate()}</div>
               </div>
             );
           })}
         </div>
         {/* Time grid */}
-        <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',border:`1px solid ${C.border}`,borderRadius:6,overflow:'hidden'}}>
+        <div className="fw-week-grid" style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',border:`1px solid ${C.border}`,borderRadius:6,overflow:'hidden',background:C.surf+'66'}}>
           {/* Hour axis */}
           <div style={{position:'relative',height:gridHeight,borderRight:`1px solid ${C.border}`}}>
             {hourLabels.map((h,i) => (
-              <div key={i} style={{position:'absolute',top:h.y-6,right:4,color:C.muted,fontSize:8,letterSpacing:'0.2px'}}>{h.label}</div>
+              <div key={i} className="fw-hour" style={{position:'absolute',top:h.y-6,right:4,color:C.muted,fontSize:8,letterSpacing:'0.2px'}}>{h.label}</div>
             ))}
           </div>
           {/* Day columns */}
@@ -4335,6 +4347,7 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
             const dayItems = wk.wClasses.filter(c => c.date === d && timeToMin(c.time) !== null);
             const dayDiary = wk.wDiary.filter(e => e.date === d && timeToMin(e.time) !== null);
             const isToday = d === t;
+            const isWeekend = i >= 5;
             const onColumnClick = (ev) => {
               if(!onAddDiary || ev.target !== ev.currentTarget) return;
               const rect = ev.currentTarget.getBoundingClientRect();
@@ -4344,29 +4357,34 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
             };
             return (
               <div key={d} onClick={onColumnClick}
-                style={{position:'relative',height:gridHeight,borderRight:i<6?`1px solid ${C.border}`:'none',background:isToday?C.goldBg+'22':'transparent',cursor:onAddDiary?'copy':'default'}}>
+                className={isWeekend ? 'fw-col fw-col-weekend' : 'fw-col'}
+                style={{position:'relative',height:gridHeight,borderRight:i<6?`1px solid ${C.border}`:'none',background:isWeekend?C.bg+'88':'transparent',cursor:onAddDiary?'copy':'default'}}>
                 {/* Hour gridlines */}
                 {Array.from({length: totalSlots}, (_, j) => {
                   const minute = gridStart + j * SLOT_MIN;
                   return <div key={j} className="fw-gridline" style={{position:'absolute',top:j*SLOT_HEIGHT,left:0,right:0,height:1,background:C.border,opacity: minute%60===0?0.4:0.16,pointerEvents:'none'}} />;
                 })}
-                {/* Class blocks (the underlayer that must survive print) */}
-                {dayItems.map(c => {
+                {/* Class blocks. In personal mode these are hidden unless the
+                    show-classes toggle is on; when shown they're greyed (muted),
+                    not coloured, to avoid clashing with the diary layers. */}
+                {classesVisible && dayItems.map(c => {
                   const block = classBlock(c); if(!block) return null;
                   const cOrg = orgs.find(o=>o.id===c.orgId);
                   const meta = KIND_META[classKindKey(c, cOrg)] || { color:C.gold };
-                  const offMode = personalMode; // in personal mode, classes are the faint underlayer
+                  // Personal mode → grey underlayer; business mode → full colour.
+                  const accent = personalMode ? C.muted : meta.color;
+                  const faint = personalMode;
                   return (
                     <div key={c.id} onClick={()=>nav('class_detail',{classId:c.id})}
-                      className="fw-block fw-class" data-accent={meta.color}
-                      style={{position:'absolute',top:block.top,height:block.height,left:2,right:2,
-                        background: meta.color+(offMode?'14':'22'),
-                        border:`1px solid ${meta.color}${offMode?'44':'66'}`,
-                        borderLeft:`3px solid ${meta.color}`,borderRadius:3,padding:'1px 5px 0',
-                        cursor:'pointer',overflow:'hidden',opacity:offMode?0.65:1,
+                      className="fw-block fw-class" data-accent={accent}
+                      style={{position:'absolute',top:block.top,height:block.height,left:2,right:2,zIndex:1,
+                        background: accent+(faint?'12':'22'),
+                        border:`1px solid ${accent}${faint?'33':'66'}`,
+                        borderLeft:`3px solid ${accent}`,borderRadius:3,padding:'1px 5px 0',
+                        cursor:'pointer',overflow:'hidden',opacity:faint?0.55:1,
                         fontFamily:"'Jost',sans-serif",display:'flex',flexDirection:'column',justifyContent:'flex-start'}}
                       title={tooltipFor(c)}>
-                      <div style={{color:C.text,fontSize:10,fontWeight:500,lineHeight:1.15,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{c.name}</div>
+                      <div className="fw-block-text" style={{color:faint?C.muted:C.text,fontSize:10,fontWeight:500,lineHeight:1.15,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{c.name}</div>
                     </div>
                   );
                 })}
@@ -4391,7 +4409,7 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
                         cursor:'pointer',overflow:'hidden',opacity:offMode?0.5:1,
                         fontFamily:"'Jost',sans-serif",display:'flex',flexDirection:'column',justifyContent:'flex-start'}}
                       title={`${e.name}${calLbl&&!offMode?` · ${calLbl}`:''}${fmtTime(e.time)?` · ${fmtTime(e.time)} · ${e.duration} min`:''}${e.body?`\n\n${e.body}`:''}`}>
-                      <div style={{color:offMode?C.muted:C.text,fontSize:10,fontWeight:500,lineHeight:1.15,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',fontStyle:'italic'}}>{e.name}</div>
+                      <div className="fw-block-text" style={{color:offMode?C.muted:C.text,fontSize:10,fontWeight:500,lineHeight:1.15,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',fontStyle:'italic'}}>{e.name}</div>
                     </div>
                   );
                 })}
@@ -4432,26 +4450,47 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
   // — without it the off-mode class tints vanish, which was the reported bug.
   const printCss = `
     @media print {
-      @page { size: A4 portrait; margin: 10mm; }
+      @page { size: A4 portrait; margin: 9mm; }
       body * { visibility: hidden; }
       .fw-print-root, .fw-print-root * { visibility: visible; }
       .fw-print-root { position: absolute; left: 0; top: 0; width: 100%; padding: 0 !important; }
       .fw-noprint { display: none !important; }
-      .fw-print-head { margin-bottom: 3mm; padding: 0 !important; }
+      .fw-print-head { margin-bottom: 3mm; padding: 0 !important; display: block !important; }
       .fw-dayhead { margin-bottom: 1mm !important; }
+      .fw-print-head.fw-hide-title { display: none !important; }
+
       /* Print shows 2 weeks only; the 3rd week is screen-only. */
       .fw-week { break-inside: avoid; page-break-inside: avoid; }
       .fw-week-break { display: none !important; }
-      /* Force every coloured fill/border to render on paper. */
+
+      /* Render every fill/border on paper (browsers strip them by default). */
       .fw-print-root * {
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
       }
-      /* On white paper, lift the faint underlayer so it's actually visible. */
+
+      /* Paper palette overrides — the on-screen theme is dark; flip to ink-on-paper. */
+      .fw-week-grid { background: #ffffff !important; border-color: #c9c4b8 !important; }
+      .fw-col { background: transparent !important; }
+      .fw-col-weekend { background: #f4f1ea !important; }   /* warm wash (was the week's fill) */
+      .fw-gridline { background: #e2ddd2 !important; }
+
+      /* Blocks keep their accent tint as fill (set inline via data-accent on
+         screen; the inline rgba survives print thanks to color-adjust). DARK text. */
+      .fw-block { box-shadow: none !important; opacity: 1 !important; }
+      .fw-block-text { color: #1a1a1a !important; }
       .fw-class { opacity: 1 !important; }
-      .fw-block { box-shadow: none !important; }
-      /* Print-only header becomes visible. */
-      .fw-print-head { display: block !important; }
+      .fw-class .fw-block-text { color: #333 !important; }
+
+      /* Day numbers: dark ink, open top AND right (left + bottom rule only). */
+      .fw-daynum { color: #1a1a1a !important; border-color: #b8b2a4 !important; }
+      .fw-dayhead > div { color: #555 !important; }
+      .fw-dates-label { color: #777 !important; }
+
+      /* Hour axis + range header readable. */
+      .fw-hour { color: #777 !important; }
+      .fw-title { color: #1a1a1a !important; }
+      .fw-range { color: #555 !important; }
     }
   `;
 
@@ -4479,15 +4518,35 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
           <div style={{flex:1}} />
           {legend}
         </div>
+        {/* Print options row */}
+        <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:14,flexWrap:'wrap',paddingBottom:12,borderBottom:`1px solid ${C.border}`}}>
+          <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',color:C.muted,fontSize:12}}>
+            <input type="checkbox" checked={showTitle} onChange={e=>setShowTitle(e.target.checked)} />
+            Print title
+          </label>
+          <input type="text" value={printTitle} onChange={e=>setPrintTitle(e.target.value)}
+            placeholder="Print title" disabled={!showTitle}
+            style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:showTitle?C.text:C.muted,
+              fontSize:12,padding:'5px 10px',fontFamily:"'Jost',sans-serif",width:200,opacity:showTitle?1:0.5}} />
+          {personalMode && (
+            <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',color:C.muted,fontSize:12}}>
+              <input type="checkbox" checked={showClasses} onChange={e=>setShowClasses(e.target.checked)} />
+              Show classes (greyed)
+            </label>
+          )}
+        </div>
       </div>
 
       {/* Print-only header: title + date range + legend (no nav). */}
-      <div className="fw-print-head" style={{display:'none'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:12}}>
-          <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:14,fontWeight:600}}>
-            {weekRangeLabel(weeks[0].wAnchor, weeks[Math.min(1, weeks.length-1)].wEnd)}
+      <div className={`fw-print-head${showTitle?'':' fw-hide-title'}`} style={{display:'none'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12}}>
+          <div style={{minWidth:0}}>
+            {printTitle && <div className="fw-title" style={{fontFamily:"'Cormorant Garamond',serif",fontSize:24,fontWeight:700,lineHeight:1.1,whiteSpace:'nowrap',marginBottom:2}}>{printTitle}</div>}
+            <div className="fw-range" style={{fontFamily:"'Cormorant Garamond',serif",fontSize:13,fontWeight:600,color:C.muted}}>
+              {weekRangeLabel(weeks[0].wAnchor, weeks[Math.min(1, weeks.length-1)].wEnd)}
+            </div>
           </div>
-          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',flexShrink:0}}>
             {personalMode
               ? DIARY_CALENDAR_KEYS.filter(k=>layerOn(k)).map(k=>{
                   const cal = DIARY_CALENDARS[k];
