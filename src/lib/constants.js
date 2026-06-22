@@ -154,7 +154,7 @@ export const SELF_PERSON_ID = '5974b9b3-1aa2-4a33-947f-ea0425a7f5c5';
 // (Sienna, matches the private-client family), amber (Rosie). Teal is
 // deliberately avoided — it's already the web_booking provenance marker.
 export const DIARY_CALENDARS = {
-  mine:   { label: 'Mine',   color: C.blue,    bg: '#131d2a' },
+  mine:   { label: 'Jesse',  color: C.blue,    bg: '#131d2a' },
   sienna: { label: 'Sienna', color: '#a07fd4', bg: '#1a1428' },
   rosie:  { label: 'Rosie',  color: '#d49966', bg: '#2a1d10' },
 };

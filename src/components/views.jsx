@@ -110,7 +110,7 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
   const sectionForView =
     (view.name === 'org_list' || view.name === 'org_detail') ? 'orgs' :
     (view.name === 'people'   || view.name === 'person_detail') ? 'people' :
-    (view.name === 'week_view' || view.name === 'month_view') ? (mode === 'personal' ? 'diary' : 'sessions') :
+    (view.name === 'week_view' || view.name === 'month_view' || view.name === 'fourweek_view') ? (mode === 'personal' ? 'diary' : 'sessions') :
     (view.name === 'classes' || view.name === 'class_detail' || view.name === 'forms_list') ? 'sessions' :
     (view.name === 'invoices' || view.name === 'invoice_detail') ? 'finance' :
     null;
@@ -327,6 +327,7 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
         <>
           <Item name="week_view" label="Week View" icon="▦" indent />
           <Item name="month_view" label="Month View" icon="▥" indent />
+          <Item name="fourweek_view" label="3-Week View" icon="▤" indent />
           <Item name="classes" label="All Classes" icon="≡" indent />
           <Item name="forms_list" label="Forms" icon="◍" indent />
         </>
@@ -339,6 +340,7 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
         <>
           <Item name="week_view" label="Week View" icon="▦" indent />
           <Item name="month_view" label="Month View" icon="▥" indent />
+          <Item name="fourweek_view" label="3-Week View" icon="▤" indent />
         </>
       )}
 
@@ -4147,3 +4149,322 @@ export function InvoiceDetail({ inv, org, onEdit, onStatusChange, nav, backInfo 
 // ─── ROOT APP ─────────────────────────────────────────────────────────────────
 
 
+// ─── FOUR-WEEK VIEW ───────────────────────────────────────────────────────────
+// A rolling multi-week agenda: the week you're viewing plus the next two, each
+// rendered as a full WeekView-style time-grid stacked vertically and sharing one
+// time axis (so 9am lines up across all three). Scrollable on screen; prints to
+// A4 portrait at 2 weeks per page with no app chrome, preserving the faint
+// off-mode "underlayer" of business classes that the screen shows. Overlaps
+// stack (full-column blocks layered by z-index) exactly as WeekView does.
+//
+// Shares the diary layer-visibility key (fbc.diary.layerVis) and the shared
+// last-viewed date (fbc.calendar.lastDate) with Week/Month so toggles and
+// position carry across views.
+export function FourWeekView({ classes, orgs, notes, people, contactDates=[], nav, backInfo, mode='client', onAddDiary, onEditDiary }) {
+  const t = today();
+  const personalMode = mode === 'personal';
+  const WEEKS = 3; // weeks shown on screen (print paginates 2 per page)
+
+  const [lastDate, setLastDate] = useLocalStorage('fbc.calendar.lastDate', t);
+  const [anchor, setAnchorRaw] = useState(() => startOfWeek(lastDate || t));
+  const setAnchor = (next) => { setAnchorRaw(next); setLastDate(next); };
+  const initialAnchor = useMemo(() => startOfWeek(t), [t]);
+
+  // Diary layer visibility — shared with Week/Month.
+  const [calVis, setCalVis] = useLocalStorage('fbc.diary.layerVis', {});
+  const layerOn = (k) => calVis[k] !== false;
+  const toggleLayer = (k) => setCalVis({ ...calVis, [k]: !layerOn(k) });
+
+  // The N week-anchors (Mondays) starting at the current anchor.
+  const weekAnchors = useMemo(
+    () => Array.from({length:WEEKS}, (_,w) => addDays(anchor, w*7)),
+    [anchor]);
+
+  // Grid resolution shared with WeekView.
+  const SLOT_MIN = 30;
+  const SLOT_HEIGHT = 15; // a touch tighter than WeekView's 16 to fit more weeks
+  const DEFAULT_START = 6*60 + 30;
+  const DEFAULT_END = 21*60;
+
+  // Normalise a single week's classes + diary into the grid shape, honouring
+  // layer visibility. Mirrors WeekView's weekClasses / weekDiaryVisible.
+  const weekData = (wAnchor) => {
+    const wEnd = addDays(wAnchor, 6);
+    const wClasses = classes.filter(c => c.date >= wAnchor && c.date <= wEnd);
+    const wDiaryAll = notes
+      .filter(n => n.kind === 'diary' && n.date >= wAnchor && n.date <= wEnd)
+      .map(n => ({
+        id: 'diary_' + n.id, __diary:true, __note:n,
+        __personId: n.personId || null, __projectId: n.projectId || null,
+        name: n.subject || n.text,
+        body: n.subject ? (n.text || '') : '',
+        date: n.date, time: n.time || null, duration: n.durationMins || 60,
+        isPersonal: !!n.isPersonal, calendar: n.calendar || 'mine',
+      }));
+    const wDiary = personalMode ? wDiaryAll.filter(d => layerOn(d.calendar)) : wDiaryAll;
+    const wDates = calendarDateEvents(people, contactDates, wAnchor, wEnd);
+    return { wAnchor, wEnd, wClasses, wDiary, wDates };
+  };
+  const weeks = useMemo(() => weekAnchors.map(weekData),
+    [weekAnchors, classes, notes, people, contactDates, personalMode, calVis]);
+
+  // ONE shared time axis across all weeks: scan every timed item in the whole
+  // range so 9am sits at the same y in every week and they print aligned.
+  const { gridStart, gridEnd } = useMemo(() => {
+    let s = DEFAULT_START, e = DEFAULT_END;
+    const scan = (item) => {
+      const m = timeToMin(item.time);
+      if(m === null) return;
+      const dur = item.duration || 60;
+      const startSlot = Math.floor(m / SLOT_MIN) * SLOT_MIN;
+      const endSlot = Math.ceil((m + dur) / SLOT_MIN) * SLOT_MIN;
+      if(startSlot < s) s = startSlot;
+      if(endSlot > e) e = endSlot;
+    };
+    weeks.forEach(wk => { wk.wClasses.forEach(scan); wk.wDiary.forEach(scan); });
+    return { gridStart: s, gridEnd: e };
+  }, [weeks]);
+  const totalSlots = (gridEnd - gridStart) / SLOT_MIN;
+  const gridHeight = totalSlots * SLOT_HEIGHT;
+
+  const classBlock = (c) => {
+    const startMin = timeToMin(c.time);
+    if(startMin === null) return null;
+    const duration = c.duration || 60;
+    const top = ((startMin - gridStart) / SLOT_MIN) * SLOT_HEIGHT;
+    const height = Math.max(SLOT_HEIGHT - 2, (duration / SLOT_MIN) * SLOT_HEIGHT - 2);
+    return { top, height };
+  };
+
+  const tooltipFor = (c) => {
+    const lines = [c.name];
+    const tl = fmtTime(c.time);
+    if(tl) lines.push(`${tl} · ${c.duration || 60} min`);
+    if(c.location) lines.push(c.location);
+    const cOrg = orgs.find(o => o.id === c.orgId);
+    if(cOrg) lines.push(cOrg.name);
+    return lines.join('\n');
+  };
+
+  // Hour labels down the left axis (whole hours only).
+  const hourLabels = [];
+  for(let m = Math.ceil(gridStart/60)*60; m <= gridEnd; m += 60) {
+    const h = Math.floor(m/60);
+    hourLabels.push({ y: ((m - gridStart)/SLOT_MIN)*SLOT_HEIGHT,
+      label: `${h===0?12:h>12?h-12:h}${h<12?'am':'pm'}` });
+  }
+
+  const weekRangeLabel = (wAnchor, wEnd) => {
+    const a = new Date(wAnchor+'T12:00'), e = new Date(wEnd+'T12:00');
+    const aS = a.toLocaleDateString('en-GB',{day:'numeric',month:'short'});
+    const eS = e.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+    return `${aS} – ${eS}`;
+  };
+
+  // ─── One week's grid (header row of days, dates banner, time grid) ──────────
+  const WeekBlock = ({ wk, weekIndex }) => {
+    const days = Array.from({length:7}, (_,i) => addDays(wk.wAnchor, i));
+    const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    return (
+      <div className={`fw-week${weekIndex===2?' fw-week-break':''}`} style={{marginBottom:10}}>
+        {/* Day-name header */}
+        <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)'}}>
+          <div />
+          {days.map((d,i) => {
+            const dt = new Date(d+'T12:00');
+            const isToday = d === t;
+            return (
+              <div key={d} style={{textAlign:'center',padding:'2px 2px 4px'}}>
+                <div style={{color:isToday?C.gold:C.muted,fontSize:9,fontWeight:600,letterSpacing:'1.2px'}}>{DOW[i]}</div>
+                <div style={{color:isToday?C.gold:C.text,fontSize:15,fontWeight:isToday?600:400,fontFamily:"'Cormorant Garamond',serif"}}>{dt.getDate()}</div>
+              </div>
+            );
+          })}
+        </div>
+        {/* Dates banner (birthdays/anniversaries) */}
+        {wk.wDates.length > 0 && (
+          <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`,marginBottom:2}}>
+            <div style={{color:C.muted,fontSize:8,letterSpacing:'1px',padding:'2px',textAlign:'right',fontWeight:600}}>DATES</div>
+            {days.map(d => {
+              const items = wk.wDates.filter(e => e.date === d);
+              return (
+                <div key={d} style={{padding:'2px',display:'flex',flexDirection:'column',gap:2}}>
+                  {items.map((e,idx) => (
+                    <div key={idx} className="fw-block" style={{background:C.gold+'18',borderLeft:`2px solid ${C.gold}`,borderRadius:3,padding:'1px 4px',fontSize:9,color:C.text,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}} title={e.label}>
+                      {e.emoji} {e.label}
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {/* Time grid */}
+        <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',border:`1px solid ${C.border}`,borderRadius:6,overflow:'hidden'}}>
+          {/* Hour axis */}
+          <div style={{position:'relative',height:gridHeight,borderRight:`1px solid ${C.border}`}}>
+            {hourLabels.map((h,i) => (
+              <div key={i} style={{position:'absolute',top:h.y-6,right:4,color:C.muted,fontSize:8,letterSpacing:'0.2px'}}>{h.label}</div>
+            ))}
+          </div>
+          {/* Day columns */}
+          {days.map((d,i) => {
+            const dayItems = wk.wClasses.filter(c => c.date === d && timeToMin(c.time) !== null);
+            const dayDiary = wk.wDiary.filter(e => e.date === d && timeToMin(e.time) !== null);
+            const isToday = d === t;
+            const onColumnClick = (ev) => {
+              if(!onAddDiary || ev.target !== ev.currentTarget) return;
+              const rect = ev.currentTarget.getBoundingClientRect();
+              const y = ev.clientY - rect.top;
+              const rawMin = gridStart + Math.floor(y / SLOT_HEIGHT) * SLOT_MIN;
+              onAddDiary(d, `${String(Math.floor(rawMin/60)).padStart(2,'0')}:${String(rawMin%60).padStart(2,'0')}`);
+            };
+            return (
+              <div key={d} onClick={onColumnClick}
+                style={{position:'relative',height:gridHeight,borderRight:i<6?`1px solid ${C.border}`:'none',background:isToday?C.goldBg+'22':'transparent',cursor:onAddDiary?'copy':'default'}}>
+                {/* Hour gridlines */}
+                {Array.from({length: totalSlots}, (_, j) => {
+                  const minute = gridStart + j * SLOT_MIN;
+                  return <div key={j} className="fw-gridline" style={{position:'absolute',top:j*SLOT_HEIGHT,left:0,right:0,height:1,background:C.border,opacity: minute%60===0?0.4:0.16,pointerEvents:'none'}} />;
+                })}
+                {/* Class blocks (the underlayer that must survive print) */}
+                {dayItems.map(c => {
+                  const block = classBlock(c); if(!block) return null;
+                  const cOrg = orgs.find(o=>o.id===c.orgId);
+                  const meta = KIND_META[classKindKey(c, cOrg)] || { color:C.gold };
+                  const offMode = personalMode; // in personal mode, classes are the faint underlayer
+                  return (
+                    <div key={c.id} onClick={()=>nav('class_detail',{classId:c.id})}
+                      className="fw-block fw-class" data-accent={meta.color}
+                      style={{position:'absolute',top:block.top,height:block.height,left:2,right:2,
+                        background: meta.color+(offMode?'14':'22'),
+                        border:`1px solid ${meta.color}${offMode?'44':'66'}`,
+                        borderLeft:`3px solid ${meta.color}`,borderRadius:3,padding:'1px 5px 0',
+                        cursor:'pointer',overflow:'hidden',opacity:offMode?0.65:1,
+                        fontFamily:"'Jost',sans-serif",display:'flex',flexDirection:'column',justifyContent:'flex-start'}}
+                      title={tooltipFor(c)}>
+                      <div style={{color:C.text,fontSize:10,fontWeight:500,lineHeight:1.15,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{c.name}</div>
+                    </div>
+                  );
+                })}
+                {/* Diary blocks */}
+                {dayDiary.map(e => {
+                  const block = classBlock(e); if(!block) return null;
+                  const offMode = e.isPersonal !== personalMode;
+                  const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
+                  const calLbl = DIARY_CALENDARS[e.calendar]?.label || '';
+                  const onClick = () => {
+                    if(onEditDiary) onEditDiary(e.__note);
+                    else if(e.__personId) nav('person_detail',{personId:e.__personId});
+                  };
+                  return (
+                    <div key={e.id} onClick={onClick}
+                      className="fw-block fw-diary" data-accent={accent}
+                      style={{position:'absolute',top:block.top,height:block.height,left:2,right:2,
+                        background: offMode ? C.card : accent+'1e',
+                        border:`1px dashed ${accent}${offMode?'55':'88'}`,
+                        borderLeft:`3px solid ${accent}`,borderRadius:3,padding:'1px 5px 0',
+                        cursor:'pointer',overflow:'hidden',opacity:offMode?0.5:1,
+                        fontFamily:"'Jost',sans-serif",display:'flex',flexDirection:'column',justifyContent:'flex-start'}}
+                      title={`${e.name}${calLbl&&!offMode?` · ${calLbl}`:''}${fmtTime(e.time)?` · ${fmtTime(e.time)} · ${e.duration} min`:''}${e.body?`\n\n${e.body}`:''}`}>
+                      <div style={{color:offMode?C.muted:C.text,fontSize:10,fontWeight:500,lineHeight:1.15,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',fontStyle:'italic'}}>{e.name}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  // Calendar legend — which layers are showing (also printed).
+  const activeLayers = DIARY_CALENDAR_KEYS.filter(k => layerOn(k));
+  const legend = (
+    <div className="fw-legend" style={{display:'flex',gap:14,alignItems:'center',flexWrap:'wrap'}}>
+      <span style={{color:C.muted,fontSize:11,letterSpacing:'0.5px'}}>SHOWING:</span>
+      {personalMode ? DIARY_CALENDAR_KEYS.map(k => {
+        const cal = DIARY_CALENDARS[k]; const on = layerOn(k);
+        return (
+          <span key={k} onClick={()=>toggleLayer(k)} className="fw-legend-item"
+            style={{display:'inline-flex',alignItems:'center',gap:6,cursor:'pointer',fontSize:12,
+              color:on?cal.color:C.muted,opacity:on?1:0.45}}>
+            <span style={{width:10,height:10,borderRadius:'50%',background:on?cal.color:'transparent',border:`1.5px solid ${cal.color}`}} />
+            {cal.label}{!on && ' (hidden)'}
+          </span>
+        );
+      }) : (
+        <span style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:12,color:C.gold}}>
+          <span style={{width:10,height:10,borderRadius:'50%',background:C.gold}} /> Classes
+        </span>
+      )}
+    </div>
+  );
+
+  // Print stylesheet: hide app chrome, paginate 2 weeks per A4 portrait page,
+  // and force backgrounds/colours to print (so the faint class underlayer that
+  // browsers normally strip stays visible). print-color-adjust:exact is the key
+  // — without it the off-mode class tints vanish, which was the reported bug.
+  const printCss = `
+    @media print {
+      @page { size: A4 portrait; margin: 10mm; }
+      body * { visibility: hidden; }
+      .fw-print-root, .fw-print-root * { visibility: visible; }
+      .fw-print-root { position: absolute; left: 0; top: 0; width: 100%; padding: 0 !important; }
+      .fw-noprint { display: none !important; }
+      .fw-print-head { margin-bottom: 6mm; }
+      /* Print shows 2 weeks only; the 3rd week is screen-only. */
+      .fw-week { break-inside: avoid; page-break-inside: avoid; }
+      .fw-week-break { display: none !important; }
+      /* Force every coloured fill/border to render on paper. */
+      .fw-print-root * {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      /* On white paper, lift the faint underlayer so it's actually visible. */
+      .fw-class { opacity: 1 !important; }
+      .fw-block { box-shadow: none !important; }
+      /* Print-only header becomes visible. */
+      .fw-print-head { display: block !important; }
+    }
+  `;
+
+  return (
+    <div className="fw-print-root" style={{padding: '28px 32px'}}>
+      <style>{printCss}</style>
+
+      {/* Screen-only nav + controls */}
+      <div className="fw-noprint">
+        <PageHead back={backInfo?.label} onBack={backInfo?.onBack}>3-Week View</PageHead>
+        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:20,color:C.text,fontWeight:600,marginBottom:12}}>
+          {weekRangeLabel(weeks[0].wAnchor, weeks[weeks.length-1].wEnd)}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+          <button onClick={()=>setAnchor(addDays(anchor,-7))}
+            style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:14,padding:'4px 10px',lineHeight:1,fontFamily:"'Jost',sans-serif"}}>‹</button>
+          <button onClick={()=>setAnchor(addDays(anchor,7))}
+            style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:14,padding:'4px 10px',lineHeight:1,fontFamily:"'Jost',sans-serif"}}>›</button>
+          {anchor !== initialAnchor && (
+            <button onClick={()=>setAnchor(initialAnchor)}
+              style={{background:C.goldBg,border:`1px solid ${C.gold}88`,color:C.gold,cursor:'pointer',borderRadius:6,fontSize:12,padding:'4px 11px',fontFamily:"'Jost',sans-serif"}}>This week</button>
+          )}
+          <button onClick={()=>window.print()}
+            style={{background:C.gold+'22',border:`1px solid ${C.gold}`,color:C.gold,cursor:'pointer',borderRadius:6,fontSize:12,padding:'4px 12px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>⎙ Print</button>
+          <div style={{flex:1}} />
+          {legend}
+        </div>
+      </div>
+
+      {/* Print-only header: title + date range + legend (no nav). */}
+      <div className="fw-print-head" style={{display:'none'}}>
+        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:600,marginBottom:4}}>The Felt Body — Schedule</div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:8}}>{weekRangeLabel(weeks[0].wAnchor, weeks[Math.min(1, weeks.length-1)].wEnd)}</div>
+        {legend}
+      </div>
+
+      {/* The stacked weeks */}
+      {weeks.map((wk, i) => <WeekBlock key={wk.wAnchor} wk={wk} weekIndex={i} />)}
+    </div>
+  );
+}

@@ -5,7 +5,7 @@ import { C, ORG_META, PERSON_ROLES, SEED, SELF_PERSON_ID } from "./lib/constants
 import { MobileUIContext, TypesContext, buildOrgTypes, buildPersonRoles, fmt, generateSeriesClasses, isWebEvent, today, uid, useLocalStorage } from "./lib/helpers.jsx";
 import { Empty } from "./components/primitives.jsx";
 import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, DiaryModal, EditNoteForm, EditPackageForm, EditSeriesClassForm, EmailTemplateForm, MergePeopleForm, PackageTemplateForm, PickPersonModal } from "./components/forms.jsx";
-import { BirthdaysView, ClassList, Dashboard, EmailTemplatesView, FormsList, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackageTemplatesView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
+import { BirthdaysView, ClassList, Dashboard, EmailTemplatesView, FormsList, FourWeekView, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackageTemplatesView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
 import { ClassDetail, HouseholdModal, OrgDetail, PersonDetail, ProjectDetail } from "./components/details.jsx";
 import { CareHomeResourcesView, DocumentsView } from "./components/documents.jsx";
 
@@ -1373,6 +1373,9 @@ export default function FeltBodyCRM() {
         onAddClass={(date)=>setModal({type:'add_class', date})}
         onAddPrivate={(date)=>setModal({type:'pick_person_for_ps', date})}
         onAddDiary={(date)=>setModal({type:'add_diary', date, personal: mode==='personal'})}
+        onEditDiary={(entry)=>setModal({type:'add_diary', entry})} />;
+      case 'fourweek_view': return <FourWeekView classes={classes} orgs={orgs} notes={notes} people={people} contactDates={contactDates} nav={nav} backInfo={backInfo} mode={mode}
+        onAddDiary={(date,time)=>setModal({type:'add_diary', date, time, personal: mode==='personal'})}
         onEditDiary={(entry)=>setModal({type:'add_diary', entry})} />;
       case 'forms_list': return <FormsList forms={forms} classes={classes} onAdd={addForm} onUpdate={updateForm} onRemove={removeForm} onMove={moveForm} />;
       case 'class_detail': {
