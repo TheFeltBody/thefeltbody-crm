@@ -5,7 +5,7 @@ import { C, ORG_META, PERSON_ROLES, SEED, SELF_PERSON_ID } from "./lib/constants
 import { MobileUIContext, TypesContext, buildOrgTypes, buildPersonRoles, fmt, generateSeriesClasses, isWebEvent, today, uid, useLocalStorage } from "./lib/helpers.jsx";
 import { Empty } from "./components/primitives.jsx";
 import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, DiaryModal, EditNoteForm, EditPackageForm, EditSeriesClassForm, EmailTemplateForm, MergePeopleForm, PackageTemplateForm, PickPersonModal } from "./components/forms.jsx";
-import { BirthdaysView, ClassList, Dashboard, EmailTemplatesView, FormsList, FourWeekView, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackagesView, PackageTemplatesView, PaymentsView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
+import { BirthdaysView, ClassList, Dashboard, EmailTemplatesView, FormDetail, FormsList, FourWeekView, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackagesView, PackageTemplatesView, PaymentsView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
 import { ClassDetail, HouseholdModal, OrgDetail, PersonDetail, ProjectDetail } from "./components/details.jsx";
 import { CareHomeResourcesView, DocumentsView } from "./components/documents.jsx";
 
@@ -283,6 +283,11 @@ export default function FeltBodyCRM() {
       case 'week_view': label = 'Week View'; break;
       case 'month_view': label = 'Month View'; break;
       case 'forms_list': label = 'Forms'; break;
+      case 'form_detail': {
+        const fm = forms.find(f => f.id === prev.formId);
+        label = fm ? fm.name : 'Form';
+        break;
+      }
       case 'invoices': label = 'Invoices'; break;
       case 'payments': label = 'Payments'; break;
       case 'packages_all': label = 'Packages'; break;
@@ -324,7 +329,7 @@ export default function FeltBodyCRM() {
       default: label = 'Back';
     }
     return { label, onBack: goBack };
-  }, [history, orgs, people, classes, invoices, orgTypes, personRoles]);
+  }, [history, orgs, people, classes, forms, invoices, orgTypes, personRoles]);
   const close = () => setModal(null);
 
   // ─── Mutation handlers ─────────────────────────────────────────────────────
@@ -1258,7 +1263,7 @@ export default function FeltBodyCRM() {
 
 
   const renderView = () => {
-    const { name, orgId, orgType, personType, personId, classId, invoiceId, highlightNoteId } = view;
+    const { name, orgId, orgType, personType, personId, classId, formId, invoiceId, highlightNoteId } = view;
     switch(name){
       case 'dashboard':
         if (mode === 'personal') return <PersonalDashboard people={people} orgs={orgs} classes={classes}
@@ -1379,7 +1384,12 @@ export default function FeltBodyCRM() {
       case 'fourweek_view': return <FourWeekView classes={classes} orgs={orgs} notes={notes} people={people} contactDates={contactDates} nav={nav} backInfo={backInfo} mode={mode}
         onAddDiary={(date,time)=>setModal({type:'add_diary', date, time, personal: mode==='personal'})}
         onEditDiary={(entry)=>setModal({type:'add_diary', entry})} />;
-      case 'forms_list': return <FormsList forms={forms} classes={classes} onAdd={addForm} onUpdate={updateForm} onRemove={removeForm} onMove={moveForm} />;
+      case 'forms_list': return <FormsList forms={forms} classes={classes} nav={nav} onAdd={addForm} onUpdate={updateForm} onRemove={removeForm} onMove={moveForm} />;
+      case 'form_detail': {
+        const form=forms.find(f=>f.id===formId); if(!form) return <Empty text="Form not found" />;
+        return <FormDetail form={form} classes={classes} nav={nav} backInfo={backInfo}
+          onUpdateClass={updateClassFields} />;
+      }
       case 'class_detail': {
         const cls=classes.find(c=>c.id===classId); if(!cls) return <Empty text="Not found" />;
         const org=orgs.find(o=>o.id===cls.orgId);

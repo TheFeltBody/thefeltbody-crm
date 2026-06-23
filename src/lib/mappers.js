@@ -194,6 +194,7 @@ export const classFromDb = (row) => ({
   paymentModel: row.payment_model || 'per_person',
   notes: row.notes || '',
   reflection: row.reflection || '',
+  reflectionStarred: row.reflection_starred ?? false,
   formsWorked: Array.isArray(row.forms_worked) ? row.forms_worked : [],
   isBookable: row.is_bookable ?? false,
   capacity: row.capacity ?? '',
@@ -214,6 +215,7 @@ export const classToDb = (c) => ({
   payment_model: c.paymentModel || 'per_person',
   notes: c.notes || null,
   reflection: c.reflection || null,
+  reflection_starred: c.reflectionStarred ?? false,
   forms_worked: Array.isArray(c.formsWorked) ? c.formsWorked : [],
   is_bookable: c.isBookable ?? false,
   capacity: numOrNull(c.capacity),
@@ -240,6 +242,7 @@ export const classPatchToDb = (patch) => {
   if (patch.paymentModel !== undefined) out.payment_model = patch.paymentModel || 'per_person';
   if (patch.notes !== undefined) out.notes = patch.notes || null;
   if (patch.reflection !== undefined) out.reflection = patch.reflection || null;
+  if (patch.reflectionStarred !== undefined) out.reflection_starred = !!patch.reflectionStarred;
   if (patch.formsWorked !== undefined) {
     out.forms_worked = Array.isArray(patch.formsWorked) ? patch.formsWorked : [];
   }

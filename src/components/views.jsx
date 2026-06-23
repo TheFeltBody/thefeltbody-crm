@@ -111,7 +111,7 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
     (view.name === 'org_list' || view.name === 'org_detail') ? 'orgs' :
     (view.name === 'people'   || view.name === 'person_detail') ? 'people' :
     (view.name === 'week_view' || view.name === 'month_view' || view.name === 'fourweek_view') ? (mode === 'personal' ? 'diary' : 'sessions') :
-    (view.name === 'classes' || view.name === 'class_detail' || view.name === 'forms_list') ? 'sessions' :
+    (view.name === 'classes' || view.name === 'class_detail' || view.name === 'forms_list' || view.name === 'form_detail') ? 'sessions' :
     (view.name === 'invoices' || view.name === 'invoice_detail' || view.name === 'payments' || view.name === 'packages_all') ? 'finance' :
     null;
   // Persist the open section so the last open/closed choice survives a refresh.
@@ -3928,6 +3928,8 @@ export function ClassLog({ cls, forms, onUpdateClass, nav }) {
     setSavedFlash(true);
     setTimeout(()=>setSavedFlash(false), 1400);
   };
+  const starred = cls.reflectionStarred ?? false;
+  const toggleStar = () => onUpdateClass(cls.id, { reflectionStarred: !starred });
 
   return (
     <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'18px 22px',marginBottom:24}}>
@@ -3956,7 +3958,16 @@ export function ClassLog({ cls, forms, onUpdateClass, nav }) {
         </div>
       )}
 
-      <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:7}}>WHAT WENT WELL · ANYTHING NOTABLE</div>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:7}}>
+        <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px'}}>WHAT WENT WELL · ANYTHING NOTABLE</div>
+        {reflection && !editing && (
+          <button onClick={toggleStar} title={starred?'Remove from highlights':'Mark as a highlight'}
+            style={{background:'none',border:'none',cursor:'pointer',color:starred?C.gold:C.muted,fontSize:15,lineHeight:1,padding:'2px 4px',display:'inline-flex',alignItems:'center',gap:5}}>
+            <span>{starred?'★':'☆'}</span>
+            <span style={{fontSize:10,letterSpacing:'0.5px'}}>{starred?'HIGHLIGHT':'MARK HIGHLIGHT'}</span>
+          </button>
+        )}
+      </div>
       {editing ? (
         <>
           <textarea value={draftReflection} onChange={e=>setDraftReflection(e.target.value)} rows={4}
@@ -3985,7 +3996,7 @@ export function ClassLog({ cls, forms, onUpdateClass, nav }) {
 
 // ─── FORMS LIST (canonical syllabus forms) ────────────────────────────────────
 
-export function FormsList({ forms, classes, onAdd, onUpdate, onRemove, onMove }) {
+export function FormsList({ forms, classes, nav, onAdd, onUpdate, onRemove, onMove }) {
   const isMobile = useIsMobile();
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState('');
@@ -4047,7 +4058,12 @@ export function FormsList({ forms, classes, onAdd, onUpdate, onRemove, onMove })
                       onKeyDown={e=>{if(e.key==='Enter') saveEdit(); if(e.key==='Escape') setEditingId(null);}}
                       style={{width:'100%',background:C.surf,border:`1px solid ${C.gold}55`,borderRadius:4,color:C.text,fontSize:14,padding:'5px 9px',fontFamily:"'Jost',sans-serif",outline:'none'}} />
                   ) : (
-                    <div style={{color:C.text,fontSize:14}}>{f.name}</div>
+                    <div onClick={()=>nav && nav('form_detail',{formId:f.id})}
+                      style={{color:C.text,fontSize:14,cursor:nav?'pointer':'default'}}
+                      onMouseEnter={e=>{if(nav)e.currentTarget.style.color=C.gold;}}
+                      onMouseLeave={e=>{if(nav)e.currentTarget.style.color=C.text;}}>
+                      {f.name}
+                    </div>
                   )}
                 </div>
                 <div style={{color:C.muted,fontSize:11,letterSpacing:'0.4px',whiteSpace:'nowrap'}}>{used} use{used!==1?'s':''}</div>
@@ -4071,6 +4087,115 @@ export function FormsList({ forms, classes, onAdd, onUpdate, onRemove, onMove })
           })}
         </div>
       ) : !adding && <Empty text="No forms yet." action="Add one →" onAction={()=>setAdding(true)} />}
+    </div>
+  );
+}
+
+// ─── FORM DETAIL (one form: classes where it was worked + reflections) ───────
+// Reverse lookup over sessions.forms_worked. Each class that worked this form
+// is shown with its reflection (the per-class "what went well" note). Starred
+// reflections (sessions.reflection_starred) float to the top; a toggle collapses
+// the list to highlights only. The star can be toggled inline here too — same
+// onUpdateClass({ reflectionStarred }) path as ClassLog on the class detail page.
+export function FormDetail({ form, classes, nav, backInfo, onUpdateClass }) {
+  const isMobile = useIsMobile();
+  // Three-way filter: 'reflection' (default) | 'all' | 'highlights'
+  const [filter, setFilter] = useState('reflection');
+
+  // Classes that worked this form, newest first, starred floated to the top.
+  const worked = useMemo(() => {
+    const list = classes.filter(c => (c.formsWorked || []).includes(form.id));
+    return list.sort((a, b) => {
+      const sa = a.reflectionStarred ? 1 : 0;
+      const sb = b.reflectionStarred ? 1 : 0;
+      if (sa !== sb) return sb - sa;               // starred first
+      return (b.date || '').localeCompare(a.date || '');  // then newest
+    });
+  }, [classes, form.id]);
+
+  const starredCount = worked.filter(c => c.reflectionStarred).length;
+  const withReflection = worked.filter(c => (c.reflection || '').trim());
+  const visible =
+    filter === 'highlights' ? worked.filter(c => c.reflectionStarred)
+    : filter === 'reflection' ? withReflection
+    : worked;
+
+  // Chip bar: counts shown so empty buckets are obvious before clicking.
+  const chips = [
+    { key: 'all',        label: 'All',             count: worked.length },
+    { key: 'highlights', label: 'Highlights',      count: starredCount },
+    { key: 'reflection', label: 'With reflection', count: withReflection.length },
+  ];
+
+  return (
+    <div style={{ padding: isMobile ? '12px 12px 24px' : '32px 36px', maxWidth: 760 }}>
+      <PageHead back={backInfo?.label} onBack={backInfo?.onBack}>
+        {form.name}
+      </PageHead>
+
+      <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, marginBottom: 16 }}>
+        {worked.length
+          ? <>Worked in {worked.length} class{worked.length !== 1 ? 'es' : ''}
+              {withReflection.length > 0 && <> · {withReflection.length} with a reflection</>}
+              {starredCount > 0 && <> · {starredCount} highlight{starredCount !== 1 ? 's' : ''}</>}</>
+          : 'Not yet worked in any class. Tag it in a session log to start building a history here.'}
+      </div>
+
+      {worked.length > 0 && (
+        <div style={{ display: 'inline-flex', border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden', marginBottom: 22 }}>
+          {chips.map((ch, i) => {
+            const on = filter === ch.key;
+            return (
+              <button key={ch.key} onClick={() => setFilter(ch.key)}
+                style={{ background: on ? C.goldBg : 'transparent', color: on ? C.gold : C.muted, border: 'none', borderLeft: i > 0 ? `1px solid ${C.border}` : 'none', cursor: 'pointer', fontFamily: "'Jost',sans-serif", fontSize: 12, fontWeight: 500, letterSpacing: '0.3px', padding: '7px 14px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                {ch.label}
+                <span style={{ opacity: 0.7, fontSize: 11 }}>{ch.count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {visible.length ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {visible.map(c => {
+            const starred = c.reflectionStarred ?? false;
+            const refl = (c.reflection || '').trim();
+            return (
+              <div key={c.id}
+                style={{ background: C.card, border: `1px solid ${starred ? C.gold + '66' : C.border}`, borderRadius: 8, padding: '14px 16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: refl ? 10 : 0 }}>
+                  <div onClick={() => nav('class_detail', { classId: c.id })}
+                    style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
+                    onMouseEnter={e => { e.currentTarget.querySelector('[data-cn]').style.color = C.gold; }}
+                    onMouseLeave={e => { e.currentTarget.querySelector('[data-cn]').style.color = C.text; }}>
+                    <span data-cn style={{ color: C.text, fontSize: 14, fontWeight: 500 }}>{c.name}</span>
+                    <span style={{ color: C.muted, fontSize: 12, marginLeft: 8 }}>{fmt(c.date)}</span>
+                  </div>
+                  <button onClick={() => onUpdateClass(c.id, { reflectionStarred: !starred })}
+                    title={starred ? 'Remove from highlights' : 'Mark as a highlight'}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: starred ? C.gold : C.muted, fontSize: 16, lineHeight: 1, padding: '2px 4px', flexShrink: 0 }}>
+                    {starred ? '★' : '☆'}
+                  </button>
+                </div>
+                {refl ? (
+                  <div onClick={() => nav('class_detail', { classId: c.id })}
+                    style={{ color: C.text, fontSize: 13.5, lineHeight: 1.6, whiteSpace: 'pre-wrap', cursor: 'pointer', opacity: 0.92 }}>
+                    {refl}
+                  </div>
+                ) : (
+                  <div style={{ color: C.muted, fontSize: 12, fontStyle: 'italic' }}>No reflection recorded for this class.</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : worked.length === 0 ? null
+        : filter === 'highlights' ? (
+          <Empty text="No highlights yet — star a class reflection to pin it here." action="Show all" onAction={() => setFilter('all')} />
+        ) : filter === 'reflection' ? (
+          <Empty text="No reflections recorded yet for this form." action="Show all classes" onAction={() => setFilter('all')} />
+        ) : null}
     </div>
   );
 }
