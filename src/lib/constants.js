@@ -122,6 +122,10 @@ export const INTERACTION_KINDS = {
   form:    { label:'Form',    icon:'📋', color:'#d49966', bg:'#2a1d10' },
   booking: { label:'Booking', icon:'📅', color:'#7fc4b8', bg:'#13282a' },
   payment: { label:'Payment', icon:'💷', color:'#c9a84c', bg:'#1b2213' },
+  // Diary entries (kind='diary'): calendar items whose title lives in `subject`
+  // and whose body (`text`) is usually empty. Surfaced in Comms only under their
+  // own filter chip — excluded from the default 'All' view to avoid clutter.
+  diary:   { label:'Diary',   icon:'📔', color:'#6ba3d4', bg:'#131d2a' },
 };
 
 // Household member relationship labels. Keys match the DB CHECK constraint on

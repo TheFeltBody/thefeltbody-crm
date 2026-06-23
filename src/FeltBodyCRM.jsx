@@ -5,7 +5,7 @@ import { C, ORG_META, PERSON_ROLES, SEED, SELF_PERSON_ID } from "./lib/constants
 import { MobileUIContext, TypesContext, buildOrgTypes, buildPersonRoles, fmt, generateSeriesClasses, isWebEvent, today, uid, useLocalStorage } from "./lib/helpers.jsx";
 import { Empty } from "./components/primitives.jsx";
 import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, DiaryModal, EditNoteForm, EditPackageForm, EditSeriesClassForm, EmailTemplateForm, MergePeopleForm, PackageTemplateForm, PickPersonModal } from "./components/forms.jsx";
-import { BirthdaysView, ClassList, Dashboard, EmailTemplatesView, FormsList, FourWeekView, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackageTemplatesView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
+import { BirthdaysView, ClassList, Dashboard, EmailTemplatesView, FormsList, FourWeekView, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackagesView, PackageTemplatesView, PaymentsView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
 import { ClassDetail, HouseholdModal, OrgDetail, PersonDetail, ProjectDetail } from "./components/details.jsx";
 import { CareHomeResourcesView, DocumentsView } from "./components/documents.jsx";
 
@@ -284,6 +284,8 @@ export default function FeltBodyCRM() {
       case 'month_view': label = 'Month View'; break;
       case 'forms_list': label = 'Forms'; break;
       case 'invoices': label = 'Invoices'; break;
+      case 'payments': label = 'Payments'; break;
+      case 'packages_all': label = 'Packages'; break;
       case 'people':
         if (prev.personType === 'all') label = 'All Contacts';
         else if (prev.personType === 'recent') label = 'Recent Contacts';
@@ -778,8 +780,8 @@ export default function FeltBodyCRM() {
       if (a.id !== attId) return a;
       const next = { ...a, ...patch };
       if (patch.paymentStatus === 'paid') { delete next.packageId; }
-      else if (patch.paymentStatus === 'package') { delete next.paidAmount; }
-      else if (patch.paymentStatus === 'unpaid') { delete next.packageId; delete next.paidAmount; }
+      else if (patch.paymentStatus === 'package') { delete next.paidAmount; delete next.paidVia; }
+      else if (patch.paymentStatus === 'unpaid') { delete next.packageId; delete next.paidAmount; delete next.paidVia; }
       return next;
     }));
     data.attendance.setPayment(attId, patch).catch(onError('Set payment'));
@@ -1399,6 +1401,8 @@ export default function FeltBodyCRM() {
           onEdit={()=>setModal({type:'edit_class',cls})} />;
       }
       case 'invoices': return <InvoiceList invoices={invoices} orgs={orgs} nav={nav} onAdd={()=>setModal({type:'create_invoice'})} />;
+      case 'payments': return <PaymentsView attendance={attendance} packages={packages} classes={classes} people={people} nav={nav} />;
+      case 'packages_all': return <PackagesView packages={packages} people={people} nav={nav} />;
       case 'invoice_detail': {
         const inv=invoices.find(i=>i.id===invoiceId); if(!inv) return <Empty text="Not found" />;
         const org=orgs.find(o=>o.id===inv.orgId);

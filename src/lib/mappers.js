@@ -263,6 +263,9 @@ export const attendanceFromDb = (row) => ({
   packageId: row.package_id || undefined,
   paidAmount: row.paid_amount !== undefined && row.paid_amount !== null
     ? Number(row.paid_amount) : undefined,
+  // Payment method for drop-in (paymentStatus==='paid') rows. Null/undefined for
+  // legacy rows recorded before this column existed → surfaced as 'Unspecified'.
+  paidVia: row.paid_via || undefined,
 });
 
 export const attendanceToDb = (a) => {
@@ -274,6 +277,7 @@ export const attendanceToDb = (a) => {
     package_id: a.packageId || null,
   };
   if (a.paidAmount !== undefined) out.paid_amount = a.paidAmount;
+  if (a.paidVia !== undefined) out.paid_via = a.paidVia;
   return out;
 };
 

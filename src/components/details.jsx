@@ -1143,9 +1143,19 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
   // transactional (the booking already appears in the Bookings tab, derived from
   // attendance), so they're filtered out here to keep the comms feed uncluttered.
   // The chip bar already excludes these kinds; this makes the rendered list match.
-  const commsNotes = pNotes.filter(n => !['booking','payment'].includes(n.kind));
-  const effectiveFilter = (filterKind!=='all' && !commsNotes.some(n => (n.kind||'note')===filterKind)) ? 'all' : filterKind;
-  const visibleNotes = effectiveFilter==='all' ? commsNotes : commsNotes.filter(n => (n.kind||'note')===effectiveFilter);
+  // Diary entries (kind='diary') are also excluded from the default/'All' view —
+  // they're calendar items, mostly title-only, and would clutter the record.
+  // They're reachable via their own Diary chip (diaryNotes below).
+  const commsNotes = pNotes.filter(n => !['booking','payment','diary'].includes(n.kind));
+  const diaryNotes = pNotes.filter(n => n.kind === 'diary');
+  // Diary is a valid filter target even though it's not in commsNotes. For every
+  // other kind, validity is checked against commsNotes.
+  const filterValid = filterKind==='all'
+    || (filterKind==='diary' ? diaryNotes.length>0 : commsNotes.some(n => (n.kind||'note')===filterKind));
+  const effectiveFilter = filterValid ? filterKind : 'all';
+  const visibleNotes = effectiveFilter==='all' ? commsNotes
+    : effectiveFilter==='diary' ? diaryNotes
+    : commsNotes.filter(n => (n.kind||'note')===effectiveFilter);
   const impNotes = visibleNotes.filter(n=>n.important), regNotes = visibleNotes.filter(n=>!n.important);
 
   // ── Household derivation. A contact may belong to MULTIPLE households (the
@@ -1501,12 +1511,18 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
                   // only 'All' plus kinds actually present on this contact show.
                   const COMMS_KINDS = ['note','call','email','meeting','form'];
                   const chips = ['all', ...COMMS_KINDS.filter(k => commsNotes.some(n => (n.kind||'note')===k))];
+                  // Diary chip appended last, only when diary entries exist. It's
+                  // sourced from diaryNotes (excluded from commsNotes), so 'All'
+                  // stays diary-free and Diary isolates them.
+                  if (diaryNotes.length > 0) chips.push('diary');
                   return chips.map(k => {
                     const active = effectiveFilter === k;
                     const meta = k==='all' ? null : INTERACTION_KINDS[k];
-                    const label = k==='all' ? 'All' : meta.label + 's';
+                    const label = k==='all' ? 'All' : k==='diary' ? 'Diary' : meta.label + 's';
                     const icon = k==='all' ? '◯' : meta.icon;
-                    const count = k==='all' ? commsNotes.length : commsNotes.filter(n=>(n.kind||'note')===k).length;
+                    const count = k==='all' ? commsNotes.length
+                      : k==='diary' ? diaryNotes.length
+                      : commsNotes.filter(n=>(n.kind||'note')===k).length;
                     return (
                       <button key={k} onClick={()=>setFilterKind(k)} title={label} style={{
                         background: active ? (meta?meta.bg:C.surf) : 'transparent',
@@ -1545,7 +1561,12 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
                       display:'flex', flexDirection:'column', gap:2,
                       boxShadow:'0 4px 12px rgba(0,0,0,0.35)',
                     }}>
-                      {Object.entries(INTERACTION_KINDS).map(([k, meta]) => (
+                      {Object.entries(INTERACTION_KINDS)
+                        // Loggable comms kinds only. Booking removed per request;
+                        // payment is transactional and diary is created via the
+                        // calendar (DiaryModal), so neither is hand-logged here.
+                        .filter(([k]) => !['booking','payment','diary'].includes(k))
+                        .map(([k, meta]) => (
                         <button key={k} onClick={()=>{ setAddKind(k); setMenuOpen(false); }}
                           style={{
                             background:'transparent', border:'none', color:C.text,
@@ -1576,7 +1597,7 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
             {addKind&&<NoteForm personId={person.id} classId={null} kind={addKind} onSave={n=>{onAddNote(n);setAddKind(null);}} onCancel={()=>setAddKind(null)} />}
             {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
             {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} highlight={flashId===n.id} />)}
-            {visibleNotes.length===0&&!addKind&&<Empty text={effectiveFilter==='all' ? 'No comms yet' : `No ${INTERACTION_KINDS[effectiveFilter].label.toLowerCase()}s logged yet`} />}
+            {visibleNotes.length===0&&!addKind&&<Empty text={effectiveFilter==='all' ? 'No comms yet' : effectiveFilter==='diary' ? 'No diary entries' : `No ${INTERACTION_KINDS[effectiveFilter].label.toLowerCase()}s logged yet`} />}
           </>}
           {tab==='packages'&&<>
             <div style={{display:'flex',justifyContent:'flex-end',marginBottom:16}}><Btn small onClick={onAddPackage}>+ Add Package</Btn></div>

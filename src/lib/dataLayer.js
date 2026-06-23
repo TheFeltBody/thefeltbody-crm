@@ -484,13 +484,16 @@ export const attendance = {
     const dbPatch = { payment_status: patch.paymentStatus };
     if (patch.paymentStatus === 'paid') {
       dbPatch.paid_amount = patch.paidAmount ?? 0;
+      dbPatch.paid_via = patch.paidVia ?? null;
       dbPatch.package_id = null;
     } else if (patch.paymentStatus === 'package') {
       dbPatch.package_id = patch.packageId;
       dbPatch.paid_amount = null;
+      dbPatch.paid_via = null;
     } else {
       dbPatch.package_id = null;
       dbPatch.paid_amount = null;
+      dbPatch.paid_via = null;
     }
     const row = await supabase.from('attendance').update(dbPatch)
       .eq('id', id).select().single().then(ok);

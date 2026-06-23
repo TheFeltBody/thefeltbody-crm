@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BANK_DETAILS, C, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
+import { BANK_DETAILS, C, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
 import { PrintInvoiceOverlay, addDays, birthdayInfo, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
 import { Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
@@ -112,9 +112,14 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
     (view.name === 'people'   || view.name === 'person_detail') ? 'people' :
     (view.name === 'week_view' || view.name === 'month_view' || view.name === 'fourweek_view') ? (mode === 'personal' ? 'diary' : 'sessions') :
     (view.name === 'classes' || view.name === 'class_detail' || view.name === 'forms_list') ? 'sessions' :
-    (view.name === 'invoices' || view.name === 'invoice_detail') ? 'finance' :
+    (view.name === 'invoices' || view.name === 'invoice_detail' || view.name === 'payments' || view.name === 'packages_all') ? 'finance' :
     null;
-  const [openSection, setOpenSection] = useState(sectionForView || 'people');
+  // Persist the open section so the last open/closed choice survives a refresh.
+  // Default is null (all sections closed) so opening the CRM doesn't dump a long
+  // People list — you open what you need. Navigating into a section still
+  // auto-opens it via the effect below. Role sub-groups inside People keep their
+  // own sticky state (felt.nav.rolegroup.*).
+  const [openSection, setOpenSection] = useLocalStorage('fbc.nav.openSection', null);
   // When navigating into a section, open it (and close the others).
   useEffect(()=>{ if(sectionForView) setOpenSection(sectionForView); }, [sectionForView]);
   const toggleSection = (key) => setOpenSection(cur => cur === key ? null : key);
@@ -173,7 +178,7 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
   };
 
   return (
-    <div style={{width:216,background:C.sbg,borderRight:`1px solid ${C.border}`,display:'flex',flexDirection:'column',flexShrink:0,overflowY:'auto'}}>
+    <div style={{width:216,background:C.sbg,borderRight:`1px solid ${C.border}`,display:'flex',flexDirection:'column',flexShrink:0,height:'100vh',maxHeight:'100vh',overflow:'hidden'}}>
       <div style={{padding:'24px 20px 12px',position:'relative'}}>
         <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:14,color:C.gold,letterSpacing:'1.5px',fontWeight:600}}>THE FELT BODY</div>
         <div onClick={()=>setModeMenuOpen(o=>!o)}
@@ -198,12 +203,15 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
           </div>
         )}
       </div>
+      {/* Scrollable nav region: brand header above stays fixed, sign-out below
+          stays pinned, this middle scrolls when the item list outgrows the
+          viewport so nothing becomes unreachable. */}
+      <div style={{flex:1,minHeight:0,overflowY:'auto'}}>
       <Item name="projects" label="Projects" icon="❖" count={activeProjects} isActive={view.name==='projects' || view.name==='project_detail'} />
       <Item name="dashboard" label="Dashboard" icon="◈" />
       {!isPersonal && <Item name="inbox" label="Inbox" icon="✉" badge={inboxCount} />}
       {!isPersonal && <Item name="threads" label="Threads" icon="✦" badge={threadsUnread} />}
       {!isPersonal && <Item name="web_activity" label="Web Activity" icon="◇" badge={webUnread} />}
-      {!isPersonal && <Item name="documents" label="Documents" icon="📎" />}
       {isPersonal && <Item name="households" label="Households" icon="⌂" />}
       {isPersonal && <Item name="birthdays" label="Birthdays" icon="🎂" />}
 
@@ -348,15 +356,21 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
       {!isPersonal && openSection==='finance' && (
         <>
           <Item name="invoices" label="Invoices" icon="⬡" badge={unpaidInvoices} indent />
+          <Item name="payments" label="Payments" icon="💷" indent />
+          <Item name="packages_all" label="Packages" icon="🎟" indent />
         </>
       )}
 
-      {!isPersonal && <Item name="comms_log" label="Recent Activity" icon="◷" />}
-      {!isPersonal && <Item name="package_templates" label="Package Templates" icon="❒" />}
+      {/* Bottom section — ordered top-to-bottom per spec. Documents moved here
+          from the top group. */}
       {!isPersonal && <Item name="email_templates" label="Email Templates" icon="✉" />}
+      {!isPersonal && <Item name="package_templates" label="Package Templates" icon="❒" />}
+      {!isPersonal && <Item name="documents" label="Documents" icon="📎" />}
+      {!isPersonal && <Item name="comms_log" label="Recent Activity" icon="◷" />}
+      </div>
 
       {/* Pushed to the bottom; flex:column on the parent + marginTop:auto on this wrapper */}
-      <div style={{marginTop:'auto',padding:'14px 20px',borderTop:`1px solid ${C.border}`}}>
+      <div style={{padding:'14px 20px',borderTop:`1px solid ${C.border}`}}>
         <button onClick={onSignOut}
           style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,
             cursor:'pointer',borderRadius:4,fontSize:11,padding:'6px 10px',width:'100%',
@@ -4065,7 +4079,19 @@ export function FormsList({ forms, classes, onAdd, onUpdate, onRemove, onMove })
 
 export function InvoiceList({ invoices, orgs, nav, onAdd }) {
   const isMobile = useIsMobile();
+  // Quick filter by status. 'all' plus each status that actually appears, so
+  // the chip bar never offers an empty bucket. Mirrors the org-scoped invoice
+  // filter in OrgDetail. effectiveInvStatus falls back to 'all' if the selected
+  // status disappears (e.g. last 'sent' invoice gets paid while filtered).
+  const [invStatus, setInvStatus] = useState('all');
+  const statusOrder = ['draft','sent','paid'];
+  const presentStatuses = useMemo(
+    ()=>statusOrder.filter(s=>invoices.some(i=>i.status===s)),
+    [invoices]
+  );
+  const effectiveInvStatus = (invStatus!=='all' && !presentStatuses.includes(invStatus)) ? 'all' : invStatus;
   const sorted=[...invoices].sort((a,b)=>b.issueDate.localeCompare(a.issueDate));
+  const visible = effectiveInvStatus==='all' ? sorted : sorted.filter(i=>i.status===effectiveInvStatus);
   const total = invoices.reduce((s,i)=>s+(i.total||0),0);
   const outstanding = invoices.filter(i=>i.status!=='paid').reduce((s,i)=>s+(i.total||0),0);
   return (
@@ -4076,8 +4102,19 @@ export function InvoiceList({ invoices, orgs, nav, onAdd }) {
         <Stat label="Outstanding" value={fmtMoney(outstanding)} sub={`${invoices.filter(i=>i.status==='sent').length} sent, awaiting payment`} />
         <Stat label="Paid" value={fmtMoney(total-outstanding)} sub={`${invoices.filter(i=>i.status==='paid').length} invoices`} />
       </div>
-      {sorted.length?<div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
-        {sorted.map(inv=>{
+      {/* Status filter chips — 'All' + each present status, with counts. */}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:16}}>
+        {['all',...presentStatuses].map(s=>{
+          const active=effectiveInvStatus===s;
+          const sm = s==='all' ? null : (INV_STATUS[s]||INV_STATUS.draft);
+          const count = s==='all' ? invoices.length : invoices.filter(i=>i.status===s).length;
+          return <button key={s} onClick={()=>setInvStatus(s)} style={{background:active?(sm?sm.bg:C.surf):'transparent',color:active?(sm?sm.color:C.text):C.muted,border:`1px solid ${active?(sm?sm.color+'88':C.border):C.border}`,borderRadius:4,fontSize:11,fontWeight:500,letterSpacing:'0.3px',padding:'4px 10px',cursor:'pointer',fontFamily:"'Jost',sans-serif",display:'inline-flex',alignItems:'center',gap:5}}>
+            <span>{s==='all'?'All':sm.label}</span><span style={{opacity:0.55,fontSize:10}}>{count}</span>
+          </button>;
+        })}
+      </div>
+      {visible.length?<div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+        {visible.map(inv=>{
           const org=orgs.find(o=>o.id===inv.orgId);
           const sm=INV_STATUS[inv.status]||INV_STATUS.draft;
           return (
@@ -4091,7 +4128,7 @@ export function InvoiceList({ invoices, orgs, nav, onAdd }) {
             </Row>
           );
         })}
-      </div>:<Empty text="No invoices yet." action="Create one →" onAction={onAdd} />}
+      </div>:<Empty text={invoices.length?`No ${effectiveInvStatus==='all'?'':INV_STATUS[effectiveInvStatus]?.label.toLowerCase()+' '}invoices.`:"No invoices yet."} action={invoices.length?undefined:"Create one →"} onAction={invoices.length?undefined:onAdd} />}
     </div>
   );
 }
@@ -4157,6 +4194,224 @@ export function InvoiceDetail({ inv, org, onEdit, onStatusChange, nav, backInfo 
           {inv.status!=='draft'&&<Btn variant="ghost" onClick={()=>onStatusChange('draft')}>Revert to Draft</Btn>}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── PAYMENTS (ALL) ────────────────────────────────────────────────────────────
+// Cross-person view of every payment received, regardless of who paid. Derived
+// at read-time from the same two sources as PersonDetail's Payments tab, just
+// un-scoped from a single person:
+//   • drop-in payments  (attendance.paymentStatus==='paid', has paidAmount)
+//   • package purchases (packages with a purchase date / amount)
+// Package-funded sessions aren't listed individually — they'd double-count the
+// lump package payment. Each row links to the person. Filter by method (PAY_VIA);
+// drop-ins have no recorded method, so they're grouped under 'unspecified'.
+export function PaymentsView({ attendance, packages, classes, people, nav }) {
+  const isMobile = useIsMobile();
+  const [method, setMethod] = useState('all');
+  const personName = (id) => people.find(p=>p.id===id)?.name || '—';
+
+  const allPayments = useMemo(() => {
+    const rows = [];
+    attendance.forEach(a => {
+      if (a.paymentStatus !== 'paid') return;
+      const cls = classes.find(c => c.id === a.classId);
+      if (!cls) return;
+      rows.push({ id:`drop_${a.id}`, kind:'drop_in', date:cls.date, amount:a.paidAmount ?? null,
+        title:cls.name, personId:a.personId, classId:cls.id, method:a.paidVia || null });
+    });
+    packages.forEach(pk => {
+      if (pk.datePurchased || pk.amountPaid) {
+        rows.push({ id:`pkg_${pk.id}`, kind:'package', date:pk.datePurchased, amount:pk.amountPaid ?? null,
+          title:pk.name, personId:pk.personId, packageId:pk.id, method:pk.paidVia || null });
+      }
+    });
+    return rows.sort((x,y)=> new Date(y.date||0) - new Date(x.date||0));
+  }, [attendance, packages, classes]);
+
+  // Methods actually present, in PAY_VIA order, plus a synthetic 'unspecified'
+  // bucket for drop-ins with no recorded method.
+  const methodKeys = Object.keys(PAY_VIA);
+  const hasUnspecified = allPayments.some(r => !r.method);
+  const presentMethods = methodKeys.filter(m => allPayments.some(r => r.method === m));
+  const methodFilters = ['all', ...presentMethods, ...(hasUnspecified ? ['unspecified'] : [])];
+  const methodLabel = (m) => m==='all' ? 'All' : m==='unspecified' ? 'Unspecified' : (PAY_VIA[m] || m);
+
+  const visible = method==='all' ? allPayments
+    : method==='unspecified' ? allPayments.filter(r=>!r.method)
+    : allPayments.filter(r=>r.method===method);
+  const total = visible.reduce((s,r)=>s+(r.amount||0),0);
+
+  return (
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
+      <PageHead>Payments</PageHead>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:24}}>
+        <Stat label="Total Received" value={fmtMoney(allPayments.reduce((s,r)=>s+(r.amount||0),0))} sub={`${allPayments.length} payment${allPayments.length!==1?'s':''}`} />
+        <Stat label="From Packages" value={fmtMoney(allPayments.filter(r=>r.kind==='package').reduce((s,r)=>s+(r.amount||0),0))} sub={`${allPayments.filter(r=>r.kind==='package').length} purchases`} />
+        <Stat label="From Drop-ins" value={fmtMoney(allPayments.filter(r=>r.kind==='drop_in').reduce((s,r)=>s+(r.amount||0),0))} sub={`${allPayments.filter(r=>r.kind==='drop_in').length} sessions`} />
+      </div>
+      {/* Method filter chips */}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:16}}>
+        {methodFilters.map(m=>{
+          const active=method===m;
+          const count = m==='all' ? allPayments.length : m==='unspecified' ? allPayments.filter(r=>!r.method).length : allPayments.filter(r=>r.method===m).length;
+          return <button key={m} onClick={()=>setMethod(m)} style={{background:active?C.surf:'transparent',color:active?C.text:C.muted,border:`1px solid ${active?C.border:C.border}`,borderRadius:4,fontSize:11,fontWeight:500,letterSpacing:'0.3px',padding:'4px 10px',cursor:'pointer',fontFamily:"'Jost',sans-serif",display:'inline-flex',alignItems:'center',gap:5}}>
+            <span>{methodLabel(m)}</span><span style={{opacity:0.55,fontSize:10}}>{count}</span>
+          </button>;
+        })}
+      </div>
+      {visible.length?<>
+        <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+          {visible.map(r=>{
+            const isPkg = r.kind==='package';
+            const tagColor = isPkg ? '#4db879' : '#6ba3d4';
+            const tagBg = isPkg ? '#132413' : '#131d2a';
+            return (
+              <Row key={r.id} onClick={()=>r.personId && nav('person_detail',{personId:r.personId})}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{color:C.text,fontSize:14,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{personName(r.personId)}</div>
+                  <div style={{color:C.muted,fontSize:12,marginTop:2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                    {r.title} · {r.date?fmt(r.date):'—'}{r.method?` · ${PAY_VIA[r.method]||r.method}`:''}
+                  </div>
+                </div>
+                <span style={{background:tagBg,color:tagColor,fontSize:10,fontWeight:600,padding:'2px 8px',borderRadius:20,letterSpacing:'0.7px',textTransform:'uppercase',flexShrink:0}}>{isPkg?'Package':'Drop-in'}</span>
+                <div style={{color:C.gold,fontSize:15,fontWeight:500,flexShrink:0,minWidth:64,textAlign:'right'}}>{r.amount!=null?fmtMoney(r.amount):'—'}</div>
+              </Row>
+            );
+          })}
+        </div>
+        <div style={{display:'flex',justifyContent:'flex-end',marginTop:12,padding:'0 4px'}}>
+          <div style={{color:C.muted,fontSize:13}}>{method==='all'?'Total':methodLabel(method)} <span style={{color:C.gold,fontWeight:600,marginLeft:6,fontSize:15}}>{fmtMoney(total)}</span></div>
+        </div>
+      </>:<Empty text={allPayments.length?`No ${methodLabel(method).toLowerCase()} payments.`:"No payments recorded yet."} />}
+    </div>
+  );
+}
+
+// ─── PACKAGES (ALL) ────────────────────────────────────────────────────────────
+// Cross-person view of every package sold, regardless of who bought it. Reads
+// from the already-loaded packages state (which carries totalUsed /
+// sessionsRemaining from the packages_with_usage view). Each row links to the
+// person and shows usage progress. Filter by package type.
+export function PackagesView({ packages, people, nav }) {
+  const isMobile = useIsMobile();
+  const [pkgType, setPkgType] = useState('all');
+  const [pkgStatus, setPkgStatus] = useState('all');
+  const personName = (id) => people.find(p=>p.id===id)?.name || '—';
+
+  // Lifecycle status, computed at read time. Orthogonal to the type filter, so
+  // any status can be viewed under any type.
+  //   • expired   — has an expiry date in the past (regardless of sessions left)
+  //   • completed — finite package with no sessions remaining (and not expired)
+  //   • active    — everything else (sessions left or countless, not expired)
+  // Expiry wins over completion: a package past its date is done either way.
+  const pkgStatusOf = (pk) => {
+    const todayStr = today();
+    if (pk.expiresAt && String(pk.expiresAt) < todayStr) return 'expired';
+    if (!isCountlessPkg(pk.type)) {
+      const used = pk.totalUsed ?? pk.sessionsUsed ?? 0;
+      const remaining = pk.sessionsRemaining ?? ((pk.totalSessions||0)-used);
+      if (remaining <= 0) return 'completed';
+    }
+    return 'active';
+  };
+
+  const sorted = useMemo(
+    ()=>[...packages].sort((a,b)=> new Date(b.datePurchased||0) - new Date(a.datePurchased||0)),
+    [packages]
+  );
+  const typeOrder = Object.keys(PKG_TYPES);
+  const presentTypes = typeOrder.filter(t => packages.some(p=>p.type===t));
+  const typeFilters = ['all', ...presentTypes];
+
+  // Apply both filters. Type filter narrows first, then status.
+  const byType = pkgType==='all' ? sorted : sorted.filter(p=>p.type===pkgType);
+  const visible = pkgStatus==='all' ? byType : byType.filter(p=>pkgStatusOf(p)===pkgStatus);
+
+  // Status chip counts respect the active type filter (so counts add up to the
+  // type-filtered total, not the grand total).
+  const statusMeta = {
+    active:    { label:'Active',    color:'#4db879' },
+    expired:   { label:'Expired',   color:'#c97070' },
+    completed: { label:'Completed', color:'#6ba3d4' },
+  };
+  const statusCount = (s) => s==='all' ? byType.length : byType.filter(p=>pkgStatusOf(p)===s).length;
+
+  const totalValue = visible.reduce((s,p)=>s+(p.amountPaid||0),0);
+  const activeCount = packages.filter(p=>pkgStatusOf(p)==='active').length;
+
+  return (
+    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
+      <PageHead>Packages</PageHead>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:24}}>
+        <Stat label="Total Sold" value={String(packages.length)} sub="all time" />
+        <Stat label="Total Value" value={fmtMoney(packages.reduce((s,p)=>s+(p.amountPaid||0),0))} />
+        <Stat label="Active" value={String(activeCount)} sub="not expired or used up" />
+      </div>
+      {/* Type filter chips */}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+        {typeFilters.map(t=>{
+          const active=pkgType===t;
+          const color = t==='all' ? null : (PKG_TYPES[t]?.color || C.muted);
+          const count = t==='all' ? packages.length : packages.filter(p=>p.type===t).length;
+          return <button key={t} onClick={()=>setPkgType(t)} style={{background:active?(color?color+'22':C.surf):'transparent',color:active?(color||C.text):C.muted,border:`1px solid ${active?(color?color+'88':C.border):C.border}`,borderRadius:4,fontSize:11,fontWeight:500,letterSpacing:'0.3px',padding:'4px 10px',cursor:'pointer',fontFamily:"'Jost',sans-serif",display:'inline-flex',alignItems:'center',gap:5}}>
+            <span>{t==='all'?'All':(PKG_TYPES[t]?.label||t)}</span><span style={{opacity:0.55,fontSize:10}}>{count}</span>
+          </button>;
+        })}
+      </div>
+      {/* Status sub-filter — runs under whichever type filter is active */}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:16,alignItems:'center'}}>
+        <span style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',textTransform:'uppercase',marginRight:2}}>Status</span>
+        {['all','active','expired','completed'].map(s=>{
+          const active=pkgStatus===s;
+          const meta = s==='all' ? null : statusMeta[s];
+          const count = statusCount(s);
+          return <button key={s} onClick={()=>setPkgStatus(s)} style={{background:active?(meta?meta.color+'22':C.surf):'transparent',color:active?(meta?meta.color:C.text):C.muted,border:`1px solid ${active?(meta?meta.color+'88':C.border):C.border}`,borderRadius:4,fontSize:11,fontWeight:500,letterSpacing:'0.3px',padding:'4px 10px',cursor:'pointer',fontFamily:"'Jost',sans-serif",display:'inline-flex',alignItems:'center',gap:5}}>
+            <span>{s==='all'?'All':meta.label}</span><span style={{opacity:0.55,fontSize:10}}>{count}</span>
+          </button>;
+        })}
+      </div>
+      {visible.length?<>
+        <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+          {visible.map(pk=>{
+            const color = PKG_TYPES[pk.type]?.color || C.muted;
+            const countless = isCountlessPkg(pk.type);
+            const used = pk.totalUsed ?? pk.sessionsUsed ?? 0;
+            const remaining = pk.sessionsRemaining ?? ((pk.totalSessions||0)-used);
+            const pct = (!countless && pk.totalSessions) ? Math.min(100, Math.round((used/pk.totalSessions)*100)) : 0;
+            const st = pkgStatusOf(pk);
+            const stMeta = statusMeta[st];
+            return (
+              <Row key={pk.id} onClick={()=>pk.personId && nav('person_detail',{personId:pk.personId})}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{color:C.text,fontSize:14,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{personName(pk.personId)}</div>
+                  <div style={{color:C.muted,fontSize:12,marginTop:2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                    {pk.name} · {pk.datePurchased?fmt(pk.datePurchased):'—'}{pk.paidVia?` · ${PAY_VIA[pk.paidVia]||pk.paidVia}`:''}{pk.expiresAt?` · expires ${fmt(pk.expiresAt)}`:''}
+                  </div>
+                  {!countless && pk.totalSessions>0 && (
+                    <div style={{marginTop:6,maxWidth:220}}>
+                      <div style={{height:4,background:C.border,borderRadius:2,overflow:'hidden'}}>
+                        <div style={{height:'100%',width:`${pct}%`,background:color}} />
+                      </div>
+                      <div style={{color:C.muted,fontSize:10.5,marginTop:3}}>{used}/{pk.totalSessions} used · {Math.max(0,remaining)} left</div>
+                    </div>
+                  )}
+                  {countless && <div style={{color:C.muted,fontSize:10.5,marginTop:4}}>Unlimited</div>}
+                </div>
+                <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4,flexShrink:0}}>
+                  <span style={{background:color+'22',color:color,fontSize:10,fontWeight:600,padding:'2px 8px',borderRadius:20,letterSpacing:'0.7px',textTransform:'uppercase'}}>{PKG_TYPES[pk.type]?.label||pk.type}</span>
+                  <span style={{background:stMeta.color+'22',color:stMeta.color,fontSize:9,fontWeight:600,padding:'1px 7px',borderRadius:20,letterSpacing:'0.6px',textTransform:'uppercase'}}>{stMeta.label}</span>
+                </div>
+                <div style={{color:C.gold,fontSize:15,fontWeight:500,flexShrink:0,minWidth:64,textAlign:'right'}}>{pk.amountPaid!=null?fmtMoney(pk.amountPaid):'—'}</div>
+              </Row>
+            );
+          })}
+        </div>
+        <div style={{display:'flex',justifyContent:'flex-end',marginTop:12,padding:'0 4px'}}>
+          <div style={{color:C.muted,fontSize:13}}>{pkgType==='all'?'Total value':(PKG_TYPES[pkgType]?.label||pkgType)+' value'} <span style={{color:C.gold,fontWeight:600,marginLeft:6,fontSize:15}}>{fmtMoney(totalValue)}</span></div>
+        </div>
+      </>:<Empty text={packages.length?`No ${pkgStatus==='all'?'':statusMeta[pkgStatus].label.toLowerCase()+' '}${pkgType==='all'?'':(PKG_TYPES[pkgType]?.label||pkgType).toLowerCase()+' '}packages.`.replace(/\s+/g,' '):"No packages sold yet."} />}
     </div>
   );
 }

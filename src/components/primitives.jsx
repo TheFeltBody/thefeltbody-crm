@@ -92,7 +92,15 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
         )}
       </div>
       
-      <div style={{color:textColor,fontSize:14,lineHeight:1.7,opacity:completed?0.75:1}}>{note.text}</div>
+      {note.subject && (
+        <div style={{color:textColor,fontSize:14,fontWeight:600,lineHeight:1.5,marginBottom:note.text?3:0,opacity:completed?0.75:1}}>{note.subject}</div>
+      )}
+      {note.text && (
+        <div style={{color:textColor,fontSize:14,lineHeight:1.7,opacity:completed?0.75:1}}>{note.text}</div>
+      )}
+      {!note.subject && !note.text && (
+        <div style={{color:C.muted,fontSize:13,fontStyle:'italic',opacity:0.7}}>(no details)</div>
+      )}
       {note.actionDate && (
         <div style={{display:'flex',alignItems:'center',gap:8,marginTop:9,flexWrap:'wrap'}} onClick={e=>e.stopPropagation()}>
           {editingDate && onUpdateActionDate && !completed ? (
