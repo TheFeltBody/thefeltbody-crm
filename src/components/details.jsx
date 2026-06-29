@@ -79,6 +79,22 @@ export function ProjectDetail({ project, notes, people, nav, backInfo,
     onUpdateProject(project.id, { name: project.name, status: project.status, notes: notesDraft, completedAt: project.completedAt });
   };
 
+  // Copy open to-dos to clipboard as a bulleted list — project name as a heading,
+  // one "• " line per open item, due date appended inline when set. Brief
+  // "Copied" confirmation on the button via copied state.
+  const [copied, setCopied] = useState(false);
+  const copyOpenTodos = async () => {
+    const lines = openTodos.map(t =>
+      `• ${t.text}${t.actionDate ? ` (due ${t.actionDate})` : ''}`
+    );
+    const text = `${project.name}\n${lines.join('\n')}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch { /* clipboard unavailable — no-op */ }
+  };
+
   const isDone = project.status === 'done';
   const inputStyle = {
     background:C.card, border:`1px solid ${C.border}`, borderRadius:6,
@@ -168,9 +184,14 @@ export function ProjectDetail({ project, notes, people, nav, backInfo,
       <PageHead back={backInfo ? backInfo.label : 'Projects'} onBack={()=>nav('projects')} sticky
         subInfo={isDone ? 'completed' : `${openTodos.length} open`}
         action={
-          isDone
-            ? <Btn variant="ghost" small onClick={()=>onSetStatus(project.id,'active')}>Reopen</Btn>
-            : <Btn variant="secondary" small onClick={()=>onSetStatus(project.id,'done')}>Mark done</Btn>
+          <div style={{display:'flex', gap:8, alignItems:'center'}}>
+            {openTodos.length > 0 && (
+              <Btn variant="ghost" small onClick={copyOpenTodos}>{copied ? 'Copied ✓' : 'Copy'}</Btn>
+            )}
+            {isDone
+              ? <Btn variant="ghost" small onClick={()=>onSetStatus(project.id,'active')}>Reopen</Btn>
+              : <Btn variant="secondary" small onClick={()=>onSetStatus(project.id,'done')}>Mark done</Btn>}
+          </div>
         }>
         {editingName ? (
           <input

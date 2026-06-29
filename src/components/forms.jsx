@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { C, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, INTERACTION_KINDS, PAYMENT_MODELS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, SOURCES, TYPE_ICONS, TYPE_PALETTE } from "../lib/constants.js";
 import { addDays, addMonths, BIRTHDAY_NO_YEAR, classKindKey, currentHourTime, fillTemplate, fmt, fmtMoney, isCountlessPkg, makeBirthdayNoYear, nextInvoiceNumber, packageRemaining, parseBirthday, primaryRole, scoreTemplates, today, uid, useTypes } from "../lib/helpers.jsx";
 import { Avatar, Btn, FI, KindBadge, Modal, RoleBadge, SearchSelect } from "./primitives.jsx";
@@ -599,15 +599,37 @@ export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onClose, or
 
 export function AddToRegisterForm({ onSave, onClose, people, classId, existing, attendance, classes, cls, onAddNew }) {
   const [selected, setSelected] = useState(null);
-  const available = people.filter(p=>p.status!=='inactive');
+  // Names added this session, kept on-screen so the modal stays open for adding
+  // several people in a row. `existing` (from the parent) is captured once at
+  // mount via initialExisting so newly-added rows still render correctly until
+  // the modal is closed and the parent re-reads attendance.
+  const [addedNames, setAddedNames] = useState([]);
+  const [addedIds, setAddedIds] = useState(()=>new Set());
+  const initialExisting = useRef(existing);
+  const available = people.filter(p=>p.status!=='inactive' && !addedIds.has(p.id));
+
+  const handleAdd = () => {
+    if (!selected) return;
+    onSave(classId, selected.id);
+    setAddedNames(prev => [...prev, selected.name]);
+    setAddedIds(prev => { const n=new Set(prev); n.add(selected.id); return n; });
+    setSelected(null); // clear the picker, keep the modal open for the next person
+  };
+
   return (
     <Modal title="Add to Register" onClose={onClose} wide topAlign>
-      <SearchSelect people={available} onSelect={p=>setSelected(p)} attendance={attendance} classes={classes} contextSeriesId={cls?.seriesId} existing={existing} />
+      <SearchSelect people={available} onSelect={p=>setSelected(p)} attendance={attendance} classes={classes} contextSeriesId={cls?.seriesId} existing={initialExisting.current} />
       {selected && (
         <div style={{marginTop:14,background:C.active,border:`1px solid ${C.gold}55`,borderRadius:6,padding:'10px 14px',display:'flex',alignItems:'center',gap:12}}>
           <Avatar name={selected.name} size={28} role={primaryRole(selected)} />
           <span style={{color:C.text,fontSize:14,flex:1}}>{selected.name}</span>
-          <Btn small onClick={()=>{onSave(classId,selected.id);onClose();}}>Add to register</Btn>
+          <Btn small onClick={handleAdd}>Add to register</Btn>
+        </div>
+      )}
+      {addedNames.length > 0 && (
+        <div style={{marginTop:14,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 14px'}}>
+          <div style={{color:C.green,fontSize:12,fontWeight:600,marginBottom:6}}>Added · {addedNames.length}</div>
+          <div style={{color:C.text,fontSize:13,lineHeight:1.6}}>{addedNames.join(', ')}</div>
         </div>
       )}
       {onAddNew && !selected && (
@@ -616,6 +638,9 @@ export function AddToRegisterForm({ onSave, onClose, people, classId, existing, 
           <Btn variant="ghost" small onClick={onAddNew}>+ Add new contact</Btn>
         </div>
       )}
+      <div style={{marginTop:18,paddingTop:16,borderTop:`1px solid ${C.border}`,display:'flex',justifyContent:'flex-end'}}>
+        <Btn variant="secondary" small onClick={onClose}>{addedNames.length > 0 ? 'Done' : 'Close'}</Btn>
+      </div>
     </Modal>
   );
 }

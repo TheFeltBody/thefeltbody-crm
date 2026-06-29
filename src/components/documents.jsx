@@ -277,6 +277,11 @@ export function CareHomeResourcesView({ resources, onSave, nav }) {
   const [saving, setSaving] = useState(false);
   const [copiedId, setCopiedId] = useState(null);
   const [err, setErr] = useState('');
+  // Read-mode: scripts collapse to title-only so the page is a scannable list
+  // rather than a wall of text (esp. on mobile). Click a card to expand its body;
+  // the section header offers expand-all / collapse-all.
+  const [openScripts, setOpenScripts] = useState(()=>new Set());
+  const toggleScript = (id) => setOpenScripts(prev => { const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
 
   // Keep draft in sync if the setting reloads underneath us while not editing.
   useEffect(() => { if (!editing) setDraft(initial); /* eslint-disable-next-line */ }, [resources]);
@@ -353,17 +358,31 @@ export function CareHomeResourcesView({ resources, onSave, nav }) {
 
             {initial.scripts.length > 0 && (
               <div>
-                <div style={{ color: C.gold, fontSize: 10, fontWeight: 700, letterSpacing: '1.8px', textTransform: 'uppercase', marginBottom: 10 }}>Phone Call Scripts</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <div style={{ color: C.gold, fontSize: 10, fontWeight: 700, letterSpacing: '1.8px', textTransform: 'uppercase' }}>Phone Call Scripts</div>
+                  <span onClick={() => setOpenScripts(prev => prev.size === initial.scripts.length ? new Set() : new Set(initial.scripts.map(s=>s.id)))}
+                    style={{ color: C.muted, fontSize: 11, cursor: 'pointer', userSelect: 'none', letterSpacing: '0.3px' }}>
+                    {openScripts.size === initial.scripts.length ? 'Collapse all' : 'Expand all'}
+                  </span>
+                </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {initial.scripts.map(s => (
+                  {initial.scripts.map(s => {
+                    const open = openScripts.has(s.id);
+                    return (
                     <div key={s.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                        <span style={{ color: C.text, fontSize: 14, fontWeight: 600, fontFamily: "'Cormorant Garamond',serif" }}>{s.title || 'Untitled script'}</span>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                        <div onClick={() => toggleScript(s.id)} style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, cursor: 'pointer', userSelect: 'none' }}>
+                          <span style={{ fontSize: 10, color: C.gold, transition: 'transform 0.18s', transform: open ? 'rotate(0deg)' : 'rotate(-90deg)', display: 'inline-flex' }}>▾</span>
+                          <span style={{ color: C.text, fontSize: 14, fontWeight: 600, fontFamily: "'Cormorant Garamond',serif", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title || 'Untitled script'}</span>
+                        </div>
                         <Btn small variant="ghost" onClick={() => copy(s.body, s.id)}>{copiedId === s.id ? 'Copied ✓' : 'Copy'}</Btn>
                       </div>
-                      <div style={{ color: C.text, fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap', opacity: 0.92 }}>{s.body}</div>
+                      {open && (
+                        <div style={{ color: C.text, fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap', opacity: 0.92, marginTop: 12 }}>{s.body}</div>
+                      )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}

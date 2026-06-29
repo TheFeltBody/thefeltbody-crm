@@ -3505,6 +3505,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                   <div key={c.id} onClick={()=>nav('class_detail',{classId:c.id})}
                     style={{
                       position:'absolute', top:block.top, height:block.height, left:3, right:3,
+                      zIndex:2,
                       background: meta.color+'22',
                       border:`1px solid ${meta.color}66`,
                       borderLeft:`3px solid ${meta.color}`,
@@ -3514,8 +3515,8 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                       transition:'all 0.12s',
                       display:'flex', flexDirection:'column', justifyContent: compact ? 'center' : 'flex-start',
                     }}
-                    onMouseEnter={e=>{e.currentTarget.style.background=meta.color+'33';e.currentTarget.style.zIndex=3;}}
-                    onMouseLeave={e=>{e.currentTarget.style.background=meta.color+'22';e.currentTarget.style.zIndex=1;}}
+                    onMouseEnter={e=>{e.currentTarget.style.background=meta.color+'33';e.currentTarget.style.zIndex=20;}}
+                    onMouseLeave={e=>{e.currentTarget.style.background=meta.color+'22';e.currentTarget.style.zIndex=2;}}
                     title={tooltipFor(c)}>
                     <div style={{color:C.text,fontSize:11,fontWeight:500,lineHeight:1.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{c.name}</div>
                     {!compact && c.location && (
@@ -3534,7 +3535,12 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                 const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
                 const calLbl = DIARY_CALENDARS[e.calendar]?.label || '';
                 const compact = block.height < 28;
-                const z = 2 + orderOf(e.calendar); // base stack rank by layer order
+                // Z-banding so greyed (off-mode) diary never covers coloured
+                // content. Off-mode diary sits at the bottom (z=1, below class
+                // blocks at z=2). On-mode coloured diary sits above classes
+                // (z=4+), with layer order ranking the live layers among
+                // themselves. Last-toggled-on still wins within the coloured band.
+                const z = offMode ? 1 : (4 + orderOf(e.calendar));
                 const onClick = () => {
                   if(onEditDiary) onEditDiary(e.__note);
                   else if(e.__personId) nav('person_detail',{personId:e.__personId,highlightNoteId:e.__noteId});
@@ -3909,11 +3915,17 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
 // ─── PAYMENT EDITOR ───────────────────────────────────────────────────────────
 
 export function ClassLog({ cls, forms, onUpdateClass, nav }) {
+  const isMobile = useIsMobile();
   const worked = cls.formsWorked || [];
   const reflection = cls.reflection || '';
   const [draftReflection, setDraftReflection] = useState(reflection);
   const [editing, setEditing] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
+  // The session-log panel (forms-worked pills + reflection) is tall and on
+  // mobile pushes the Register below the fold. Collapse it by default on mobile
+  // so the people are reachable; desktop stays expanded. Header row toggles it;
+  // a one-line summary shows when collapsed so it's still informative.
+  const [collapsed, setCollapsed] = useState(isMobile);
 
   // Keep draft in sync if class changes underneath us
   useEffect(()=>{ setDraftReflection(reflection); },[reflection,cls.id]);
@@ -3933,11 +3945,23 @@ export function ClassLog({ cls, forms, onUpdateClass, nav }) {
 
   return (
     <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'18px 22px',marginBottom:24}}>
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
-        <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,color:C.gold,fontWeight:600}}>Session log</div>
-        {savedFlash && <div style={{color:C.green,fontSize:11,letterSpacing:'1px'}}>✓ SAVED</div>}
+      <div onClick={()=>setCollapsed(c=>!c)}
+        style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:collapsed?0:14,cursor:'pointer',userSelect:'none'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <span style={{fontSize:11,color:C.gold,transition:'transform 0.18s',transform:collapsed?'rotate(-90deg)':'rotate(0deg)',display:'inline-flex'}}>▾</span>
+          <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,color:C.gold,fontWeight:600}}>Session log</div>
+        </div>
+        {savedFlash ? <div style={{color:C.green,fontSize:11,letterSpacing:'1px'}}>✓ SAVED</div>
+          : collapsed && (worked.length || reflection) ? (
+            <div style={{color:C.muted,fontSize:11,letterSpacing:'0.3px'}}>
+              {worked.length ? `${worked.length} form${worked.length===1?'':'s'}` : ''}
+              {worked.length && reflection ? ' · ' : ''}
+              {reflection ? 'reflection ✓' : ''}
+            </div>
+          ) : null}
       </div>
 
+      {!collapsed && (<>
       <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:9}}>FORMS WORKED</div>
       {forms.length ? (
         <div style={{display:'flex',flexWrap:'wrap',gap:7,marginBottom:18}}>
@@ -3990,6 +4014,7 @@ export function ClassLog({ cls, forms, onUpdateClass, nav }) {
           + Add a reflection on this class
         </div>
       )}
+      </>)}
     </div>
   );
 }
@@ -4774,7 +4799,10 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
                   const offMode = e.isPersonal !== personalMode;
                   const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
                   const calLbl = DIARY_CALENDARS[e.calendar]?.label || '';
-                  const z = 2 + orderOf(e.calendar);
+                  // Off-mode (greyed) diary drops below the class layer so it
+                  // never covers coloured content; on-mode coloured diary sits
+                  // above, ranked by layer order. Mirrors the Week view banding.
+                  const z = offMode ? 0 : (4 + orderOf(e.calendar));
                   const onClick = () => {
                     if(onEditDiary) onEditDiary(e.__note);
                     else if(e.__personId) nav('person_detail',{personId:e.__personId});
