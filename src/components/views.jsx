@@ -3453,7 +3453,14 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
         {days.map((d,i) => {
           const lbl = dayLabel(d, i);
           const dayItems = weekClasses.filter(c => c.date === d && timeToMin(c.time) !== null);
-          const dayDiary = weekDiaryVisible.filter(e => e.date === d && timeToMin(e.time) !== null);
+          const dayDiaryAll = weekDiaryVisible.filter(e => e.date === d && timeToMin(e.time) !== null);
+          // Split diary by mode so DOM source order reinforces the z-band:
+          // greyed (off-mode) diary paints FIRST (underneath), classes next,
+          // coloured (on-mode) diary last (on top). This makes the layering
+          // correct even if a hover handler transiently bumps z — greyed can
+          // never sit above a class because it's an earlier sibling AND lower z.
+          const dayDiaryGrey = dayDiaryAll.filter(e => (e.isPersonal !== personalMode));
+          const dayDiary     = dayDiaryAll.filter(e => (e.isPersonal === personalMode));
           // Click an empty part of the column → quick-add a diary entry, with the
           // time derived from the click's vertical position (snapped to 30 min).
           const onColumnClick = (ev) => {
@@ -3491,6 +3498,36 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                 if(yMin < 0 || yMin > (gridEnd - gridStart)) return null;
                 return <div style={{position:'absolute',top:(yMin/SLOT_MIN)*SLOT_HEIGHT,left:0,right:0,height:2,background:C.red,zIndex:2,boxShadow:`0 0 4px ${C.red}99`,pointerEvents:'none'}} />;
               })()}
+              {/* Greyed (off-mode) diary — painted UNDER classes. Locked at z=1,
+                  no hover-raise, so it can never obscure a live class block. */}
+              {dayDiaryGrey.map(e => {
+                const block = classBlock(e);
+                if(!block) return null;
+                const compact = block.height < 28;
+                const onClick = () => {
+                  if(onEditDiary) onEditDiary(e.__note);
+                  else if(e.__personId) nav('person_detail',{personId:e.__personId,highlightNoteId:e.__noteId});
+                  else if(e.__projectId) nav('project_detail',{projectId:e.__projectId});
+                };
+                return (
+                  <div key={e.id} onClick={onClick}
+                    style={{
+                      position:'absolute', top:block.top, height:block.height, left:3, right:3,
+                      zIndex: 1,
+                      background: C.card,
+                      border:`1px dashed ${C.muted}55`,
+                      borderLeft:`3px solid ${C.muted}`,
+                      borderRadius:4, padding: compact ? '1px 6px' : '2px 6px',
+                      cursor:'pointer', overflow:'hidden',
+                      opacity: 0.5,
+                      fontFamily:"'Jost',sans-serif",
+                      display:'flex', flexDirection:'column', justifyContent: compact ? 'center' : 'flex-start',
+                    }}
+                    title={`${e.name}${fmtTime(e.time)?` · ${fmtTime(e.time)} · ${e.duration} min`:''} · ${e.isPersonal?'personal':'business'}${e.body?`\n\n${e.body}`:''}`}>
+                    <div style={{color:C.muted,fontSize:11,fontWeight:500,lineHeight:1.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',fontStyle:'italic'}}>{e.name}</div>
+                  </div>
+                );
+              })}
               {/* Class blocks — name + venue only, time/details on hover */}
               {dayItems.map(c => {
                 const block = classBlock(c);
@@ -3525,22 +3562,16 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                   </div>
                 );
               })}
-              {/* Diary blocks — colour by personal(blue)/business(gold); greyed +
-                  muted when they belong to the opposite calendar to the current
-                  mode, but still clickable through to the linked contact. */}
+              {/* Diary blocks (on-mode, coloured) — painted ABOVE classes, ranked
+                  by layer order so last-toggled-on wins. Off-mode greyed diary is
+                  handled in the earlier low-z layer, so everything here is live. */}
               {dayDiary.map(e => {
                 const block = classBlock(e);
                 if(!block) return null;
-                const offMode = e.isPersonal !== personalMode;
-                const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
+                const accent = e.isPersonal ? diaryCalColor(e.calendar) : C.gold;
                 const calLbl = DIARY_CALENDARS[e.calendar]?.label || '';
                 const compact = block.height < 28;
-                // Z-banding so greyed (off-mode) diary never covers coloured
-                // content. Off-mode diary sits at the bottom (z=1, below class
-                // blocks at z=2). On-mode coloured diary sits above classes
-                // (z=4+), with layer order ranking the live layers among
-                // themselves. Last-toggled-on still wins within the coloured band.
-                const z = offMode ? 1 : (4 + orderOf(e.calendar));
+                const z = 4 + orderOf(e.calendar); // coloured band, above classes (z=2)
                 const onClick = () => {
                   if(onEditDiary) onEditDiary(e.__note);
                   else if(e.__personId) nav('person_detail',{personId:e.__personId,highlightNoteId:e.__noteId});
@@ -3551,20 +3582,20 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                     style={{
                       position:'absolute', top:block.top, height:block.height, left:3, right:3,
                       zIndex: z,
-                      background: offMode ? C.card : accent+'1e',
-                      border:`1px dashed ${accent}${offMode?'55':'88'}`,
+                      background: accent+'1e',
+                      border:`1px dashed ${accent}88`,
                       borderLeft:`3px solid ${accent}`,
                       borderRadius:4, padding: compact ? '1px 6px' : '2px 6px',
                       cursor:'pointer', overflow:'hidden',
-                      opacity: offMode ? 0.5 : 1,
+                      opacity: 1,
                       fontFamily:"'Jost',sans-serif",
                       transition:'all 0.12s',
                       display:'flex', flexDirection:'column', justifyContent: compact ? 'center' : 'flex-start',
                     }}
-                    onMouseEnter={ev=>{ev.currentTarget.style.opacity=1;ev.currentTarget.style.zIndex=20;}}
-                    onMouseLeave={ev=>{ev.currentTarget.style.opacity=offMode?0.5:1;ev.currentTarget.style.zIndex=z;}}
-                    title={`${e.name}${calLbl&&!offMode?` · ${calLbl}`:''}${fmtTime(e.time)?` · ${fmtTime(e.time)} · ${e.duration} min`:''}${offMode?` · ${e.isPersonal?'personal':'business'}`:''}${e.body?`\n\n${e.body}`:''}`}>
-                    <div style={{color:offMode?C.muted:C.text,fontSize:11,fontWeight:500,lineHeight:1.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',fontStyle:'italic'}}>{e.name}</div>
+                    onMouseEnter={ev=>{ev.currentTarget.style.zIndex=20;}}
+                    onMouseLeave={ev=>{ev.currentTarget.style.zIndex=z;}}
+                    title={`${e.name}${calLbl?` · ${calLbl}`:''}${fmtTime(e.time)?` · ${fmtTime(e.time)} · ${e.duration} min`:''}${e.body?`\n\n${e.body}`:''}`}>
+                    <div style={{color:C.text,fontSize:11,fontWeight:500,lineHeight:1.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',fontStyle:'italic'}}>{e.name}</div>
                   </div>
                 );
               })}

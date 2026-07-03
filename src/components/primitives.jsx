@@ -390,9 +390,18 @@ export function SearchSelect({ people, onSelect, attendance, classes, contextSer
     return sorted.filter(p => p.name.toLowerCase().includes(lq) || (p.email||'').toLowerCase().includes(lq));
   }, [sorted, q]);
   useEffect(() => { setTimeout(()=>inputRef.current?.focus(), 50); }, []);
+  const clear = () => { setQ(''); inputRef.current?.focus(); };
   return (
     <div>
-      <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by name or email..." style={{width:'100%',background:C.card,border:`1px solid ${C.gold}55`,borderRadius:6,color:C.text,fontSize:14,padding:'9px 12px',fontFamily:"'Jost',sans-serif",marginBottom:8}} />
+      <div style={{position:'relative',marginBottom:8}}>
+        <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by name or email..." style={{width:'100%',background:C.card,border:`1px solid ${C.gold}55`,borderRadius:6,color:C.text,fontSize:14,padding:'9px 34px 9px 12px',fontFamily:"'Jost',sans-serif",boxSizing:'border-box'}} />
+        {q!=='' && (
+          <button onClick={clear} title="Clear" aria-label="Clear search"
+            style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:18,lineHeight:1,padding:'2px 6px',fontFamily:"'Jost',sans-serif"}}
+            onMouseEnter={e=>e.currentTarget.style.color=C.text}
+            onMouseLeave={e=>e.currentTarget.style.color=C.muted}>×</button>
+        )}
+      </div>
       {q===''&&<div style={{color:C.muted,fontSize:11,marginBottom:8,letterSpacing:'0.3px'}}>Showing most recently active first</div>}
       <div style={{maxHeight:280,overflowY:'auto',border:`1px solid ${C.border}`,borderRadius:6,background:C.card}}>
         {filtered.length ? filtered.map(p=>(
