@@ -1126,7 +1126,7 @@ export function ContactDatesCard({ anchor, contactDates, onAdd, onUpdate, onRemo
 }
 
 
-export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], orgs, nav, backInfo, highlightNoteId, emailTemplates=[], onSaveAsTemplate, people, households, householdMembers, contactDates=[], onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onAddToCalendar, onSendEmail, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {
+export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], forms=[], orgs, nav, backInfo, highlightNoteId, emailTemplates=[], onSaveAsTemplate, people, households, householdMembers, contactDates=[], onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onAddToCalendar, onSendEmail, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {
   const isMobile = useIsMobile();  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
@@ -1157,6 +1157,11 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
     }
     return list;
   };
+  // Forms worked in a given class, resolved to their names (read-only display
+  // on the Bookings tab — editing forms worked stays on the class detail page's
+  // ClassLog). Missing/deleted form ids are silently dropped.
+  const formsById = useMemo(() => Object.fromEntries(forms.map(f => [f.id, f])), [forms]);
+  const classForms = (cls) => (cls.formsWorked || []).map(id => formsById[id]).filter(Boolean);
   // If the active filter points at a kind with no items (e.g. the last call
   // was deleted and its chip vanished), fall back to showing all — otherwise
   // the user is stranded on an empty list with no chip to click back to.
@@ -1314,7 +1319,12 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
           const payInfo = ps==='paid' ? {t:'paid', c:C.green} : ps==='package' ? {t:'pkg', c:C.blue} : {t:'unpaid', c:C.muted};
           const payHint = orgBilled ? null : <span style={{fontSize:10,color:payInfo.c,opacity:0.85,letterSpacing:'0.3px'}}>{payInfo.t}</span>;
           const cn = classNotes(c);
+          const cf = classForms(c);
           const open = bookingNotesOpen.has(c.id);
+          // Expand toggle now fires on notes OR forms-worked, not notes alone —
+          // a session can have forms tagged with no reflection/notes written yet.
+          const hasExpandable = cn.length>0 || cf.length>0;
+          const previewText = cn[0]?.text || (cf.length ? `Worked: ${cf.map(f=>f.name).join(', ')}` : '');
           // Web-booking badge: true if a booking interaction exists for this
           // person+session that was made online (form-worker writes "via the
           // website" into the booking interaction text). The booking itself is
@@ -1324,15 +1334,25 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
             && (n.personId===person.id || !n.personId)
             && /via the website/i.test(n.text||''));
           return (<div key={c.id}>
-            <div onClick={()=>nav('class_detail',{classId:c.id})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:open?'none':`1px solid ${C.border}`,cursor:'pointer'}}><div><div style={{color:C.text,fontSize:13}}>{c.name}</div><div style={{color:C.muted,fontSize:11}}>{fmt(c.date)}</div></div><div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>{webBooked&&<span title="Booked online via the website" style={{fontSize:9,fontWeight:600,letterSpacing:'0.4px',textTransform:'uppercase',color:INTERACTION_KINDS.booking.color,background:INTERACTION_KINDS.booking.bg,border:`1px solid ${INTERACTION_KINDS.booking.color}33`,borderRadius:4,padding:'2px 6px'}}>🌐 Web</span>}<NoteIndicator count={cn.length} expanded={open} previewText={cn[0]?.text||''} onToggle={()=>toggleBookingNotes(c.id)} />{payHint}<div title={att?.attended?'Attended':'Did not attend'} style={{width:8,height:8,borderRadius:'50%',background:att?.attended?C.green:C.red}} /></div></div>
-            {open && cn.length>0 && (
+            <div onClick={()=>nav('class_detail',{classId:c.id})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:open?'none':`1px solid ${C.border}`,cursor:'pointer'}}><div><div style={{color:C.text,fontSize:13}}>{c.name}</div><div style={{color:C.muted,fontSize:11}}>{fmt(c.date)}</div></div><div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>{webBooked&&<span title="Booked online via the website" style={{fontSize:9,fontWeight:600,letterSpacing:'0.4px',textTransform:'uppercase',color:INTERACTION_KINDS.booking.color,background:INTERACTION_KINDS.booking.bg,border:`1px solid ${INTERACTION_KINDS.booking.color}33`,borderRadius:4,padding:'2px 6px'}}>🌐 Web</span>}<NoteIndicator count={hasExpandable ? (cn.length||1) : 0} expanded={open} previewText={previewText} onToggle={()=>toggleBookingNotes(c.id)} />{payHint}<div title={att?.attended?'Attended':'Did not attend'} style={{width:8,height:8,borderRadius:'50%',background:att?.attended?C.green:C.red}} /></div></div>
+            {open && hasExpandable && (
               <div style={{background:C.surf,borderBottom:`1px solid ${C.border}`,padding:'8px 10px 10px',marginBottom:0}} onClick={e=>e.stopPropagation()}>
+                {cf.length>0 && (
+                  <div style={{display:'flex',flexWrap:'wrap',gap:5,padding:'4px 0 8px'}}>
+                    {cf.map(f=>(
+                      <span key={f.id} style={{background:C.goldBg,border:`1px solid ${C.gold}55`,color:C.gold,borderRadius:20,fontSize:11,fontWeight:500,padding:'2px 9px',letterSpacing:'0.2px'}}>{f.name}</span>
+                    ))}
+                  </div>
+                )}
                 {cn.map(n=>(
                   <div key={n.id} style={{display:'flex',gap:7,padding:'4px 0',color:C.text,fontSize:12,lineHeight:1.55}}>
                     <span style={{opacity:0.7,flexShrink:0}}>{n._reflection?'📔':(INTERACTION_KINDS[n.kind]||INTERACTION_KINDS.note).icon}</span>
                     <span>{n.text}</span>
                   </div>
                 ))}
+                <div onClick={()=>nav('class_detail',{classId:c.id})} style={{marginTop:6,color:C.blue,fontSize:11,cursor:'pointer',display:'inline-block'}}>
+                  Open session →
+                </div>
               </div>
             )}
           </div>);
