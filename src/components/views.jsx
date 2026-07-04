@@ -4670,7 +4670,7 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
   const SLOT_HEIGHT = 15; // a touch tighter than WeekView's 16 to fit more weeks
   const DEFAULT_START = 6*60 + 30;
   const DEFAULT_END = 21*60;
-  const NOTES_LINE_COUNT = 22; // ruled lines on the printed notes page (plain notepaper spacing)
+  const NOTES_LINE_COUNT = 20; // ruled lines printed under each week's calendar, same page
 
   // Normalise a single week's classes + diary into the grid shape, honouring
   // layer visibility. Mirrors WeekView's weekClasses / weekDiaryVisible.
@@ -4754,21 +4754,42 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
     const eS = e.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
     return `${aS} – ${eS}`;
   };
-  // Per-week month/year label, e.g. "July 2026" — same straddle-safe pattern
-  // as WeekView's monthLabel (a week spanning two months shows "Jun – Jul 2026").
-  const weekMonthLabel = (wAnchor, wEnd) => {
-    const a = new Date(wAnchor+'T12:00'), e = new Date(wEnd+'T12:00');
-    if(a.getMonth() === e.getMonth()) return a.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
-    const aMonth = a.toLocaleDateString('en-GB',{month:'short'});
-    const eMonth = e.toLocaleDateString('en-GB',{month:'short',year:'numeric'});
-    return `${aMonth} – ${eMonth}`;
-  };
 
   // ─── One week's grid (header row of days, dates banner, time grid) ──────────
   const WeekBlock = ({ wk, weekIndex }) => {
     const days = Array.from({length:7}, (_,i) => addDays(wk.wAnchor, i));
     return (
-      <div className={`fw-week${weekIndex===2?' fw-week-break':''}`} style={{marginBottom:8}}>
+      <div className={`fw-week${weekIndex===0?' fw-week-first':''}${weekIndex===2?' fw-week-break':''}`} style={{marginBottom:8}}>
+        {/* Print-only per-page header: title + THIS week's own range + layer
+            chips, plus a Mon–Sun day row — so each printed page (week 1 on
+            page 1, week 2 on page 2) is fully self-labelled. Hidden on screen;
+            the shared on-screen header/day row still covers all three weeks. */}
+        <div className="fw-page-head" style={{display:'none'}}>
+          <div className={`fw-print-head${showTitle?'':' fw-hide-title'}`}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12}}>
+              <div style={{minWidth:0}}>
+                {printTitle && <div className="fw-title" style={{fontFamily:"'Cormorant Garamond',serif",fontSize:24,fontWeight:700,lineHeight:1.1,whiteSpace:'nowrap',marginBottom:2}}>{printTitle}</div>}
+                <div className="fw-range" style={{fontFamily:"'Cormorant Garamond',serif",fontSize:13,fontWeight:600,color:C.muted}}>
+                  {weekRangeLabel(wk.wAnchor, wk.wEnd)}
+                </div>
+              </div>
+              <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',flexShrink:0}}>
+                {personalMode
+                  ? DIARY_CALENDAR_KEYS.filter(k=>layerOn(k)).map(k=>{
+                      const cal = DIARY_CALENDARS[k];
+                      return <span key={k} style={{fontSize:9,fontWeight:600,padding:'1px 7px',borderRadius:10,background:cal.color+'33',color:cal.color,border:`1px solid ${cal.color}`}}>{cal.label}</span>;
+                    })
+                  : <span style={{fontSize:9,fontWeight:600,padding:'1px 7px',borderRadius:10,background:C.gold+'33',color:C.gold,border:`1px solid ${C.gold}`}}>Classes</span>}
+              </div>
+            </div>
+          </div>
+          <div className="fw-dayhead" style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',marginBottom:4}}>
+            <div />
+            {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(dn => (
+              <div key={dn} style={{textAlign:'center',color:C.muted,fontSize:10,fontWeight:600,letterSpacing:'1.5px',padding:'2px'}}>{dn}</div>
+            ))}
+          </div>
+        </div>
         {/* Dates row: left gutter labelled DATES. Each day is a fixed 2-column
             cell — event names (cropped, stacked) on the left, the day-of-month
             number (fixed width, always shown) on the right. Content crops to keep
@@ -4894,6 +4915,22 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
             );
           })}
         </div>
+
+        {/* Print-only notes strip: ruled lines + faint day-separators, right
+            under this week's calendar on the SAME page (not a separate sheet).
+            Invisible in the CRM itself (zero height, clipped) — the print
+            stylesheet unclamps it. Column widths mirror the grid above so the
+            faint vertical lines still line up with each day if wanted. */}
+        <div className="fw-notes-strip" style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',marginTop:6}}>
+          <div />
+          {days.map((d,i) => (
+            <div key={d} className="fw-notes-day" style={{position:'relative',borderRight:i<6?'1px solid #d9d4c7':'none'}}>
+              {Array.from({length: NOTES_LINE_COUNT}, (_,j) => (
+                <div key={j} className="fw-notes-ruleline" style={{height:1,marginTop:14}} />
+              ))}
+            </div>
+          ))}
+        </div>
       </div>
     );
   };
@@ -4921,51 +4958,55 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
     </div>
   );
 
-  // Print stylesheet: hide app chrome, paginate onto 2 A4 pages — page 1 is
-  // week 1's real calendar, page 2 is the standalone notes page built above
-  // (not part of the CRM's interactive views — display:none on screen,
-  // display:block only under @media print). Week 3 is screen-only
-  // (.fw-week-break) and doesn't print at all.
+  // Print stylesheet: hide app chrome, force week 1 and week 2 onto separate
+  // A4 pages, and on EACH page append a strip of ruled notes lines directly
+  // under that week's own calendar (same page, not a separate sheet). Week 3
+  // is screen-only (.fw-week-break) and never prints.
   //
-  // Page breaks: this view is nested inside the app shell's `height:100vh` /
-  // `overflow:hidden` flex layout (sidebar + scrolling main panel). Those
-  // ancestor constraints clip printable content to one viewport-height's worth
-  // regardless of position, which squeezes everything onto a single page. Fix:
-  // neutralize height/overflow on the known ancestor wrappers during print
-  // (they're already invisible via visibility:hidden, this just stops them
-  // constraining layout too), and let .fw-print-root flow naturally so its
-  // true multi-page height is measurable and break-before can act on it.
+  // Page breaks: CRITICAL — break-before/break-after are IGNORED by Chrome
+  // inside absolutely-positioned elements, so the classic print trick of
+  // position:absolute on the print root (to escape the app shell) silently
+  // disables all pagination, which is why every break attempt failed. Instead,
+  // the print root stays in normal flow and the app shell is dismantled for
+  // print: sidebar display:none, the flex/height/overflow wrappers flattened
+  // to plain auto-height blocks. visibility rules remain as a backstop for
+  // any other floating chrome (modals, toasts).
   const printCss = `
     @media print {
       @page { size: A4 portrait; margin: 9mm; }
       html, body { height: auto !important; overflow: visible !important; }
       body * { visibility: hidden; }
       .fw-print-root, .fw-print-root * { visibility: visible; }
-      .fw-print-root {
-        position: absolute; left: 0; top: 0; width: 100%; height: auto !important;
-        padding: 0 !important;
+      .fw-print-root { position: static !important; width: 100%; height: auto !important; padding: 0 !important; }
+      /* Dismantle the app shell: no sidebar, and the flex row + main + scroll
+         wrappers become plain unconstrained blocks so the print root sits in
+         normal flow (where page breaks actually work). */
+      [data-desktop-sidebar] { display: none !important; }
+      body > div, body > div > div, main, main > div {
+        display: block !important;
+        height: auto !important; max-height: none !important;
+        overflow: visible !important;
+        position: static !important;
       }
-      /* Ancestor shell (flex row with sidebar, height:100vh, overflow:hidden;
-         and the scrolling <main> panel) must not cap how tall the document is
-         allowed to be while printing. */
-      body > div, main, main > div { height: auto !important; overflow: visible !important; max-height: none !important; }
       .fw-noprint { display: none !important; }
       .fw-print-head { margin-bottom: 3mm; padding: 0 !important; display: block !important; }
       .fw-dayhead { margin-bottom: 1mm !important; display: grid !important; }
       .fw-print-head.fw-hide-title { display: none !important; }
+      /* Per-page header (title + this week's range + Mon–Sun row) inside each
+         week block — hidden on screen, shown in print so every printed page is
+         self-labelled. The shared on-screen Mon–Sun row is hidden in print. */
+      .fw-page-head { display: block !important; }
+      .fw-dayhead-shared { display: none !important; }
 
-      /* Weeks 1–2 print, one per page; week 3 is screen-only. */
+      /* Week 1 is a complete page (calendar + notes strip); week 2 always
+         starts a fresh sheet regardless of how tall week 1's content is.
+         Week 3 (screen-only) never reaches print at all. NOTE: must target
+         the explicit .fw-week-first class — :first-of-type matches by element
+         type (div), and the first div inside the print root is the screen
+         controls block, so a :first-of-type selector here never matches. */
       .fw-week { break-inside: avoid; page-break-inside: avoid; }
+      .fw-week-first { break-after: page; page-break-after: always; }
       .fw-week-break { display: none !important; }
-
-      /* The notes page: clamped to zero height and hidden in the CRM itself
-         (see the screen-only rule below), unclamped only for print, always
-         starting a fresh sheet. */
-      .fw-notes-page {
-        height: auto !important; overflow: visible !important; visibility: visible !important;
-        break-before: page; page-break-before: always;
-        break-inside: avoid; page-break-inside: avoid;
-      }
 
       /* Render every fill/border on paper (browsers strip them by default). */
       .fw-print-root * {
@@ -5004,19 +5045,20 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
       .fw-title { color: #1a1a1a !important; }
       .fw-range { color: #555 !important; }
 
-      /* Notes page ruling: deliberately faint and independent of the
+      /* Notes strip under each week's calendar: unclamped only for print,
+         invisible in the CRM. Deliberately faint, independent of the
          calendar's own border colour, so it reads as barely-there guide
          lines rather than a ruled worksheet. */
-      .fw-notes-day { border-color: #ece8de !important; }
+      .fw-notes-strip { height: auto !important; overflow: visible !important; visibility: visible !important; }
+      .fw-notes-day { border-color: #d9d4c7 !important; }
       .fw-notes-ruleline { background: #d9d4c7 !important; opacity: 0.55 !important; }
     }
 
-    /* Screen: the notes page occupies no visible space in the CRM (height
-       clamped to 0 and clipped), but — unlike display:none — stays in the
-       render tree. Some browsers miscalculate print pagination for elements
-       that only appear via a display:none-to-block switch at print time;
-       keeping it always rendered (just invisible on screen) is more reliable. */
-    .fw-notes-page { height: 0; margin: 0; overflow: hidden; visibility: hidden; }
+    /* Screen: the notes strip occupies no visible space in the CRM (height
+       clamped to 0 and clipped), but stays in the render tree so print
+       pagination measures it correctly rather than inserting it after layout
+       has already been committed. */
+    .fw-notes-strip { height: 0; overflow: hidden; visibility: hidden; }
   `;
 
   return (
@@ -5062,29 +5104,11 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
         </div>
       </div>
 
-      {/* Print-only header: title + date range + legend (no nav). */}
-      <div className={`fw-print-head${showTitle?'':' fw-hide-title'}`} style={{display:'none'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12}}>
-          <div style={{minWidth:0}}>
-            {printTitle && <div className="fw-title" style={{fontFamily:"'Cormorant Garamond',serif",fontSize:24,fontWeight:700,lineHeight:1.1,whiteSpace:'nowrap',marginBottom:2}}>{printTitle}</div>}
-            <div className="fw-range" style={{fontFamily:"'Cormorant Garamond',serif",fontSize:13,fontWeight:600,color:C.muted}}>
-              {weekRangeLabel(weeks[0].wAnchor, weeks[Math.min(1, weeks.length-1)].wEnd)}
-            </div>
-          </div>
-          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',flexShrink:0}}>
-            {personalMode
-              ? DIARY_CALENDAR_KEYS.filter(k=>layerOn(k)).map(k=>{
-                  const cal = DIARY_CALENDARS[k];
-                  return <span key={k} style={{fontSize:9,fontWeight:600,padding:'1px 7px',borderRadius:10,background:cal.color+'33',color:cal.color,border:`1px solid ${cal.color}`}}>{cal.label}</span>;
-                })
-              : <span style={{fontSize:9,fontWeight:600,padding:'1px 7px',borderRadius:10,background:C.gold+'33',color:C.gold,border:`1px solid ${C.gold}`}}>Classes</span>}
-          </div>
-        </div>
-      </div>
-
       {/* The stacked weeks */}
-      {/* Single Mon–Sun header for all weeks (not repeated per week). */}
-      <div className="fw-dayhead" style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',marginBottom:4}}>
+      {/* Single shared Mon–Sun header for the on-screen stacked view. Print
+          hides this — each printed page carries its own header + day row
+          (fw-page-head inside WeekBlock) so both pages are self-labelled. */}
+      <div className="fw-dayhead fw-dayhead-shared" style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',marginBottom:4}}>
         <div />
         {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(dn => (
           <div key={dn} style={{textAlign:'center',color:C.muted,fontSize:10,fontWeight:600,letterSpacing:'1.5px',padding:'2px'}}>{dn}</div>
@@ -5092,98 +5116,6 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
       </div>
 
       {weeks.map((wk, i) => <WeekBlock key={wk.wAnchor} wk={wk} weekIndex={i} />)}
-
-      {/* ── Print-only notes page ──────────────────────────────────────────
-          Not part of the CRM's interactive views at all — this markup exists
-          solely for the printed second page and is display:none on screen.
-          Sits after the three week blocks in the DOM so it prints AFTER page 1,
-          on its own sheet. Reuses week 2's actual date range + special dates
-          for the header/DATES row (so the notes page still tells you which
-          week it covers), then ruled lines instead of a time grid. */}
-      {weeks[1] && (() => {
-        const wk2 = weeks[1];
-        const days = Array.from({length:7}, (_,i) => addDays(wk2.wAnchor, i));
-        return (
-          <div className="fw-notes-page">
-            <div className={`fw-print-head${showTitle?'':' fw-hide-title'}`}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12}}>
-                <div style={{minWidth:0}}>
-                  {printTitle && <div className="fw-title" style={{fontFamily:"'Cormorant Garamond',serif",fontSize:24,fontWeight:700,lineHeight:1.1,whiteSpace:'nowrap',marginBottom:2}}>{printTitle}</div>}
-                  <div className="fw-range" style={{fontFamily:"'Cormorant Garamond',serif",fontSize:13,fontWeight:600,color:C.muted}}>
-                    {weekRangeLabel(wk2.wAnchor, wk2.wEnd)}
-                  </div>
-                </div>
-                <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',flexShrink:0}}>
-                  {personalMode
-                    ? DIARY_CALENDAR_KEYS.filter(k=>layerOn(k)).map(k=>{
-                        const cal = DIARY_CALENDARS[k];
-                        return <span key={k} style={{fontSize:9,fontWeight:600,padding:'1px 7px',borderRadius:10,background:cal.color+'33',color:cal.color,border:`1px solid ${cal.color}`}}>{cal.label}</span>;
-                      })
-                    : <span style={{fontSize:9,fontWeight:600,padding:'1px 7px',borderRadius:10,background:C.gold+'33',color:C.gold,border:`1px solid ${C.gold}`}}>Classes</span>}
-                </div>
-              </div>
-            </div>
-
-            <div className="fw-dayhead" style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',marginBottom:4}}>
-              <div />
-              {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(dn => (
-                <div key={dn} style={{textAlign:'center',color:C.muted,fontSize:10,fontWeight:600,letterSpacing:'1.5px',padding:'2px'}}>{dn}</div>
-              ))}
-            </div>
-
-            <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:13,fontWeight:600,color:C.muted,marginBottom:2}}>
-              {weekMonthLabel(wk2.wAnchor, wk2.wEnd)}
-            </div>
-
-            {/* DATES row — same special-dates content as the real week 2 page. */}
-            <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`}}>
-              <div className="fw-dates-label" style={{color:C.muted,fontSize:8,letterSpacing:'1px',padding:'3px 4px 0',textAlign:'right',fontWeight:600}}>DATES</div>
-              {days.map((d,i) => {
-                const dt = new Date(d+'T12:00');
-                const items = wk2.wDates.filter(e => e.date === d);
-                return (
-                  <div key={d} style={{display:'grid',gridTemplateColumns:'1fr 22px',gap:3,alignItems:'start',
-                    padding:'2px 3px 3px',minHeight:18,borderRight:i<6?`1px solid ${C.border}`:'none'}}>
-                    <div style={{minWidth:0,display:'flex',flexDirection:'column',gap:2,overflow:'hidden'}}>
-                      {items.map((e,idx) => (
-                        <div key={idx} className="fw-block" title={e.label}
-                          style={{background:C.gold+'18',borderLeft:`2px solid ${C.gold}`,borderRadius:3,
-                            padding:'0 4px',fontSize:9,color:C.text,whiteSpace:'nowrap',overflow:'hidden',
-                            textOverflow:'ellipsis',minWidth:0}}>
-                          {e.emoji} {e.label}
-                        </div>
-                      ))}
-                    </div>
-                    <div className="fw-daynum" style={{
-                      width:22,textAlign:'center',padding:'0 2px 1px',justifySelf:'end',
-                      fontFamily:"'Cormorant Garamond',serif",fontSize:14,fontWeight:600,lineHeight:1.25,
-                      color: i>=5 ? C.muted : C.text,
-                      borderLeft:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,
-                      borderTop:'none',borderRight:'none',
-                    }}>{dt.getDate()}</div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Ruled notes area — even horizontal lines, faint vertical
-                day-separators. Same overall height as the calendar grid.
-                Colours are hardcoded ink-on-paper values (not C.border, which
-                is a dark-theme token) since this markup only ever renders
-                under @media print. */}
-            <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',border:'1px solid #c9c4b8',borderRadius:6,overflow:'hidden',position:'relative',height:gridHeight,background:'#ffffff'}}>
-              <div style={{borderRight:'1px solid #c9c4b8'}} />
-              {days.map((d,i) => (
-                <div key={d} className="fw-notes-day" style={{position:'relative',height:gridHeight,borderRight:i<6?'1px solid #ece8de':'none'}}>
-                  {Array.from({length: NOTES_LINE_COUNT}, (_,j) => (
-                    <div key={j} className="fw-notes-ruleline" style={{position:'absolute',top:((j+1)/(NOTES_LINE_COUNT+1))*gridHeight,left:0,right:0,height:1,background:'#d9d4c7',opacity:0.55,pointerEvents:'none'}} />
-                  ))}
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })()}
     </div>
   );
 }
