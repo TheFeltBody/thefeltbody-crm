@@ -1041,6 +1041,7 @@ export function InboxView({ notes, people, attendance, classes, onAssign, onDisc
   const isMobile = useIsMobile();
   const { personRoles } = useTypes();
   const [pickerFor, setPickerFor] = useState(null);  // note row currently being assigned
+  const [expandedId, setExpandedId] = useState(null); // row id currently showing full body
 
   const unlinked = useMemo(() =>
     notes
@@ -1082,7 +1083,9 @@ export function InboxView({ notes, people, attendance, classes, onAssign, onDisc
               ? (n.toEmail || n.fromEmail)
               : (n.fromEmail || n.toEmail);
             return (
-              <div key={n.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'14px 16px'}}>
+              <div key={n.id}
+                onClick={() => setExpandedId(expandedId === n.id ? null : n.id)}
+                style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'14px 16px',cursor:'pointer'}}>
                 {/* Top row: kind chip, direction, counterparty, date */}
                 <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,flexWrap:'wrap'}}>
                   <span style={{
@@ -1112,13 +1115,19 @@ export function InboxView({ notes, people, attendance, classes, onAssign, onDisc
                   </div>
                 )}
 
-                {/* Body snippet */}
-                <div style={{color:C.text,fontSize:13,lineHeight:1.5,marginBottom:12,opacity:0.9}}>
-                  {snippet(n.text)}
+                {/* Body: snippet when collapsed, full text when expanded (click row) */}
+                <div style={{
+                  color:C.text,fontSize:13,lineHeight:1.5,marginBottom:12,opacity:0.9,
+                  whiteSpace: expandedId === n.id ? 'pre-wrap' : 'normal',
+                }}>
+                  {expandedId === n.id
+                    ? (n.text || <span style={{fontStyle:'italic',opacity:0.6}}>(no body)</span>)
+                    : snippet(n.text)}
                 </div>
 
                 {/* Actions */}
-                <div style={{display:'flex',justifyContent:'flex-end',gap:8,alignItems:'center'}}>
+                <div style={{display:'flex',justifyContent:'flex-end',gap:8,alignItems:'center'}}
+                  onClick={e => e.stopPropagation()}>
                   <ConfirmBtn idleLabel="Discard"
                     onConfirm={() => onDiscard(n.id)}
                     title="Soft-delete this row (won't appear anywhere)" />
