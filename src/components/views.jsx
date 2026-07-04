@@ -3252,6 +3252,18 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
   const SLOT_HEIGHT = 16; // px per 30-min slot — compact vertical spacing for at-a-glance scanning
   const DEFAULT_START = 6*60 + 30;
   const DEFAULT_END = 21*60;
+  // Sane bounds on the auto-extend. Two separate problems, two separate guards:
+  // 1) A single bad item (mistyped time, or a duration entered in the wrong
+  //    unit) must not drag the whole shared axis miles from the real content —
+  //    so each item's start/end is capped to a generous but finite window
+  //    around the default hours before it's allowed to move s/e.
+  // 2) Even after that, the final axis is clamped to a single calendar day so
+  //    the hour-label math (which assumes h stays 0-23) can never print
+  //    garbage like "416pm".
+  const AXIS_MIN = 0, AXIS_MAX = 24*60;
+  // How far a single item may legitimately push the axis beyond the default
+  // window — e.g. a genuine 5am start or an 11pm finish should still work.
+  const REACH = 5*60;
   const { gridStart, gridEnd } = useMemo(() => {
     let s = DEFAULT_START, e = DEFAULT_END;
     const scan = (item) => {
@@ -3260,11 +3272,19 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
       const dur = item.duration || 60;
       const startSlot = Math.floor(m / SLOT_MIN) * SLOT_MIN;
       const endSlot = Math.ceil((m + dur) / SLOT_MIN) * SLOT_MIN;
-      if(startSlot < s) s = startSlot;
-      if(endSlot > e) e = endSlot;
+      // Ignore this item's influence on the shared axis if it would reach
+      // further than REACH beyond the default window — that's a sign of bad
+      // data (huge duration, wrong units), not a real early/late booking.
+      // The item still renders on its own day at its actual (clamped) time;
+      // it just can't stretch every week's axis to match.
+      if(startSlot >= DEFAULT_START - REACH && startSlot < s) s = startSlot;
+      if(endSlot <= DEFAULT_END + REACH && endSlot > e) e = endSlot;
     };
     weekClasses.forEach(scan);
     weekDiaryVisible.forEach(scan);
+    s = Math.max(AXIS_MIN, s);
+    e = Math.min(AXIS_MAX, e);
+    if(e <= s) e = s + SLOT_MIN; // never collapse/invert the axis
     return { gridStart: s, gridEnd: e };
   }, [weekClasses, weekDiaryVisible]);
   const totalSlots = (gridEnd - gridStart) / SLOT_MIN;
@@ -3358,7 +3378,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
       </div>
 
       {/* Header row of day names */}
-      <div style={{display:'grid',gridTemplateColumns:'56px repeat(7, 1fr)',marginBottom:8}}>
+      <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',marginBottom:8}}>
         <div />
         {days.map((d,i) => {
           const lbl = dayLabel(d, i);
@@ -3378,7 +3398,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
 
       {/* Birthdays / anniversaries row — all-day banner, both modes. Click → contact. */}
       {weekDates.length > 0 && (
-        <div style={{display:'grid',gridTemplateColumns:'56px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`,marginBottom:6}}>
+        <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`,marginBottom:6}}>
           <div style={{color:C.muted,fontSize:9,letterSpacing:'1.2px',padding:'6px 4px',textAlign:'right',fontWeight:600}}>DATES</div>
           {days.map(d => {
             const items = weekDates.filter(e => e.date === d);
@@ -3401,7 +3421,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
 
       {/* Untimed (all-day) row — shown only if any class in the week has no time set */}
       {weekClasses.some(c => !timeToMin(c.time)) && (
-        <div style={{display:'grid',gridTemplateColumns:'56px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`,marginBottom:6}}>
+        <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`,marginBottom:6}}>
           <div style={{color:C.muted,fontSize:9,letterSpacing:'1.2px',padding:'6px 4px',textAlign:'right',fontWeight:600}}>UNTIMED</div>
           {days.map(d => {
             const items = weekClasses.filter(c => c.date === d && !timeToMin(c.time));
@@ -3426,7 +3446,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
       )}
 
       {/* Time grid */}
-      <div style={{display:'grid',gridTemplateColumns:'56px repeat(7, 1fr)',position:'relative',border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+      <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',position:'relative',border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
         {/* Hour-label column — labels appear at full hours; half-hour gridlines are subtle */}
         <div style={{position:'relative',height:gridHeight,borderRight:`1px solid ${C.border}`,background:C.bg}}>
           {Array.from({length: totalSlots}, (_, i) => {
@@ -4650,6 +4670,7 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
   const SLOT_HEIGHT = 15; // a touch tighter than WeekView's 16 to fit more weeks
   const DEFAULT_START = 6*60 + 30;
   const DEFAULT_END = 21*60;
+  const NOTES_LINE_COUNT = 22; // ruled lines on the printed notes page (plain notepaper spacing)
 
   // Normalise a single week's classes + diary into the grid shape, honouring
   // layer visibility. Mirrors WeekView's weekClasses / weekDiaryVisible.
@@ -4675,6 +4696,11 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
 
   // ONE shared time axis across all weeks: scan every timed item in the whole
   // range so 9am sits at the same y in every week and they print aligned.
+  // Same two-part guard as WeekView: an item's influence on the shared axis is
+  // capped to a generous REACH beyond the default window (so bad data can't
+  // drag it toward midnight), and the final axis is clamped to a single day.
+  const AXIS_MIN = 0, AXIS_MAX = 24*60;
+  const REACH = 5*60;
   const { gridStart, gridEnd } = useMemo(() => {
     let s = DEFAULT_START, e = DEFAULT_END;
     const scan = (item) => {
@@ -4683,10 +4709,13 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
       const dur = item.duration || 60;
       const startSlot = Math.floor(m / SLOT_MIN) * SLOT_MIN;
       const endSlot = Math.ceil((m + dur) / SLOT_MIN) * SLOT_MIN;
-      if(startSlot < s) s = startSlot;
-      if(endSlot > e) e = endSlot;
+      if(startSlot >= DEFAULT_START - REACH && startSlot < s) s = startSlot;
+      if(endSlot <= DEFAULT_END + REACH && endSlot > e) e = endSlot;
     };
     weeks.forEach(wk => { wk.wClasses.forEach(scan); wk.wDiary.forEach(scan); });
+    s = Math.max(AXIS_MIN, s);
+    e = Math.min(AXIS_MAX, e);
+    if(e <= s) e = s + SLOT_MIN;
     return { gridStart: s, gridEnd: e };
   }, [weeks]);
   const totalSlots = (gridEnd - gridStart) / SLOT_MIN;
@@ -4724,6 +4753,15 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
     const aS = a.toLocaleDateString('en-GB',{day:'numeric',month:'short'});
     const eS = e.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
     return `${aS} – ${eS}`;
+  };
+  // Per-week month/year label, e.g. "July 2026" — same straddle-safe pattern
+  // as WeekView's monthLabel (a week spanning two months shows "Jun – Jul 2026").
+  const weekMonthLabel = (wAnchor, wEnd) => {
+    const a = new Date(wAnchor+'T12:00'), e = new Date(wEnd+'T12:00');
+    if(a.getMonth() === e.getMonth()) return a.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+    const aMonth = a.toLocaleDateString('en-GB',{month:'short'});
+    const eMonth = e.toLocaleDateString('en-GB',{month:'short',year:'numeric'});
+    return `${aMonth} – ${eMonth}`;
   };
 
   // ─── One week's grid (header row of days, dates banner, time grid) ──────────
@@ -4840,7 +4878,7 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
                   };
                   return (
                     <div key={e.id} onClick={onClick}
-                      className="fw-block fw-diary" data-accent={accent}
+                      className={`fw-block fw-diary${offMode?' fw-diary-offmode':''}`} data-accent={accent}
                       style={{position:'absolute',top:block.top,height:block.height,left:2,right:2,zIndex:z,
                         background: offMode ? C.card : accent+'1e',
                         border:`1px dashed ${accent}${offMode?'55':'88'}`,
@@ -4883,24 +4921,51 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
     </div>
   );
 
-  // Print stylesheet: hide app chrome, paginate 2 weeks per A4 portrait page,
-  // and force backgrounds/colours to print (so the faint class underlayer that
-  // browsers normally strip stays visible). print-color-adjust:exact is the key
-  // — without it the off-mode class tints vanish, which was the reported bug.
+  // Print stylesheet: hide app chrome, paginate onto 2 A4 pages — page 1 is
+  // week 1's real calendar, page 2 is the standalone notes page built above
+  // (not part of the CRM's interactive views — display:none on screen,
+  // display:block only under @media print). Week 3 is screen-only
+  // (.fw-week-break) and doesn't print at all.
+  //
+  // Page breaks: this view is nested inside the app shell's `height:100vh` /
+  // `overflow:hidden` flex layout (sidebar + scrolling main panel). Those
+  // ancestor constraints clip printable content to one viewport-height's worth
+  // regardless of position, which squeezes everything onto a single page. Fix:
+  // neutralize height/overflow on the known ancestor wrappers during print
+  // (they're already invisible via visibility:hidden, this just stops them
+  // constraining layout too), and let .fw-print-root flow naturally so its
+  // true multi-page height is measurable and break-before can act on it.
   const printCss = `
     @media print {
       @page { size: A4 portrait; margin: 9mm; }
+      html, body { height: auto !important; overflow: visible !important; }
       body * { visibility: hidden; }
       .fw-print-root, .fw-print-root * { visibility: visible; }
-      .fw-print-root { position: absolute; left: 0; top: 0; width: 100%; padding: 0 !important; }
+      .fw-print-root {
+        position: absolute; left: 0; top: 0; width: 100%; height: auto !important;
+        padding: 0 !important;
+      }
+      /* Ancestor shell (flex row with sidebar, height:100vh, overflow:hidden;
+         and the scrolling <main> panel) must not cap how tall the document is
+         allowed to be while printing. */
+      body > div, main, main > div { height: auto !important; overflow: visible !important; max-height: none !important; }
       .fw-noprint { display: none !important; }
       .fw-print-head { margin-bottom: 3mm; padding: 0 !important; display: block !important; }
-      .fw-dayhead { margin-bottom: 1mm !important; }
+      .fw-dayhead { margin-bottom: 1mm !important; display: grid !important; }
       .fw-print-head.fw-hide-title { display: none !important; }
 
-      /* Print shows 2 weeks only; the 3rd week is screen-only. */
+      /* Weeks 1–2 print, one per page; week 3 is screen-only. */
       .fw-week { break-inside: avoid; page-break-inside: avoid; }
       .fw-week-break { display: none !important; }
+
+      /* The notes page: clamped to zero height and hidden in the CRM itself
+         (see the screen-only rule below), unclamped only for print, always
+         starting a fresh sheet. */
+      .fw-notes-page {
+        height: auto !important; overflow: visible !important; visibility: visible !important;
+        break-before: page; page-break-before: always;
+        break-inside: avoid; page-break-inside: avoid;
+      }
 
       /* Render every fill/border on paper (browsers strip them by default). */
       .fw-print-root * {
@@ -4921,6 +4986,14 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
       .fw-class { opacity: 1 !important; }
       .fw-class .fw-block-text { color: #333 !important; }
 
+      /* Off-mode (greyed) diary blocks use a solid dark theme colour
+         (C.card) as their on-screen background, made bearable only by
+         opacity:0.5 — but the rule above forces opacity:1 for print, which
+         was turning these into large solid dark rectangles. Override with a
+         proper light paper wash instead of relying on opacity to soften it. */
+      .fw-diary-offmode { background: #f0ede4 !important; border-color: #c9c4b8 !important; }
+      .fw-diary-offmode .fw-block-text { color: #888 !important; }
+
       /* Day numbers: dark ink, open top AND right (left + bottom rule only). */
       .fw-daynum { color: #1a1a1a !important; border-color: #b8b2a4 !important; }
       .fw-dayhead > div { color: #555 !important; }
@@ -4930,7 +5003,20 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
       .fw-hour { color: #777 !important; }
       .fw-title { color: #1a1a1a !important; }
       .fw-range { color: #555 !important; }
+
+      /* Notes page ruling: deliberately faint and independent of the
+         calendar's own border colour, so it reads as barely-there guide
+         lines rather than a ruled worksheet. */
+      .fw-notes-day { border-color: #ece8de !important; }
+      .fw-notes-ruleline { background: #d9d4c7 !important; opacity: 0.55 !important; }
     }
+
+    /* Screen: the notes page occupies no visible space in the CRM (height
+       clamped to 0 and clipped), but — unlike display:none — stays in the
+       render tree. Some browsers miscalculate print pagination for elements
+       that only appear via a display:none-to-block switch at print time;
+       keeping it always rendered (just invisible on screen) is more reliable. */
+    .fw-notes-page { height: 0; margin: 0; overflow: hidden; visibility: hidden; }
   `;
 
   return (
@@ -5006,6 +5092,98 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
       </div>
 
       {weeks.map((wk, i) => <WeekBlock key={wk.wAnchor} wk={wk} weekIndex={i} />)}
+
+      {/* ── Print-only notes page ──────────────────────────────────────────
+          Not part of the CRM's interactive views at all — this markup exists
+          solely for the printed second page and is display:none on screen.
+          Sits after the three week blocks in the DOM so it prints AFTER page 1,
+          on its own sheet. Reuses week 2's actual date range + special dates
+          for the header/DATES row (so the notes page still tells you which
+          week it covers), then ruled lines instead of a time grid. */}
+      {weeks[1] && (() => {
+        const wk2 = weeks[1];
+        const days = Array.from({length:7}, (_,i) => addDays(wk2.wAnchor, i));
+        return (
+          <div className="fw-notes-page">
+            <div className={`fw-print-head${showTitle?'':' fw-hide-title'}`}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12}}>
+                <div style={{minWidth:0}}>
+                  {printTitle && <div className="fw-title" style={{fontFamily:"'Cormorant Garamond',serif",fontSize:24,fontWeight:700,lineHeight:1.1,whiteSpace:'nowrap',marginBottom:2}}>{printTitle}</div>}
+                  <div className="fw-range" style={{fontFamily:"'Cormorant Garamond',serif",fontSize:13,fontWeight:600,color:C.muted}}>
+                    {weekRangeLabel(wk2.wAnchor, wk2.wEnd)}
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',flexShrink:0}}>
+                  {personalMode
+                    ? DIARY_CALENDAR_KEYS.filter(k=>layerOn(k)).map(k=>{
+                        const cal = DIARY_CALENDARS[k];
+                        return <span key={k} style={{fontSize:9,fontWeight:600,padding:'1px 7px',borderRadius:10,background:cal.color+'33',color:cal.color,border:`1px solid ${cal.color}`}}>{cal.label}</span>;
+                      })
+                    : <span style={{fontSize:9,fontWeight:600,padding:'1px 7px',borderRadius:10,background:C.gold+'33',color:C.gold,border:`1px solid ${C.gold}`}}>Classes</span>}
+                </div>
+              </div>
+            </div>
+
+            <div className="fw-dayhead" style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',marginBottom:4}}>
+              <div />
+              {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(dn => (
+                <div key={dn} style={{textAlign:'center',color:C.muted,fontSize:10,fontWeight:600,letterSpacing:'1.5px',padding:'2px'}}>{dn}</div>
+              ))}
+            </div>
+
+            <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:13,fontWeight:600,color:C.muted,marginBottom:2}}>
+              {weekMonthLabel(wk2.wAnchor, wk2.wEnd)}
+            </div>
+
+            {/* DATES row — same special-dates content as the real week 2 page. */}
+            <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`}}>
+              <div className="fw-dates-label" style={{color:C.muted,fontSize:8,letterSpacing:'1px',padding:'3px 4px 0',textAlign:'right',fontWeight:600}}>DATES</div>
+              {days.map((d,i) => {
+                const dt = new Date(d+'T12:00');
+                const items = wk2.wDates.filter(e => e.date === d);
+                return (
+                  <div key={d} style={{display:'grid',gridTemplateColumns:'1fr 22px',gap:3,alignItems:'start',
+                    padding:'2px 3px 3px',minHeight:18,borderRight:i<6?`1px solid ${C.border}`:'none'}}>
+                    <div style={{minWidth:0,display:'flex',flexDirection:'column',gap:2,overflow:'hidden'}}>
+                      {items.map((e,idx) => (
+                        <div key={idx} className="fw-block" title={e.label}
+                          style={{background:C.gold+'18',borderLeft:`2px solid ${C.gold}`,borderRadius:3,
+                            padding:'0 4px',fontSize:9,color:C.text,whiteSpace:'nowrap',overflow:'hidden',
+                            textOverflow:'ellipsis',minWidth:0}}>
+                          {e.emoji} {e.label}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="fw-daynum" style={{
+                      width:22,textAlign:'center',padding:'0 2px 1px',justifySelf:'end',
+                      fontFamily:"'Cormorant Garamond',serif",fontSize:14,fontWeight:600,lineHeight:1.25,
+                      color: i>=5 ? C.muted : C.text,
+                      borderLeft:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,
+                      borderTop:'none',borderRight:'none',
+                    }}>{dt.getDate()}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Ruled notes area — even horizontal lines, faint vertical
+                day-separators. Same overall height as the calendar grid.
+                Colours are hardcoded ink-on-paper values (not C.border, which
+                is a dark-theme token) since this markup only ever renders
+                under @media print. */}
+            <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',border:'1px solid #c9c4b8',borderRadius:6,overflow:'hidden',position:'relative',height:gridHeight,background:'#ffffff'}}>
+              <div style={{borderRight:'1px solid #c9c4b8'}} />
+              {days.map((d,i) => (
+                <div key={d} className="fw-notes-day" style={{position:'relative',height:gridHeight,borderRight:i<6?'1px solid #ece8de':'none'}}>
+                  {Array.from({length: NOTES_LINE_COUNT}, (_,j) => (
+                    <div key={j} className="fw-notes-ruleline" style={{position:'absolute',top:((j+1)/(NOTES_LINE_COUNT+1))*gridHeight,left:0,right:0,height:1,background:'#d9d4c7',opacity:0.55,pointerEvents:'none'}} />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
