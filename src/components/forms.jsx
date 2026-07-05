@@ -545,9 +545,23 @@ export function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, de
 }
 
 
-export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onClose, orgs }) {
+export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onClose, orgs, seriesLastDate, recurrence, onExtend }) {
   const [f, setF] = useState({...cls, time: cls.time || '', duration: cls.duration || 60});
   const s = k => v => setF(x=>({...x,[k]:v}));
+  // Extend-series state. Count of NEW instances to append after the last
+  // scheduled class. New instances inherit the series row's settings (the
+  // latest "update this & future" values), not one-off per-class edits.
+  const [extendCount, setExtendCount] = useState(0);
+  const [extended, setExtended] = useState(0); // classes added this session
+  const step = { weekly:7, biweekly:14, monthly:30 }[recurrence] || 7;
+  const extendN = parseInt(extendCount) || 0;
+  const newLastDate = (seriesLastDate && extendN > 0) ? addDays(seriesLastDate, step * extendN) : null;
+  const handleExtend = () => {
+    if (extendN <= 0) return;
+    onExtend(extendN);
+    setExtended(prev => prev + extendN);
+    setExtendCount(0);
+  };
   return (
     <Modal title="Edit Recurring Class" onClose={onClose} wide>
       <div style={{background:C.goldBg,border:`1px solid ${C.gold}44`,borderRadius:6,padding:'10px 14px',marginBottom:18,color:C.gold,fontSize:13}}>
@@ -585,6 +599,32 @@ export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onClose, or
               </div>
             </div>
           )}
+        </div>
+      )}
+      {onExtend && seriesLastDate && (
+        <div style={{marginTop:4,marginBottom:14,padding:'14px 16px',border:`1px solid ${C.border}`,borderRadius:6,background:C.surf}}>
+          <div style={{color:C.muted,fontSize:11,fontWeight:600,letterSpacing:'0.08em',marginBottom:8}}>EXTEND THIS SERIES</div>
+          <div style={{color:C.text,fontSize:13,marginBottom:10}}>
+            Series currently runs to <span style={{color:C.gold}}>{fmt(seriesLastDate)}</span>.
+            {extended > 0 && <span style={{color:C.green,marginLeft:8}}>✓ Added {extended} {extended===1?'class':'classes'}</span>}
+          </div>
+          <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+            {[4,8,12].map(n=>(
+              <Btn key={n} variant={extendN===n?'primary':'ghost'} small onClick={()=>setExtendCount(n)}>+{n}</Btn>
+            ))}
+            <input type="number" min="1" max="52" value={extendCount||''} placeholder="N"
+              onChange={e=>setExtendCount(e.target.value)}
+              style={{width:64,padding:'7px 10px',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13}} />
+            <Btn small disabled={extendN<=0} onClick={handleExtend}>Add {extendN>0?extendN:''} {extendN===1?'class':'classes'}</Btn>
+          </div>
+          {newLastDate && (
+            <div style={{color:C.muted,fontSize:12,marginTop:8}}>
+              → new last class: <span style={{color:C.text}}>{fmt(newLastDate)}</span>
+            </div>
+          )}
+          <div style={{color:C.muted,fontSize:11,marginTop:8}}>
+            New classes use the series settings (name, time, rate, bookability) — save "Update this &amp; future" first if you've changed them above.
+          </div>
         </div>
       )}
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "./lib/supabase.js";
 import * as data from "./lib/dataLayer.js";
 import { C, ORG_META, PERSON_ROLES, SEED, SELF_PERSON_ID, applyTheme } from "./lib/constants.js";
-import { MobileUIContext, TypesContext, buildOrgTypes, buildPersonRoles, fmt, generateSeriesClasses, isWebEvent, today, uid, useLocalStorage } from "./lib/helpers.jsx";
+import { MobileUIContext, TypesContext, addDays, buildOrgTypes, buildPersonRoles, fmt, generateSeriesClasses, isWebEvent, today, uid, useLocalStorage } from "./lib/helpers.jsx";
 import { Empty } from "./components/primitives.jsx";
 import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, DiaryModal, EditNoteForm, EditPackageForm, EditSeriesClassForm, EmailTemplateForm, MergePeopleForm, PackageTemplateForm, PickPersonModal } from "./components/forms.jsx";
 import { BirthdaysView, ClassList, Dashboard, EmailTemplatesView, FormDetail, FormsList, FourWeekView, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackagesView, PackageTemplatesView, PaymentsView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
@@ -886,6 +886,28 @@ export default function FeltBodyCRM() {
     }
   };
 
+  // Extend a recurring series: append `count` new instances after the last
+  // scheduled class. Instances are generated from the SERIES row (the "top up"
+  // path anticipated in handleAddClass), so they inherit whatever name/rate/
+  // time/bookability the last "update this & future" wrote to the series —
+  // NOT any one-off per-class tweaks.
+  const handleExtendSeries = async (seriesId, count) => {
+    const ser = series.find(s => s.id === seriesId);
+    const n = parseInt(count) || 0;
+    if (!ser || n <= 0) return;
+    const step = { weekly: 7, biweekly: 14, monthly: 30 }[ser.recurrence] || 7;
+    // Anchor on the latest existing instance so re-extends never overlap.
+    const lastDate = classes.filter(c => c.seriesId === seriesId)
+      .reduce((m, c) => (c.date > m ? c.date : m), ser.startDate);
+    const instances = generateSeriesClasses({ ...ser, startDate: addDays(lastDate, step) }, n);
+    try {
+      const created = await data.classes.createMany(instances);
+      setClasses(p => [...p, ...created]);
+    } catch (e) {
+      onError('Extend series')(e);
+    }
+  };
+
   // Delete a class. Normal classes require an empty register (so we don't lose
   // attendance history for multiple people). Private sessions can be deleted
   // even with a register entry — the attendance row gets cascade-deleted.
@@ -1110,7 +1132,14 @@ export default function FeltBodyCRM() {
       case 'add_diary': return <DiaryModal people={people} projects={projects} selfPersonId={SELF_PERSON_ID} existing={modal.entry || null} prefill={modal.prefill || null} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={modal.entry ? handleEditDiary : handleAddDiary} onSaveMany={handleAddDiaryMany} onCopy={handleAddDiary} onDelete={deleteNote} onDeleteGroup={deleteNoteGroup} onClose={close} nav={nav} />;
       case 'edit_class': {
         const cls=modal.cls;
-        if(cls.seriesId) return <EditSeriesClassForm cls={cls} orgs={orgs} onSaveThis={u=>handleEditClass(cls,u,'this')} onSaveFuture={u=>handleEditClass(cls,u,'future')} onClose={close} />;
+        if(cls.seriesId) {
+          const ser = series.find(s=>s.id===cls.seriesId);
+          const seriesLastDate = classes.filter(c=>c.seriesId===cls.seriesId)
+            .reduce((m,c)=>(c.date>m?c.date:m), ser?.startDate || cls.date);
+          return <EditSeriesClassForm cls={cls} orgs={orgs} seriesLastDate={seriesLastDate} recurrence={ser?.recurrence || 'weekly'}
+            onExtend={n=>handleExtendSeries(cls.seriesId, n)}
+            onSaveThis={u=>handleEditClass(cls,u,'this')} onSaveFuture={u=>handleEditClass(cls,u,'future')} onClose={close} />;
+        }
         return <AddClassForm existing={cls} orgs={orgs} onSave={u=>handleEditClass(cls, u, 'this')} onClose={close} />;
       }
       case 'add_to_register': {
