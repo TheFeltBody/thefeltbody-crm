@@ -14,11 +14,35 @@ export const SEED = {
   projects: [],
 };
 
-export const C = {
+// Theme system: two palettes sharing one shape. C is the live token object —
+// every component reads C.x at render time, so swapping C's values via
+// applyTheme(mode) + a full re-render (mode is App state) re-skins the whole
+// app without touching any call site. Values are mutated with Object.assign so
+// hex+alpha concatenation (C.gold+'88') keeps working — do NOT convert these
+// to CSS variables.
+export const THEME_BUSINESS = {
   bg:'#0c1c13', sbg:'#091409', surf:'#122018', card:'#192c1f',
   border:'#243b2b', gold:'#c9a84c', goldBg:'#1b2813',
   text:'#f0ece4', muted:'#698a78', active:'#1c3224',
   green:'#4db879', red:'#c97070', blue:'#6ba3d4', purple:'#a07fd4',
+};
+// Personal mode: the forest theme inverted to light. Same token shape, but the
+// lightness ladder flips — cards lift above the background, inputs sit as
+// slightly deeper wells, sidebar is a step deeper than the canvas. Gold and
+// the semantic status colours are darkened variants of the business values so
+// they hold contrast as text on pale backgrounds (the originals were tuned
+// for light-on-dark).
+export const THEME_PERSONAL = {
+  bg:'#e9f1e8', sbg:'#dce8db', surf:'#dfeadd', card:'#f6faf4',
+  border:'#c3d6c2', gold:'#9a7c2a', goldBg:'#f0ead0',
+  text:'#1e2b21', muted:'#5c7a66', active:'#d8e7d6',
+  green:'#2f8f57', red:'#b54f4f', blue:'#3d76a8', purple:'#7a55b8',
+};
+export const C = { ...THEME_BUSINESS };
+// Idempotent; safe to call at the top of App's render body so the palette is
+// in place before any JSX below evaluates C.x.
+export const applyTheme = (mode) => {
+  Object.assign(C, mode === 'personal' ? THEME_PERSONAL : THEME_BUSINESS);
 };
 export const ORG_META = {
   care_home:{ label:'Care Home', color:'#4db879', bg:'#132413' },

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "./lib/supabase.js";
 import * as data from "./lib/dataLayer.js";
-import { C, ORG_META, PERSON_ROLES, SEED, SELF_PERSON_ID } from "./lib/constants.js";
+import { C, ORG_META, PERSON_ROLES, SEED, SELF_PERSON_ID, applyTheme } from "./lib/constants.js";
 import { MobileUIContext, TypesContext, buildOrgTypes, buildPersonRoles, fmt, generateSeriesClasses, isWebEvent, today, uid, useLocalStorage } from "./lib/helpers.jsx";
 import { Empty } from "./components/primitives.jsx";
 import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, DiaryModal, EditNoteForm, EditPackageForm, EditSeriesClassForm, EmailTemplateForm, MergePeopleForm, PackageTemplateForm, PickPersonModal } from "./components/forms.jsx";
@@ -27,6 +27,11 @@ export default function FeltBodyCRM() {
   // role; personal orgs are type 'personal'. Switching mode filters what's shown
   // and pre-tags new records, but does not partition the data.
   const [mode, setMode] = useLocalStorage('fbc.mode', 'client');
+  // Re-skin the app per mode: mutate the shared C token object before any JSX
+  // below (or in children, which render after this body) evaluates C.x. mode
+  // is App state, so a switch triggers a full re-render — no memoized
+  // components exist, so every inline style is recomputed with the new palette.
+  applyTheme(mode);
   const [orgs, setOrgs] = useState(SEED.orgs);
   const [people, setPeople] = useState(SEED.people);
   const [series, setSeries] = useState(SEED.series);
