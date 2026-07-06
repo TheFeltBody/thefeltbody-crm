@@ -1131,6 +1131,31 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
   const [composeOpen, setComposeOpen] = useState(false);  // adhoc email compose modal
+  // Reply-from-record: opens the compose modal pre-threaded onto an email
+  // card's conversation. inReplyTo prefers external_id but falls back to
+  // raw_headers.brevo_message_id — group fan-out siblings carry null
+  // external_id (unique index), yet still know their Message-ID.
+  const [replyCtx, setReplyCtx] = useState(null);  // { initialSubject, threadId, inReplyTo, draftKey } | null
+  const startReply = (n) => {
+    const base = (n.subject || '').replace(/^\s*(re:\s*)+/i, '').trim();
+    setReplyCtx({
+      initialSubject: base ? `Re: ${base}` : '',
+      threadId: n.threadId || undefined,
+      inReplyTo: n.externalId || (n.rawHeaders && n.rawHeaders.brevo_message_id) || undefined,
+      draftKey: `felt.compose.reply.${n.threadId || n.id}`,
+    });
+  };
+  // Deep-link into ThreadsView with the conversation pre-selected. Gated:
+  // ThreadsView only lists threads with at least one inbound message, so the
+  // button appears only when the FULL notes array (not just this person's
+  // rows — another participant's reply counts) shows the thread is live.
+  // Solo inbound emails (no thread_id) deep-link via their solo key.
+  const liveThreadIds = useMemo(() => new Set(
+    notes.filter(n => n.kind === 'email' && n.direction === 'inbound' && n.threadId)
+      .map(n => n.threadId)), [notes]);
+  const openThread = (n) => nav('threads', { threadKey: n.threadId ? `t:${n.threadId}` : `solo:${n.id}` });
+  const canOpenThread = (n) => n.kind === 'email' &&
+    ((n.threadId && liveThreadIds.has(n.threadId)) || (!n.threadId && n.direction === 'inbound'));
   // Active right-column tab. Persisted so the page reopens on the last-viewed
   // tab (sticky across navigations/sessions, per-device). On mobile a fourth
   // 'bookings' tab joins the row; on desktop bookings live in the left column.
@@ -1636,8 +1661,8 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
               )}
             </div>
             {addKind&&<NoteForm personId={person.id} classId={null} kind={addKind} onSave={n=>{onAddNote(n);setAddKind(null);}} onCancel={()=>setAddKind(null)} />}
-            {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
-            {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} highlight={flashId===n.id} />)}
+            {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} onReply={n.kind==='email'?startReply:undefined} onOpenThread={canOpenThread(n)?openThread:undefined} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
+            {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} onReply={n.kind==='email'?startReply:undefined} onOpenThread={canOpenThread(n)?openThread:undefined} highlight={flashId===n.id} />)}
             {visibleNotes.length===0&&!addKind&&<Empty text={effectiveFilter==='all' ? 'No comms yet' : effectiveFilter==='diary' ? 'No diary entries' : `No ${INTERACTION_KINDS[effectiveFilter].label.toLowerCase()}s logged yet`} />}
           </>}
           {tab==='packages'&&<>
@@ -1845,10 +1870,26 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
         );
       })()}
     </div>
+    {replyCtx && (
+      <SendEmailModal
+        person={person}
+        org={org}
+        people={people}
+        templates={emailTemplates}
+        onSaveAsTemplate={onSaveAsTemplate}
+        onSend={onSendEmail}
+        initialSubject={replyCtx.initialSubject}
+        threadId={replyCtx.threadId}
+        inReplyTo={replyCtx.inReplyTo}
+        draftKey={replyCtx.draftKey}
+        onClose={()=>setReplyCtx(null)}
+      />
+    )}
     {composeOpen && (
       <SendEmailModal
         person={person}
         org={org}
+        people={people}
         templates={emailTemplates}
         onSaveAsTemplate={onSaveAsTemplate}
         onSend={onSendEmail}

@@ -38,7 +38,7 @@ export const Avatar = ({ name, size=36, role }) => {
   return <div style={{width:size,height:size,borderRadius:'50%',background:bg,border:`1.5px solid ${color}`,display:'flex',alignItems:'center',justifyContent:'center',color,fontSize:size*0.36,fontWeight:600,flexShrink:0}}>{initials(name)}</div>;
 };
 
-export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote, onUpdateActionDate, onDelete, onClick, onAddToCalendar, highlight, dimReason }) => {
+export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote, onUpdateActionDate, onDelete, onClick, onAddToCalendar, onReply, onOpenThread, highlight, dimReason }) => {
   const [editingDate, setEditingDate] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // Auto-disarm the delete-confirm if user looks away
@@ -61,6 +61,19 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
   // so the content stays readable while clearly signalling it's done.
   const cardBg = completed ? C.bg : (note.important ? C.goldBg : C.card);
   const textColor = completed ? C.muted : C.text;
+  // Email context line: who this email actually involved. Group sends carry
+  // the full recipient set in raw_headers.to_list/cc_list (written by the
+  // forms-worker fan-out) — show "to A, B · cc C" so the card doesn't read
+  // like a 1:1 email when it wasn't. Inbound shows the sender; plain
+  // outbound falls back to the row's own to_email.
+  const isEmail = note.kind === 'email';
+  const rh = (isEmail && note.rawHeaders) || {};
+  const fmtAddrs = (arr) => (arr || []).map(a => a?.name || a?.email || '').filter(Boolean).join(', ');
+  const emailLine = !isEmail ? '' : (note.direction === 'inbound'
+    ? (note.fromEmail ? `from ${note.fromEmail}` : '')
+    : ((Array.isArray(rh.to_list) && rh.to_list.length)
+        ? `to ${fmtAddrs(rh.to_list)}${Array.isArray(rh.cc_list) && rh.cc_list.length ? ` · cc ${fmtAddrs(rh.cc_list)}` : ''}`
+        : (note.toEmail ? `to ${note.toEmail}` : '')));
   return (
     <div data-note-id={note.id}
       onClick={onClick}
@@ -87,6 +100,16 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
             </span>
           );
         })()}
+        {isEmail && note.direction && (
+          <span style={{color: note.direction === 'inbound' ? C.blue : C.gold, fontSize:9, fontWeight:700, letterSpacing:'0.6px', textTransform:'uppercase', opacity:0.85}}>
+            {note.direction === 'inbound' ? '↓ Received' : '↑ Sent'}
+          </span>
+        )}
+        {emailLine && (
+          <span style={{color:C.muted,fontSize:11,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}} title={emailLine}>
+            {emailLine}
+          </span>
+        )}
         {note.important && !completed && (
           <span style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px'}}>⚑ IMPORTANT</span>
         )}
@@ -100,6 +123,24 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
       )}
       {!note.subject && !note.text && (
         <div style={{color:C.muted,fontSize:13,fontStyle:'italic',opacity:0.7}}>(no details)</div>
+      )}
+      {isEmail && (onReply || onOpenThread) && (
+        <div style={{display:'flex',gap:8,marginTop:9}} onClick={e => e.stopPropagation()}>
+          {onReply && (
+            <button onClick={() => onReply(note)}
+              style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',
+                borderRadius:4,fontSize:11,padding:'3px 10px',fontFamily:"'Jost',sans-serif"}}>
+              ↩ Reply
+            </button>
+          )}
+          {onOpenThread && (
+            <button onClick={() => onOpenThread(note)} title="Open the full conversation in Threads (reply-all lives there)"
+              style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',
+                borderRadius:4,fontSize:11,padding:'3px 10px',fontFamily:"'Jost',sans-serif"}}>
+              Open thread ↗
+            </button>
+          )}
+        </div>
       )}
       {note.actionDate && (
         <div style={{display:'flex',alignItems:'center',gap:8,marginTop:9,flexWrap:'wrap'}} onClick={e=>e.stopPropagation()}>

@@ -79,9 +79,12 @@ function RoleParentGroup({ groupKey, label, count, children, defaultOpen=true })
 export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgTypes, customPersonRoles, roleParents=[], onAddOrgType, onAddPersonRole, orgs, people, onRemoveOrgType, onRemovePersonRole, onEditPersonRole, onSignOut, mode='client', onSwitchMode, onAddPersonalOrg }) {
   const unpaidInvoices = invoices.filter(i=>i.status!=='paid').length;
   const { personRoles } = useTypes();
+  // Mirrors InboxView's unlinked filter EXACTLY — badge and list must agree.
+  // Outbound admitted only for group-email fan-out rows (raw_headers.
+  // recipient_role), i.e. a cc'd address not yet in the CRM awaiting linking.
   const inboxCount = notes.filter(n =>
     (n.kind === 'email' || n.kind === 'form') &&
-    n.direction !== 'outbound' &&
+    (n.direction !== 'outbound' || (n.rawHeaders && n.rawHeaders.recipient_role)) &&
     n.source !== 'todo' &&
     !n.personId && !n.projectId
   ).length;
@@ -1043,11 +1046,17 @@ export function InboxView({ notes, people, attendance, classes, onAssign, onDisc
   const [pickerFor, setPickerFor] = useState(null);  // note row currently being assigned
   const [expandedId, setExpandedId] = useState(null); // row id currently showing full body
 
+  // Outbound rows are excluded EXCEPT group-email fan-out rows (marked by
+  // raw_headers.recipient_role, written by the forms-worker): a cover request
+  // cc'd to an address not yet in the CRM lands here so the person can be
+  // linked — otherwise they'd only surface if they happened to reply. The
+  // recipient_role guard keeps other unlinked outbound (e.g. balance-vitality
+  // guide deliveries) out of the triage queue as before.
   const unlinked = useMemo(() =>
     notes
       .filter(n =>
         (n.kind === 'email' || n.kind === 'form') &&
-        n.direction !== 'outbound' &&
+        (n.direction !== 'outbound' || (n.rawHeaders && n.rawHeaders.recipient_role)) &&
         n.source !== 'todo' &&
         !n.personId && !n.projectId
       )
@@ -1470,6 +1479,23 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
       // Unread count excludes outbound — you sent it, you've read it.
       g.unreadCount = g.messages.filter(m => !m.readAt && m.direction !== 'outbound').length;
       g.hasInbound = g.messages.some(m => m.direction === 'inbound');
+      // Group email fans out one row per recipient sharing an external_id —
+      // one SENT email, N rows. displayCount is the human message count
+      // (outbound deduped by external_id); the panel renders each such email
+      // once, with the full recipient line from raw_headers.
+      // Dedupe key: raw_headers.brevo_message_id (on every fan-out row) with
+      // external_id fallback for legacy single-send rows. external_id itself
+      // only lives on the FIRST fan-out row now — a partial unique index on
+      // the column (ingest dedupe) forbids siblings carrying it.
+      const sendKey = (m) => (m.rawHeaders && m.rawHeaders.brevo_message_id) || m.externalId || null;
+      const seenExt = new Set();
+      g.displayCount = g.messages.filter(m => {
+        const k = m.direction === 'outbound' ? sendKey(m) : null;
+        if (!k) return true;
+        if (seenExt.has(k)) return false;
+        seenExt.add(k);
+        return true;
+      }).length;
       return g;
     });
     // Threads = conversations. A cold outbound (compose from PersonDetail with
@@ -1491,7 +1517,12 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
   // message's external_id as In-Reply-To so the recipient's client threads it.
   // draftKey namespaces the in-progress body per thread (survives modal close).
   const buildReply = (t) => {
-    const personId = [...t.personIds][0];
+    // Answer whoever last wrote: in a 1:1 thread that's the only counterparty
+    // (identical to the old personIds[0] behaviour); in a group thread it's
+    // the correct single-reply target. Falls back to any participant if the
+    // last inbound sender is unlinked.
+    const lastInbound = [...t.messages].reverse().find(m => m.direction === 'inbound' && m.personId);
+    const personId = (lastInbound && lastInbound.personId) || [...t.personIds][0];
     const person = personById[personId];
     if (!person) return null;
     const last = t.messages[t.messages.length - 1];
@@ -1499,15 +1530,100 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
     return {
       person,
       threadId: t.threadId || undefined,
-      inReplyTo: (last && last.externalId) || undefined,
+      inReplyTo: (last && (last.externalId || (last.rawHeaders && last.rawHeaders.brevo_message_id))) || undefined,
       initialSubject: baseSubject ? `Re: ${baseSubject}` : '',
       draftKey: `felt.threads.draft.${t.key}`,
+    };
+  };
+
+  // Our own sending/receiving addresses — excluded from reply-all recipient
+  // derivation (you don't cc yourself). Kept in sync with the log-worker's
+  // MY_ADDRESSES constant and the settings.my_addresses row.
+  const OWN_ADDRESSES = [
+    'jesse@thefeltbody.com',
+    'info@thefeltbody.com',
+    'hello@thefeltbody.com',
+    'log@thefeltbody.com',
+  ];
+
+  // Derive the full participant set for Reply all. The thread's own rows ARE
+  // the participant list under the fan-out model: each outbound row = one
+  // recipient (personId, or raw to_email for non-CRM addresses), each inbound
+  // row = one sender. Inbound raw_headers.to/cc are also scanned so an address
+  // someone ELSE added via their reply-all is kept in the loop. Known people
+  // beat raw addresses (a person's primary address appearing raw is dropped
+  // in favour of the personId entry). Role: the latest inbound sender gets To
+  // — you're answering them — everyone else Cc; chips are editable in the
+  // modal anyway.
+  const buildReplyAll = (t) => {
+    const base = buildReply(t);
+    if (!base) return null;
+    const personEntries = new Map();  // personId -> entry
+    const rawEntries = new Map();     // email -> entry
+    t.messages.forEach(m => {
+      if (m.personId) {
+        if (!personEntries.has(m.personId)) {
+          const p = personById[m.personId];
+          personEntries.set(m.personId, {
+            personId: m.personId, name: p?.name || null, email: p?.email || '', role: 'cc',
+          });
+        }
+        return;
+      }
+      const addr = String(m.direction === 'outbound' ? m.toEmail : m.fromEmail || '')
+        .trim().toLowerCase();
+      if (addr && !OWN_ADDRESSES.includes(addr)) {
+        rawEntries.set(addr, { personId: null, name: null, email: addr, role: 'cc' });
+      }
+    });
+    // Addresses introduced by someone else's reply-all live only in the
+    // inbound raw headers (log-worker stores parsed to/cc there; our outbound
+    // rows store to_list/cc_list). Both shapes: { address } | { email }.
+    t.messages.forEach(m => {
+      if (m.direction !== 'inbound' || !m.rawHeaders) return;
+      const lists = [
+        ...(Array.isArray(m.rawHeaders.to) ? m.rawHeaders.to : []),
+        ...(Array.isArray(m.rawHeaders.cc) ? m.rawHeaders.cc : []),
+      ];
+      lists.forEach(a => {
+        const addr = String(a?.address || a?.email || '').trim().toLowerCase();
+        if (addr && !OWN_ADDRESSES.includes(addr)) {
+          rawEntries.set(addr, rawEntries.get(addr) || { personId: null, name: null, email: addr, role: 'cc' });
+        }
+      });
+    });
+    // Drop raw duplicates of known people's addresses.
+    const knownAddrs = new Set(
+      [...personEntries.values()].map(e => e.email.trim().toLowerCase()).filter(Boolean));
+    knownAddrs.forEach(a => rawEntries.delete(a));
+
+    const recipients = [...personEntries.values(), ...rawEntries.values()];
+    if (!recipients.length) return base;
+    // To = latest inbound sender (the person you're answering).
+    const lastInbound = [...t.messages].reverse().find(m => m.direction === 'inbound');
+    const toKey = lastInbound
+      ? (lastInbound.personId || String(lastInbound.fromEmail || '').trim().toLowerCase())
+      : null;
+    let flagged = false;
+    recipients.forEach(r => {
+      if (!flagged && toKey && (r.personId === toKey || r.email === toKey)) {
+        r.role = 'to'; flagged = true;
+      }
+    });
+    if (!flagged) recipients[0].role = 'to';
+    const toEntry = recipients.find(r => r.role === 'to');
+    return {
+      ...base,
+      person: (toEntry?.personId && personById[toEntry.personId]) || base.person,
+      recipients,
     };
   };
 
   const replyModal = replyTo && (
     <SendEmailModal
       person={replyTo.person}
+      people={people}
+      initialRecipients={replyTo.recipients || null}
       templates={emailTemplates}
       onSaveAsTemplate={onSaveAsTemplate}
       onSend={onSendEmail}
@@ -1584,7 +1700,16 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
   const Message = ({ m }) => {
     const inbound = m.direction === 'inbound';
     const person = personById[m.personId];
-    const counterparty = inbound ? (m.fromEmail || '') : (m.toEmail || '');
+    // Group outbound rows carry the full recipient line in raw_headers
+    // (to_list/cc_list, written by the forms-worker fan-out). Render that
+    // when present — "to Cara Cover, cc Max, reception@…" — instead of the
+    // single to_email, which is only this row's own recipient.
+    const rh = (!inbound && m.rawHeaders) || {};
+    const fmtAddrs = (arr) => (arr || []).map(a => a?.name || a?.email || '').filter(Boolean).join(', ');
+    const groupLine = (Array.isArray(rh.to_list) && rh.to_list.length)
+      ? `to ${fmtAddrs(rh.to_list)}${Array.isArray(rh.cc_list) && rh.cc_list.length ? ` · cc ${fmtAddrs(rh.cc_list)}` : ''}`
+      : null;
+    const counterparty = inbound ? (m.fromEmail || '') : (groupLine || m.toEmail || '');
     return (
       <div style={{
         background: C.card,
@@ -1640,7 +1765,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
             {t.subject}
           </div>
           <div style={{ color: C.muted, fontSize: 13 }}>
-            {names} · {t.messages.length} message{t.messages.length !== 1 ? 's' : ''}
+            {names} · {t.displayCount} message{t.displayCount !== 1 ? 's' : ''}
           </div>
         </div>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: isMobile ? '14px' : '16px 4px' }}>
@@ -1655,14 +1780,38 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
               if (d !== 0) return d;
               return new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date);
             });
-            const [newest, ...older] = ordered;
+            // Group email fan-out: N outbound rows sharing an external_id are
+            // ONE sent email — render it once. The row that survives carries
+            // the full recipient line in raw_headers, so nothing is lost.
+            const sendKey = (m) => (m.rawHeaders && m.rawHeaders.brevo_message_id) || m.externalId || null;
+            const seenExt = new Set();
+            const display = ordered.filter(m => {
+              const k = m.direction === 'outbound' ? sendKey(m) : null;
+              if (!k) return true;
+              if (seenExt.has(k)) return false;
+              seenExt.add(k);
+              return true;
+            });
+            const [newest, ...older] = display;
+            // Reply all appears once the thread genuinely has a group: more
+            // than one distinct participant across people + raw addresses.
+            const rawAddrs = new Set(t.messages
+              .filter(m => !m.personId)
+              .map(m => String(m.direction === 'outbound' ? m.toEmail : m.fromEmail || '').trim().toLowerCase())
+              .filter(Boolean));
+            const isGroup = (t.personIds.size + rawAddrs.size) > 1;
             return (
               <>
                 {newest && <Message key={newest.id} m={newest} />}
-                <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: 4, marginBottom: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-start', gap: 8, marginTop: 4, marginBottom: 12 }}>
                   <Btn small onClick={() => { const r = buildReply(t); if (r) setReplyTo(r); }}>
                     ↩ Reply
                   </Btn>
+                  {isGroup && (
+                    <Btn small variant="ghost" onClick={() => { const r = buildReplyAll(t); if (r) setReplyTo(r); }}>
+                      ↩ Reply all
+                    </Btn>
+                  )}
                 </div>
                 {older.map(m => <Message key={m.id} m={m} />)}
               </>

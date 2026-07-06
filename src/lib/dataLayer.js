@@ -1160,9 +1160,20 @@ export const files = {
 // Throws on auth/validation/send failure. Error message is suitable for direct
 // display in the compose modal.
 export const email = {
-  async send({ personId, subject, body, threadId, inReplyTo }) {
+  // Group email (BUILD-2): pass `recipients` — [{ personId, role?:'to'|'cc' } |
+  // { email, role?:'to'|'cc' }] — for multi-recipient sends. The worker fans
+  // out one interactions row per recipient (shared thread_id + external_id).
+  // When `recipients` is absent, the legacy single-personId shape is sent —
+  // identical wire format to before, so this client works against either
+  // worker build. Callers should prefer `notes` (all fan-out rows) over
+  // `note` (first row, kept for compatibility) when splicing local state.
+  async send({ personId, recipients, subject, body, threadId, inReplyTo }) {
     const session = (await supabase.auth.getSession()).data.session;
     if (!session) throw new Error('Not signed in — refresh and try again.');
+
+    const payload = (Array.isArray(recipients) && recipients.length)
+      ? { recipients, subject, body, threadId, inReplyTo }
+      : { personId, subject, body, threadId, inReplyTo };
 
     const r = await fetch('https://forms.thefeltbody.com/send-email', {
       method: 'POST',
@@ -1170,7 +1181,7 @@ export const email = {
         'Authorization': `Bearer ${session.access_token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ personId, subject, body, threadId, inReplyTo }),
+      body: JSON.stringify(payload),
     });
 
     let parsed = {};
@@ -1184,11 +1195,15 @@ export const email = {
       throw new Error(msg + detail);
     }
 
+    const noteRows = Array.isArray(parsed.interactions)
+      ? parsed.interactions.map(noteFromDb)
+      : (parsed.interaction ? [noteFromDb(parsed.interaction)] : []);
     return {
       ok: true,
       logged: parsed.logged !== false,
       warning: parsed.warning || null,
-      note: parsed.interaction ? noteFromDb(parsed.interaction) : null,
+      note: noteRows[0] || null,
+      notes: noteRows,
     };
   },
 };

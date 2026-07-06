@@ -2221,7 +2221,7 @@ export function PickPersonModal({ people, attendance, classes, onPick, onSkip, o
 // and returned to the caller via onSend, which is expected to splice it into
 // the parent's notes state so it appears on PersonDetail immediately.
 
-export function SendEmailModal({ person, org, templates = [], onSend, onClose, onSaveAsTemplate, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey }) {
+export function SendEmailModal({ person, org, people = [], templates = [], onSend, onClose, onSaveAsTemplate, initialSubject = '', initialBody = '', initialRecipients = null, threadId, inReplyTo, draftKey }) {
   // Draft persistence: if a draftKey is supplied, the in-progress subject AND
   // body survive closing/reopening the modal (and navigating away) via
   // localStorage. Stored as a single JSON blob {subject, body}. Falls back to
@@ -2251,8 +2251,74 @@ export function SendEmailModal({ person, org, templates = [], onSend, onClose, o
     try { localStorage.setItem(draftKey, JSON.stringify({ subject, body })); } catch {}
   }, [subject, body, draftKey]);
 
-  const hasEmail = !!person.email;
-  const canSend = !busy && hasEmail && subject.trim() && body.trim();
+  // ─── Recipients (group email, BUILD-2) ────────────────────────────────
+  // Chips: each { key, personId|null, email, name, role:'to'|'cc' }. Starts
+  // with `person` as the sole To (the classic single-recipient flow), or with
+  // initialRecipients when the caller pre-builds a group (Reply all). CRM
+  // contacts carry personId — the worker resolves their primary email
+  // server-side; `email` here is display/validation only. Raw addresses
+  // (not in the CRM) carry email only; the worker writes their fan-out row
+  // with person_id null so they surface in the Inbox. Recipients are not
+  // draft-persisted (subject/body are) — a stale recipient list restored
+  // days later is a mis-send risk, not a convenience.
+  const [recipients, setRecipients] = useState(() => {
+    if (Array.isArray(initialRecipients) && initialRecipients.length) {
+      return initialRecipients.map((r, i) => ({
+        key: r.personId ? `p:${r.personId}` : `e:${(r.email || '').toLowerCase()}:${i}`,
+        personId: r.personId || null,
+        email: (r.email || '').trim(),
+        name: r.name || null,
+        role: r.role === 'cc' ? 'cc' : 'to',
+      }));
+    }
+    return [{ key: `p:${person.id}`, personId: person.id, email: person.email || '', name: person.name, role: 'to' }];
+  });
+  const [addOpen, setAddOpen] = useState(false);
+  const [addQuery, setAddQuery] = useState('');
+
+  const addedKeys = useMemo(() => new Set(recipients.map(r =>
+    r.personId ? `p:${r.personId}` : `e:${r.email.toLowerCase()}`)), [recipients]);
+  const addedEmails = useMemo(() => new Set(
+    recipients.map(r => r.email.trim().toLowerCase()).filter(Boolean)), [recipients]);
+
+  // Candidate contacts for the add-picker: name/email substring match,
+  // excluding anyone already a chip. Capped so the dropdown stays a dropdown.
+  const addMatches = useMemo(() => {
+    const q = addQuery.trim().toLowerCase();
+    if (!q) return [];
+    return people
+      .filter(p => !addedKeys.has(`p:${p.id}`) &&
+        !(p.email && addedEmails.has(p.email.trim().toLowerCase())) &&
+        ((p.name || '').toLowerCase().includes(q) || (p.email || '').toLowerCase().includes(q)))
+      .slice(0, 6);
+  }, [addQuery, people, addedKeys, addedEmails]);
+
+  // If the query is itself a valid address matching no chip, offer it raw.
+  const rawCandidate = useMemo(() => {
+    const q = addQuery.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(q)) return null;
+    if (addedEmails.has(q)) return null;
+    return q;
+  }, [addQuery, addedEmails]);
+
+  // New additions default to Cc — the cover-request flow: one person is asked
+  // (To), the rest are kept in the loop (Cc). One click flips the role.
+  const addPerson = (p) => {
+    setRecipients(r => [...r, { key: `p:${p.id}`, personId: p.id, email: p.email || '', name: p.name, role: 'cc' }]);
+    setAddQuery(''); setAddOpen(false);
+  };
+  const addRaw = (em) => {
+    setRecipients(r => [...r, { key: `e:${em}`, personId: null, email: em, name: null, role: 'cc' }]);
+    setAddQuery(''); setAddOpen(false);
+  };
+  const toggleRole = (key) => setRecipients(r =>
+    r.map(x => x.key === key ? { ...x, role: x.role === 'to' ? 'cc' : 'to' } : x));
+  const removeRecipient = (key) => setRecipients(r => r.filter(x => x.key !== key));
+
+  const missingEmail = recipients.filter(r => r.personId && !r.email.trim());
+  const hasTo = recipients.some(r => r.role === 'to');
+  const canSend = !busy && recipients.length > 0 && hasTo &&
+    missingEmail.length === 0 && subject.trim() && body.trim();
 
   // Template picker. Show ALL templates, with the most relevant for this
   // recipient sorted to the top (scoreTemplates). Applying one fills subject +
@@ -2294,8 +2360,15 @@ export function SendEmailModal({ person, org, templates = [], onSend, onClose, o
     if (!canSend) return;
     setBusy(true); setErr(null);
     try {
+      // Classic single-recipient sends keep the legacy wire shape (works
+      // against either worker build); anything else uses recipients[].
+      const single = recipients.length === 1 && recipients[0].personId && recipients[0].role === 'to';
       const res = await onSend({
-        personId: person.id,
+        ...(single
+          ? { personId: recipients[0].personId }
+          : { recipients: recipients.map(r => r.personId
+              ? { personId: r.personId, role: r.role }
+              : { email: r.email.trim().toLowerCase(), role: r.role }) }),
         subject: subject.trim(),
         body, // server escapes + \n -> <br>; keep newlines intact
         threadId,   // undefined for fresh sends → server mints a new thread_id
@@ -2314,10 +2387,92 @@ export function SendEmailModal({ person, org, templates = [], onSend, onClose, o
 
   return (
     <Modal title={`Email ${person.name}`} onClose={busy ? ()=>{} : onClose} wide>
-      <div style={{color:C.muted,fontSize:11,marginBottom:14,letterSpacing:'0.3px'}}>
-        TO: {hasEmail
-          ? <span style={{color:C.text}}>{person.email}</span>
-          : <span style={{color:C.gold}}>⚠ No primary email — set one on this contact before sending</span>}
+      <div style={{marginBottom:14}}>
+        <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center'}}>
+          <span style={{color:C.muted,fontSize:11,letterSpacing:'0.3px'}}>TO/CC:</span>
+          {recipients.map(r => {
+            const noEmail = r.personId && !r.email.trim();
+            return (
+              <span key={r.key} style={{
+                display:'inline-flex',alignItems:'center',gap:6,
+                background:C.card,border:`1px solid ${noEmail ? C.gold : C.border}`,
+                borderRadius:14,padding:'3px 8px 3px 10px',fontSize:12,color:C.text,
+              }}>
+                <span title={r.email || undefined}>{r.name || r.email}</span>
+                {noEmail && <span style={{color:C.gold,fontSize:10}} title="No primary email — set one on this contact">⚠ no email</span>}
+                <button onClick={() => toggleRole(r.key)} disabled={busy}
+                  title={r.role === 'to' ? 'Click to change to Cc' : 'Click to change to To'}
+                  style={{background:r.role==='cc'?'none':C.goldBg,border:`1px solid ${C.border}`,
+                    color:r.role==='cc'?C.muted:C.gold,borderRadius:8,fontSize:9,fontWeight:700,
+                    letterSpacing:'0.5px',padding:'1px 6px',cursor:'pointer',
+                    fontFamily:"'Jost',sans-serif",textTransform:'uppercase'}}>
+                  {r.role}
+                </button>
+                <button onClick={() => removeRecipient(r.key)} disabled={busy}
+                  title="Remove recipient"
+                  style={{background:'none',border:'none',color:C.muted,cursor:'pointer',
+                    fontSize:13,padding:0,lineHeight:1}}>
+                  ×
+                </button>
+              </span>
+            );
+          })}
+          <button onClick={() => { setAddOpen(o => !o); setAddQuery(''); }} disabled={busy}
+            style={{background:'none',border:`1px dashed ${C.border}`,color:C.muted,
+              borderRadius:14,fontSize:11,padding:'3px 10px',cursor:'pointer',
+              fontFamily:"'Jost',sans-serif"}}>
+            {addOpen ? 'done' : '+ add'}
+          </button>
+        </div>
+        {addOpen && (
+          <div style={{marginTop:8,position:'relative'}}>
+            <input
+              type="text"
+              value={addQuery}
+              onChange={e => setAddQuery(e.target.value)}
+              placeholder="Search contacts, or type an email address…"
+              autoFocus
+              disabled={busy}
+              style={{width:'100%',boxSizing:'border-box',background:C.card,
+                border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,
+                padding:'7px 10px',fontFamily:"'Jost',sans-serif",outline:'none'}}
+            />
+            {(addMatches.length > 0 || rawCandidate) && (
+              <div style={{border:`1px solid ${C.border}`,borderTop:'none',
+                borderRadius:'0 0 6px 6px',background:C.card,overflow:'hidden'}}>
+                {addMatches.map(p => (
+                  <div key={p.id} onClick={() => addPerson(p)}
+                    style={{padding:'7px 10px',cursor:'pointer',fontSize:13,color:C.text,
+                      display:'flex',justifyContent:'space-between',gap:10}}
+                    onMouseEnter={e => e.currentTarget.style.background = C.surf}
+                    onMouseLeave={e => e.currentTarget.style.background = 'none'}>
+                    <span>{p.name}</span>
+                    <span style={{color:C.muted,fontSize:11}}>
+                      {p.email || 'no primary email'}
+                    </span>
+                  </div>
+                ))}
+                {rawCandidate && (
+                  <div onClick={() => addRaw(rawCandidate)}
+                    style={{padding:'7px 10px',cursor:'pointer',fontSize:13,color:C.gold,
+                      borderTop:addMatches.length ? `1px solid ${C.border}` : 'none'}}
+                    onMouseEnter={e => e.currentTarget.style.background = C.surf}
+                    onMouseLeave={e => e.currentTarget.style.background = 'none'}>
+                    + Add address: {rawCandidate} <span style={{color:C.muted,fontSize:11}}>(not in CRM — will land in Inbox for linking)</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {!hasTo && recipients.length > 0 && (
+          <div style={{color:C.gold,fontSize:11,marginTop:6}}>At least one recipient must be To.</div>
+        )}
+        {missingEmail.length > 0 && (
+          <div style={{color:C.gold,fontSize:11,marginTop:6}}>
+            ⚠ No primary email for: {missingEmail.map(r => r.name || '?').join(', ')} — set one before sending.
+          </div>
+        )}
       </div>
       {(rankedTemplates.length > 0 || onSaveAsTemplate) && (
         <div style={{marginBottom:10,display:'flex',gap:8,alignItems:'center'}}>
