@@ -38,7 +38,7 @@ export const Avatar = ({ name, size=36, role }) => {
   return <div style={{width:size,height:size,borderRadius:'50%',background:bg,border:`1.5px solid ${color}`,display:'flex',alignItems:'center',justifyContent:'center',color,fontSize:size*0.36,fontWeight:600,flexShrink:0}}>{initials(name)}</div>;
 };
 
-export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote, onUpdateActionDate, onDelete, onClick, onAddToCalendar, onReply, onOpenThread, highlight, dimReason }) => {
+export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote, onUpdateActionDate, onDelete, onClick, onAddToCalendar, onReply, onReplyAll, onOpenThread, highlight, dimReason }) => {
   const [editingDate, setEditingDate] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // Auto-disarm the delete-confirm if user looks away
@@ -74,6 +74,19 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
     : ((Array.isArray(rh.to_list) && rh.to_list.length)
         ? `to ${fmtAddrs(rh.to_list)}${Array.isArray(rh.cc_list) && rh.cc_list.length ? ` · cc ${fmtAddrs(rh.cc_list)}` : ''}`
         : (note.toEmail ? `to ${note.toEmail}` : '')));
+  // Time-of-day for email cards. interactions.date is a date-only column by
+  // schema design, so the clock comes from created_at — accurate for emails
+  // because both workers insert at send/arrival time. Suppressed when the
+  // created_at date-part disagrees with the row's date (backdated manual
+  // logs, timezone straddle): a wrong time is worse than no time.
+  const emailTime = (() => {
+    if (!isEmail || !note.createdAt) return '';
+    const d = new Date(note.createdAt);
+    if (isNaN(d.getTime())) return '';
+    const localDay = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    if (localDay !== note.date) return '';
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  })();
   return (
     <div data-note-id={note.id}
       onClick={onClick}
@@ -124,24 +137,7 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
       {!note.subject && !note.text && (
         <div style={{color:C.muted,fontSize:13,fontStyle:'italic',opacity:0.7}}>(no details)</div>
       )}
-      {isEmail && (onReply || onOpenThread) && (
-        <div style={{display:'flex',gap:8,marginTop:9}} onClick={e => e.stopPropagation()}>
-          {onReply && (
-            <button onClick={() => onReply(note)}
-              style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',
-                borderRadius:4,fontSize:11,padding:'3px 10px',fontFamily:"'Jost',sans-serif"}}>
-              ↩ Reply
-            </button>
-          )}
-          {onOpenThread && (
-            <button onClick={() => onOpenThread(note)} title="Open the full conversation in Threads (reply-all lives there)"
-              style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',
-                borderRadius:4,fontSize:11,padding:'3px 10px',fontFamily:"'Jost',sans-serif"}}>
-              Open thread ↗
-            </button>
-          )}
-        </div>
-      )}
+
       {note.actionDate && (
         <div style={{display:'flex',alignItems:'center',gap:8,marginTop:9,flexWrap:'wrap'}} onClick={e=>e.stopPropagation()}>
           {editingDate && onUpdateActionDate && !completed ? (
@@ -191,8 +187,34 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
           )}
         </div>
       )}
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:6,gap:8}}>
-        <div style={{color:C.muted,fontSize:12}}>{fmt(note.date)}</div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:6,gap:8,flexWrap:'wrap'}}>
+        <div style={{color:C.muted,fontSize:12,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}} onClick={e=>e.stopPropagation()}>
+          <span>{fmt(note.date)}{emailTime && <span style={{opacity:0.8}}> · {emailTime}</span>}</span>
+          {isEmail && onReply && (
+            <button onClick={() => onReply(note)}
+              style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:4,fontSize:11,padding:'2px 9px',fontFamily:"'Jost',sans-serif"}}
+              onMouseEnter={e=>{e.currentTarget.style.color=C.gold;e.currentTarget.style.borderColor=C.gold+'88';}}
+              onMouseLeave={e=>{e.currentTarget.style.color=C.muted;e.currentTarget.style.borderColor=C.border;}}>
+              ↩ Reply
+            </button>
+          )}
+          {isEmail && onReplyAll && (
+            <button onClick={() => onReplyAll(note)} title="Reply to everyone on this conversation"
+              style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:4,fontSize:11,padding:'2px 9px',fontFamily:"'Jost',sans-serif"}}
+              onMouseEnter={e=>{e.currentTarget.style.color=C.gold;e.currentTarget.style.borderColor=C.gold+'88';}}
+              onMouseLeave={e=>{e.currentTarget.style.color=C.muted;e.currentTarget.style.borderColor=C.border;}}>
+              ↩ Reply all
+            </button>
+          )}
+          {isEmail && onOpenThread && (
+            <button onClick={() => onOpenThread(note)} title="Open the full conversation in Threads"
+              style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:4,fontSize:11,padding:'2px 9px',fontFamily:"'Jost',sans-serif"}}
+              onMouseEnter={e=>{e.currentTarget.style.color=C.gold;e.currentTarget.style.borderColor=C.gold+'88';}}
+              onMouseLeave={e=>{e.currentTarget.style.color=C.muted;e.currentTarget.style.borderColor=C.border;}}>
+              Open thread ↗
+            </button>
+          )}
+        </div>
         <div style={{display:'flex',alignItems:'center',gap:6}} onClick={e=>e.stopPropagation()}>
           {/* Add-to-calendar: promotes a note into a diary entry (opens the diary
               modal prefilled from this note). Hidden for entries that are already

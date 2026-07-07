@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { C, INTERACTION_KINDS, INV_STATUS, ORG_META, PAYMENT_STATUS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, RELATIONSHIP_KEYS, RELATIONSHIP_LABELS } from "../lib/constants.js";
-import { addDays, birthdayInfo, classKindKey, contactDateInfo, fmt, fmtDayMonth, fmtMoney, fmtTime, isCountlessPkg, packagePerSessionValue, packageRemaining, primaryRole, startOfWeek, today, useIsMobile, useLocalStorage, useTypes } from "../lib/helpers.jsx";
+import { addDays, deriveReplyAllRecipients, birthdayInfo, classKindKey, contactDateInfo, fmt, fmtDayMonth, fmtMoney, fmtTime, isCountlessPkg, packagePerSessionValue, packageRemaining, primaryRole, startOfWeek, today, useIsMobile, useLocalStorage, useTypes } from "../lib/helpers.jsx";
 import { Avatar, Btn, ConfirmBtn, Empty, FI, KindBadge, MobileTabBar, Modal, NoteCard, OrgBadge, PageHead, RoleBadge, Row, SourceTag, Tabs } from "./primitives.jsx";
 import { AddPersonForm, NoteForm, SendEmailModal } from "./forms.jsx";
 import { ClassLog } from "./views.jsx";
@@ -1154,6 +1154,42 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
     notes.filter(n => n.kind === 'email' && n.direction === 'inbound' && n.threadId)
       .map(n => n.threadId)), [notes]);
   const openThread = (n) => nav('threads', { threadKey: n.threadId ? `t:${n.threadId}` : `solo:${n.id}` });
+  // Reply all from a comms card: gather the WHOLE thread's rows from the full
+  // notes array (another participant's messages count — this person's rows
+  // alone would miss them), derive everyone via the shared helper, prefill
+  // the compose modal. Gated to threads with >1 distinct participant — on a
+  // 1:1 thread the button would just be Reply with extra steps.
+  const personByIdMap = useMemo(() => Object.fromEntries(people.map(p => [p.id, p])), [people]);
+  const threadParticipantCount = useMemo(() => {
+    const m = new Map();
+    notes.forEach(x => {
+      if (x.kind !== 'email' || !x.threadId) return;
+      const s = m.get(x.threadId) || new Set();
+      if (x.personId) s.add(`p:${x.personId}`);
+      else {
+        const a = String(x.direction === 'outbound' ? x.toEmail : x.fromEmail || '').trim().toLowerCase();
+        if (a) s.add(`e:${a}`);
+      }
+      m.set(x.threadId, s);
+    });
+    return m;
+  }, [notes]);
+  const canReplyAll = (n) => n.kind === 'email' && n.threadId &&
+    (threadParticipantCount.get(n.threadId)?.size || 0) > 1;
+  const startReplyAll = (n) => {
+    const threadMsgs = notes
+      .filter(x => x.kind === 'email' && x.threadId === n.threadId)
+      .sort((a, b) => new Date(a.createdAt || a.date) - new Date(b.createdAt || b.date));
+    const recipients = deriveReplyAllRecipients(threadMsgs.length ? threadMsgs : [n], personByIdMap);
+    const base = (n.subject || '').replace(/^\s*(re:\s*)+/i, '').trim();
+    setReplyCtx({
+      initialSubject: base ? `Re: ${base}` : '',
+      threadId: n.threadId || undefined,
+      inReplyTo: n.externalId || (n.rawHeaders && n.rawHeaders.brevo_message_id) || undefined,
+      draftKey: `felt.compose.reply.${n.threadId || n.id}`,
+      recipients: recipients || undefined,
+    });
+  };
   const canOpenThread = (n) => n.kind === 'email' &&
     ((n.threadId && liveThreadIds.has(n.threadId)) || (!n.threadId && n.direction === 'inbound'));
   // Active right-column tab. Persisted so the page reopens on the last-viewed
@@ -1661,8 +1697,8 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
               )}
             </div>
             {addKind&&<NoteForm personId={person.id} classId={null} kind={addKind} onSave={n=>{onAddNote(n);setAddKind(null);}} onCancel={()=>setAddKind(null)} />}
-            {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} onReply={n.kind==='email'?startReply:undefined} onOpenThread={canOpenThread(n)?openThread:undefined} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
-            {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} onReply={n.kind==='email'?startReply:undefined} onOpenThread={canOpenThread(n)?openThread:undefined} highlight={flashId===n.id} />)}
+            {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} onReply={n.kind==='email'?startReply:undefined} onReplyAll={canReplyAll(n)?startReplyAll:undefined} onOpenThread={canOpenThread(n)?openThread:undefined} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
+            {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} onReply={n.kind==='email'?startReply:undefined} onReplyAll={canReplyAll(n)?startReplyAll:undefined} onOpenThread={canOpenThread(n)?openThread:undefined} highlight={flashId===n.id} />)}
             {visibleNotes.length===0&&!addKind&&<Empty text={effectiveFilter==='all' ? 'No comms yet' : effectiveFilter==='diary' ? 'No diary entries' : `No ${INTERACTION_KINDS[effectiveFilter].label.toLowerCase()}s logged yet`} />}
           </>}
           {tab==='packages'&&<>
@@ -1879,6 +1915,7 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
         onSaveAsTemplate={onSaveAsTemplate}
         onSend={onSendEmail}
         initialSubject={replyCtx.initialSubject}
+        initialRecipients={replyCtx.recipients || null}
         threadId={replyCtx.threadId}
         inReplyTo={replyCtx.inReplyTo}
         draftKey={replyCtx.draftKey}

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { BANK_DETAILS, ORG_META, PERSON_ROLES } from "./constants.js";
+import { BANK_DETAILS, ORG_META, OWN_EMAIL_ADDRESSES, PERSON_ROLES } from "./constants.js";
 
 // helpers.jsx — contexts, hooks, pure helpers, invoice rendering
 // extracted from FeltBodyCRM.jsx
@@ -757,3 +757,66 @@ export const calendarDateEvents = (people = [], contactDates = [], startISO, end
 
   return out;
 };
+
+// ─── Reply-all recipient derivation (group email) ─────────────────────────
+// Shared by ThreadsView's Reply all and PersonDetail's per-card Reply all so
+// the two can't drift. The thread's own rows ARE the participant list under
+// the fan-out model: each outbound row = one recipient (personId, or raw
+// to_email for non-CRM addresses), each inbound row = one sender. Inbound
+// raw_headers.to/cc are also scanned so an address someone ELSE added via
+// their reply-all stays in the loop (log-worker stores { address }, our
+// outbound rows store { email } — both handled). Known people beat raw
+// addresses. Role: the latest inbound sender gets To — you're answering
+// them — everyone else Cc. Returns null when there's nobody to reply to.
+export function deriveReplyAllRecipients(messages, personById) {
+  const personEntries = new Map();
+  const rawEntries = new Map();
+  messages.forEach(m => {
+    if (m.personId) {
+      if (!personEntries.has(m.personId)) {
+        const p = personById[m.personId];
+        personEntries.set(m.personId, {
+          personId: m.personId, name: p?.name || null, email: p?.email || '', role: 'cc',
+        });
+      }
+      return;
+    }
+    const addr = String(m.direction === 'outbound' ? m.toEmail : m.fromEmail || '')
+      .trim().toLowerCase();
+    if (addr && !OWN_EMAIL_ADDRESSES.includes(addr)) {
+      rawEntries.set(addr, { personId: null, name: null, email: addr, role: 'cc' });
+    }
+  });
+  messages.forEach(m => {
+    if (m.direction !== 'inbound' || !m.rawHeaders) return;
+    const lists = [
+      ...(Array.isArray(m.rawHeaders.to) ? m.rawHeaders.to : []),
+      ...(Array.isArray(m.rawHeaders.cc) ? m.rawHeaders.cc : []),
+    ];
+    lists.forEach(a => {
+      const addr = String(a?.address || a?.email || '').trim().toLowerCase();
+      if (addr && !OWN_EMAIL_ADDRESSES.includes(addr)) {
+        rawEntries.set(addr, rawEntries.get(addr) || { personId: null, name: null, email: addr, role: 'cc' });
+      }
+    });
+  });
+  // Drop raw duplicates of known people's primary addresses.
+  const knownAddrs = new Set(
+    [...personEntries.values()].map(e => e.email.trim().toLowerCase()).filter(Boolean));
+  knownAddrs.forEach(a => rawEntries.delete(a));
+
+  const recipients = [...personEntries.values(), ...rawEntries.values()];
+  if (!recipients.length) return null;
+  const lastInbound = [...messages].reverse().find(m => m.direction === 'inbound');
+  const toKey = lastInbound
+    ? (lastInbound.personId || String(lastInbound.fromEmail || '').trim().toLowerCase())
+    : null;
+  let flagged = false;
+  recipients.forEach(r => {
+    if (!flagged && toKey && (r.personId === toKey || r.email === toKey)) {
+      r.role = 'to'; flagged = true;
+    }
+  });
+  if (!flagged) recipients[0].role = 'to';
+  return recipients;
+}

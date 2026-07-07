@@ -1,6 +1,17 @@
 // constants.js — pure config/data extracted from FeltBodyCRM.jsx
 // No React dependency. Contexts and hooks live in helpers.jsx.
 
+// The Felt Body's own sending/receiving addresses. Used to exclude ourselves
+// from reply-all recipient derivation and (in the log-worker, where this list
+// is duplicated as MY_ADDRESSES) to determine message direction. Keep the
+// three copies in sync: here, log-worker index.js, settings.my_addresses.
+export const OWN_EMAIL_ADDRESSES = [
+  'jesse@thefeltbody.com',
+  'info@thefeltbody.com',
+  'hello@thefeltbody.com',
+  'log@thefeltbody.com',
+];
+
 export const SEED = {
   orgs: [],
   people: [],

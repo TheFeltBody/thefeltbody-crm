@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { BANK_DETAILS, C, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
-import { PrintInvoiceOverlay, addDays, birthdayInfo, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
+import { PrintInvoiceOverlay, addDays, deriveReplyAllRecipients, birthdayInfo, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
 import { Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
 
@@ -1536,81 +1536,15 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
     };
   };
 
-  // Our own sending/receiving addresses — excluded from reply-all recipient
-  // derivation (you don't cc yourself). Kept in sync with the log-worker's
-  // MY_ADDRESSES constant and the settings.my_addresses row.
-  const OWN_ADDRESSES = [
-    'jesse@thefeltbody.com',
-    'info@thefeltbody.com',
-    'hello@thefeltbody.com',
-    'log@thefeltbody.com',
-  ];
-
-  // Derive the full participant set for Reply all. The thread's own rows ARE
-  // the participant list under the fan-out model: each outbound row = one
-  // recipient (personId, or raw to_email for non-CRM addresses), each inbound
-  // row = one sender. Inbound raw_headers.to/cc are also scanned so an address
-  // someone ELSE added via their reply-all is kept in the loop. Known people
-  // beat raw addresses (a person's primary address appearing raw is dropped
-  // in favour of the personId entry). Role: the latest inbound sender gets To
-  // — you're answering them — everyone else Cc; chips are editable in the
-  // modal anyway.
+  // Reply all: participant derivation lives in helpers.deriveReplyAllRecipients
+  // (shared with PersonDetail's per-card Reply all — one implementation, no
+  // drift). This wrapper just picks the modal's primary person from the To
+  // entry and layers the thread context from buildReply.
   const buildReplyAll = (t) => {
     const base = buildReply(t);
     if (!base) return null;
-    const personEntries = new Map();  // personId -> entry
-    const rawEntries = new Map();     // email -> entry
-    t.messages.forEach(m => {
-      if (m.personId) {
-        if (!personEntries.has(m.personId)) {
-          const p = personById[m.personId];
-          personEntries.set(m.personId, {
-            personId: m.personId, name: p?.name || null, email: p?.email || '', role: 'cc',
-          });
-        }
-        return;
-      }
-      const addr = String(m.direction === 'outbound' ? m.toEmail : m.fromEmail || '')
-        .trim().toLowerCase();
-      if (addr && !OWN_ADDRESSES.includes(addr)) {
-        rawEntries.set(addr, { personId: null, name: null, email: addr, role: 'cc' });
-      }
-    });
-    // Addresses introduced by someone else's reply-all live only in the
-    // inbound raw headers (log-worker stores parsed to/cc there; our outbound
-    // rows store to_list/cc_list). Both shapes: { address } | { email }.
-    t.messages.forEach(m => {
-      if (m.direction !== 'inbound' || !m.rawHeaders) return;
-      const lists = [
-        ...(Array.isArray(m.rawHeaders.to) ? m.rawHeaders.to : []),
-        ...(Array.isArray(m.rawHeaders.cc) ? m.rawHeaders.cc : []),
-      ];
-      lists.forEach(a => {
-        const addr = String(a?.address || a?.email || '').trim().toLowerCase();
-        if (addr && !OWN_ADDRESSES.includes(addr)) {
-          rawEntries.set(addr, rawEntries.get(addr) || { personId: null, name: null, email: addr, role: 'cc' });
-        }
-      });
-    });
-    // Drop raw duplicates of known people's addresses.
-    const knownAddrs = new Set(
-      [...personEntries.values()].map(e => e.email.trim().toLowerCase()).filter(Boolean));
-    knownAddrs.forEach(a => rawEntries.delete(a));
-
-    const recipients = [...personEntries.values(), ...rawEntries.values()];
-    if (!recipients.length) return base;
-    // To = latest inbound sender (the person you're answering).
-    const lastInbound = [...t.messages].reverse().find(m => m.direction === 'inbound');
-    const toKey = lastInbound
-      ? (lastInbound.personId || String(lastInbound.fromEmail || '').trim().toLowerCase())
-      : null;
-    let flagged = false;
-    recipients.forEach(r => {
-      if (!flagged && toKey && (r.personId === toKey || r.email === toKey)) {
-        r.role = 'to'; flagged = true;
-      }
-    });
-    if (!flagged) recipients[0].role = 'to';
+    const recipients = deriveReplyAllRecipients(t.messages, personById);
+    if (!recipients) return base;
     const toEntry = recipients.find(r => r.role === 'to');
     return {
       ...base,
