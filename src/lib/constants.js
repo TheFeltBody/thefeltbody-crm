@@ -61,6 +61,18 @@ export const ORG_META = {
   other:{ label:'Organisation', color:'#c9a84c', bg:'#1b2213' },
   personal:{ label:'Personal', color:'#c98fd4', bg:'#241328' },
 };
+// Care home outreach pipeline (organisations.outreach_stage). null/unset means
+// "not part of the outreach campaign" — this only applies to orgs Jesse has
+// actively added as a Balance & Vitality prospect. Ordered roughly by how far
+// along the pipeline each stage sits, cold -> converted.
+export const CARE_HOME_STAGES = {
+  to_contact:{ label:'To Contact', color:'#8a94a3', bg:'#1c1f24' },
+  attempting:{ label:'Attempting', color:'#6ba3d4', bg:'#131d2a' },
+  awaiting_callback:{ label:'Awaiting Callback', color:'#c9a84c', bg:'#1b2213' },
+  taster_booked:{ label:'Taster Booked', color:'#a07fd4', bg:'#1a1428' },
+  nurture:{ label:'Nurture', color:'#6ab86a', bg:'#132413' },
+  converted:{ label:'Converted', color:'#4db879', bg:'#0f2318' },
+};
 export const PERSON_ROLES = {
   resident:{ label:'Resident', color:'#4db879', bg:'#132413' },
   private_client:{ label:'Private Client', color:'#a07fd4', bg:'#1a1428' },

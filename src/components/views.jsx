@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BANK_DETAILS, C, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
+import { BANK_DETAILS, C, CARE_HOME_STAGES, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
 import { PrintInvoiceOverlay, addDays, deriveReplyAllRecipients, birthdayInfo, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
 import { Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
@@ -568,6 +568,84 @@ export function Dashboard({ orgs, people, classes, attendance, notes, packages, 
   const activePkgs = packages.filter(p=>p.type==='monthly_unlimited'||(p.type!=='drop_in'&&p.sessionsUsed<p.totalSessions)).length;
   const outstanding = invoices.filter(i=>i.status!=='paid').reduce((s,i)=>s+(i.total||0),0);
 
+  // ─── Care home outreach pipeline ────────────────────────────────────────
+  // Prospects = care_home orgs with an outreachStage set (opt-in; converted
+  // ones drop off the panel since there's nothing left to chase). Buckets:
+  //   Call Today     — cold/warm stages (to_contact/attempting/awaiting_callback)
+  //                    whose nextContactDate is unset or due
+  //   Tasters This Week — taster_booked orgs whose nextContactDate falls in
+  //                    the current week
+  //   Nurture Due    — nurture-stage orgs whose next check-in is due
+  // nextContactDate does triple duty depending on stage — see CARE_HOME_STAGES.
+  const careHomeProspects = useMemo(() =>
+    orgs.filter(o => o.type==='care_home' && o.outreachStage && o.outreachStage!=='converted'),
+    [orgs]
+  );
+  const [outreachFilter, setOutreachFilter] = useState('call'); // call | tasters | nurture
+  const outreachLists = useMemo(() => {
+    const callToday = careHomeProspects.filter(o =>
+      ['to_contact','attempting','awaiting_callback'].includes(o.outreachStage) &&
+      (!o.nextContactDate || o.nextContactDate <= t));
+    const tastersThisWeek = careHomeProspects.filter(o =>
+      o.outreachStage==='taster_booked' && o.nextContactDate &&
+      o.nextContactDate >= t && o.nextContactDate <= weekEnd);
+    const nurtureDue = careHomeProspects.filter(o =>
+      o.outreachStage==='nurture' && (!o.nextContactDate || o.nextContactDate <= t));
+    return { callToday, tastersThisWeek, nurtureDue };
+  }, [careHomeProspects, t, weekEnd]);
+  const renderOutreachBody = () => {
+    if (careHomeProspects.length === 0) return <Empty text="No care homes in the outreach pipeline yet." />;
+    const { callToday, tastersThisWeek, nurtureDue } = outreachLists;
+    const chips = [
+      {key:'call', label:'Call Today', count:callToday.length},
+      {key:'tasters', label:'Tasters This Week', count:tastersThisWeek.length},
+      {key:'nurture', label:'Nurture Due', count:nurtureDue.length},
+    ];
+    const list = outreachFilter==='tasters' ? tastersThisWeek : outreachFilter==='nurture' ? nurtureDue : callToday;
+    const sorted = list.slice().sort((a,b)=>(a.nextContactDate||'').localeCompare(b.nextContactDate||''));
+    return (
+      <>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
+          {chips.map(c => (
+            <button key={c.key} onClick={()=>setOutreachFilter(c.key)}
+              style={{
+                background: outreachFilter===c.key ? C.goldBg : C.surf,
+                border: `1px solid ${outreachFilter===c.key ? C.gold+'aa' : C.border}`,
+                color: outreachFilter===c.key ? C.gold : C.muted,
+                cursor:'pointer', borderRadius:20, fontSize:11.5, padding:'3px 10px',
+                fontFamily:"'Jost',sans-serif",
+                fontWeight: outreachFilter===c.key ? 600 : 400,
+                letterSpacing:'0.3px',
+              }}>
+              {c.label}{c.count>0?` · ${c.count}`:''}
+            </button>
+          ))}
+        </div>
+        {sorted.length > 0 ? (
+          <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+            {sorted.map((o,i) => {
+              const sm = CARE_HOME_STAGES[o.outreachStage];
+              const overdue = o.nextContactDate && o.nextContactDate < t;
+              return (
+                <div key={o.id} onClick={()=>nav('org_detail',{orgId:o.id})}
+                  style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,padding:'10px 14px',cursor:'pointer',background:i%2?C.card:'transparent',borderTop:i>0?`1px solid ${C.border}`:'none'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}>
+                    <span style={{background:sm?.bg,color:sm?.color,fontSize:10,fontWeight:600,padding:'2px 8px',borderRadius:20,letterSpacing:'0.5px',textTransform:'uppercase',whiteSpace:'nowrap',flexShrink:0}}>{sm?.label||o.outreachStage}</span>
+                    <span style={{color:C.text,fontSize:13,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{o.name}</span>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+                    {o.phone && <span style={{color:C.muted,fontSize:12}}>{o.phone}</span>}
+                    <span style={{color:overdue?C.red:C.muted,fontSize:11,fontWeight:overdue?600:400}}>{o.nextContactDate ? fmt(o.nextContactDate) : '—'}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : <Empty text="Nothing in this list right now." />}
+      </>
+    );
+  };
+
   const personOf = (id) => people.find(p=>p.id===id);
   const projectOf = (id) => projects.find(p=>p.id===id);
   const goToNote = (n) => {
@@ -872,6 +950,18 @@ export function Dashboard({ orgs, people, classes, attendance, notes, packages, 
       ),
       body: renderRecentActivityBody,
     },
+    {
+      key: 'outreach',
+      title: 'Care Home Outreach',
+      meta: careHomeProspects.length ? `${careHomeProspects.length} in pipeline` : null,
+      action: (
+        <button onClick={()=>nav('org_list',{orgType:'care_home'})}
+          style={{background:'none',border:'none',color:C.gold,cursor:'pointer',fontSize:12,padding:0,fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>
+          View all →
+        </button>
+      ),
+      body: renderOutreachBody,
+    },
   ];
 
   // SectionTitle: shared header row used by both layouts. On mobile it's also
@@ -1015,6 +1105,13 @@ export function Dashboard({ orgs, people, classes, attendance, notes, packages, 
         <div style={{marginTop:32}}>
           <SectionTitleBar s={sections[4]} mobile={false} />
           {renderRecentActivityBody()}
+        </div>
+      )}
+
+      {careHomeProspects.length > 0 && (
+        <div style={{marginTop:32}}>
+          <SectionTitleBar s={sections.find(sec=>sec.key==='outreach')} mobile={false} />
+          {renderOutreachBody()}
         </div>
       )}
     </div>
@@ -2711,6 +2808,7 @@ export function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
   const { orgTypes } = useTypes();
   const isMobile = useIsMobile();
   const isAll = orgType === 'all';
+  const isCareHome = orgType === 'care_home';
   const m = orgTypes[orgType] || ORG_META[orgType] || { label:'Organisation', color:C.muted, bg:C.surf };
   const list = isAll ? orgs.filter(o=>!isPersonalOrg(o)) : orgs.filter(o=>o.type===orgType);
   const heading = isAll ? 'All Organisations' : `${m.label}s`;
@@ -2730,9 +2828,31 @@ export function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
     return groups;
   }, [isAll, list, orgTypes]);
 
+  // Care Homes page groups by outreach_stage instead of type (type is constant
+  // here) — this is the full-pipeline overview, complementing the Dashboard's
+  // "due today" panel which only surfaces the actionable subset. Unassigned
+  // (no stage set yet) sorts first so nothing slips through untriaged;
+  // Converted sorts last as the "done" bucket. Within a stage, soonest/most
+  // overdue nextContactDate first; orgs with no date sort to the end.
+  const stageGroups = useMemo(() => {
+    if(!isCareHome) return null;
+    const groups = { __unassigned__: [] };
+    Object.keys(CARE_HOME_STAGES).forEach(k => { groups[k] = []; });
+    list.forEach(o => {
+      const k = (o.outreachStage && CARE_HOME_STAGES[o.outreachStage]) ? o.outreachStage : '__unassigned__';
+      groups[k].push(o);
+    });
+    Object.values(groups).forEach(arr =>
+      arr.sort((a,b)=>(a.nextContactDate||'9999-99-99').localeCompare(b.nextContactDate||'9999-99-99')));
+    return groups;
+  }, [isCareHome, list]);
+
   const renderRow = (org) => {
     const orgMeta = orgTypes[org.type] || ORG_META[org.type] || m;
     const pc=people.filter(p=>p.orgId===org.id).length, cc=classes.filter(c=>c.orgId===org.id).length;
+    const sm = isCareHome && org.outreachStage ? CARE_HOME_STAGES[org.outreachStage] : null;
+    const overdue = isCareHome && org.nextContactDate && org.nextContactDate < today();
+    const dueToday = isCareHome && org.nextContactDate === today();
 
     // Mobile layout: two-column row. Left = initials avatar (vertically centred).
     // Right = stacked info, one field per visible row. Empty fields collapse
@@ -2746,16 +2866,23 @@ export function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
             <div style={{color:C.text,fontSize:15,fontWeight:500,lineHeight:1.3}}>{org.name}</div>
             {org.address && <div style={{color:C.muted,fontSize:12,lineHeight:1.4}}>{org.address}</div>}
             {org.contactName && <div style={{color:C.muted,fontSize:12,lineHeight:1.4}}>{org.contactName}</div>}
-            <div style={{color:C.muted,fontSize:11,marginTop:2,letterSpacing:'0.3px'}}>
-              {pc} {pc===1?'person':'people'} · {cc} {cc===1?'class':'classes'}
-            </div>
+            {isCareHome ? (
+              <div style={{display:'flex',alignItems:'center',gap:8,marginTop:2,flexWrap:'wrap'}}>
+                {org.phone && <span style={{color:C.muted,fontSize:11}}>{org.phone}</span>}
+                {org.nextContactDate && <span style={{color:overdue?C.red:dueToday?C.gold:C.muted,fontSize:11,fontWeight:overdue||dueToday?600:400}}>{fmt(org.nextContactDate)}{overdue?' (overdue)':dueToday?' (today)':''}</span>}
+              </div>
+            ) : (
+              <div style={{color:C.muted,fontSize:11,marginTop:2,letterSpacing:'0.3px'}}>
+                {pc} {pc===1?'person':'people'} · {cc} {cc===1?'class':'classes'}
+              </div>
+            )}
           </div>
         </Row>
       );
     }
 
     // Desktop layout (unchanged). Org badge dropped when grouped — the section
-    // header already labels the type.
+    // header already labels the type/stage.
     return (
       <Row key={org.id} onClick={()=>nav('org_detail',{orgId:org.id})}>
         <div style={{width:40,height:40,borderRadius:8,background:orgMeta.bg,border:`1.5px solid ${orgMeta.color}`,display:'flex',alignItems:'center',justifyContent:'center',color:orgMeta.color,fontSize:15,fontWeight:600,flexShrink:0}}>{initials(org.name)}</div>
@@ -2764,10 +2891,19 @@ export function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
           <div style={{color:C.muted,fontSize:12}}>{org.address||'—'}</div>
         </div>
         {org.contactName&&<div style={{color:C.muted,fontSize:13}}>{org.contactName}</div>}
-        <div style={{display:'flex',gap:7,flexShrink:0,alignItems:'center'}}>
-          <span style={{background:C.surf,color:C.muted,fontSize:11,padding:'3px 10px',borderRadius:20}}>{pc} people</span>
-          <span style={{background:C.surf,color:C.muted,fontSize:11,padding:'3px 10px',borderRadius:20}}>{cc} classes</span>
-        </div>
+        {isCareHome ? (
+          <div style={{display:'flex',gap:10,flexShrink:0,alignItems:'center'}}>
+            {org.phone && <span style={{color:C.muted,fontSize:13}}>{org.phone}</span>}
+            <span style={{color:overdue?C.red:dueToday?C.gold:C.muted,fontSize:12,fontWeight:overdue||dueToday?600:400,minWidth:90,textAlign:'right'}}>
+              {org.nextContactDate ? `${fmt(org.nextContactDate)}${overdue?' (overdue)':dueToday?' (today)':''}` : '—'}
+            </span>
+          </div>
+        ) : (
+          <div style={{display:'flex',gap:7,flexShrink:0,alignItems:'center'}}>
+            <span style={{background:C.surf,color:C.muted,fontSize:11,padding:'3px 10px',borderRadius:20}}>{pc} people</span>
+            <span style={{background:C.surf,color:C.muted,fontSize:11,padding:'3px 10px',borderRadius:20}}>{cc} classes</span>
+          </div>
+        )}
       </Row>
     );
   };
@@ -2785,6 +2921,26 @@ export function OrgList({ orgs, people, classes, orgType, nav, onAdd }) {
               <div key={k} style={{marginBottom:22}}>
                 <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
                   <div style={{color:gm.color,fontSize:11,fontWeight:600,letterSpacing:'1.5px',textTransform:'uppercase'}}>{gm.label}s</div>
+                  <div style={{flex:1,height:1,background:C.border,opacity:0.5}} />
+                  <div style={{color:C.muted,fontSize:11}}>{items.length}</div>
+                </div>
+                <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+                  {items.map(renderRow)}
+                </div>
+              </div>
+            );
+          })
+        ) : isCareHome ? (
+          // Grouped-by-stage view: Unassigned first (needs triaging), then the
+          // pipeline in order, Converted last as the "done" bucket.
+          ['__unassigned__', ...Object.keys(CARE_HOME_STAGES)].map((k) => {
+            const items = stageGroups[k];
+            if(!items || !items.length) return null;
+            const gm = k==='__unassigned__' ? { label:'Not Yet Tracked', color:C.muted } : CARE_HOME_STAGES[k];
+            return (
+              <div key={k} style={{marginBottom:22}}>
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+                  <div style={{color:gm.color,fontSize:11,fontWeight:600,letterSpacing:'1.5px',textTransform:'uppercase'}}>{gm.label}</div>
                   <div style={{flex:1,height:1,background:C.border,opacity:0.5}} />
                   <div style={{color:C.muted,fontSize:11}}>{items.length}</div>
                 </div>

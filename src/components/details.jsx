@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { C, INTERACTION_KINDS, INV_STATUS, ORG_META, PAYMENT_STATUS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, RELATIONSHIP_KEYS, RELATIONSHIP_LABELS } from "../lib/constants.js";
+import { C, CARE_HOME_STAGES, INTERACTION_KINDS, INV_STATUS, ORG_META, PAYMENT_STATUS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, RELATIONSHIP_KEYS, RELATIONSHIP_LABELS } from "../lib/constants.js";
 import { addDays, deriveReplyAllRecipients, birthdayInfo, classKindKey, contactDateInfo, fmt, fmtDayMonth, fmtMoney, fmtTime, isCountlessPkg, packagePerSessionValue, packageRemaining, primaryRole, startOfWeek, today, useIsMobile, useLocalStorage, useTypes } from "../lib/helpers.jsx";
 import { Avatar, Btn, ConfirmBtn, Empty, FI, KindBadge, MobileTabBar, Modal, NoteCard, OrgBadge, PageHead, RoleBadge, Row, SourceTag, Tabs } from "./primitives.jsx";
 import { AddPersonForm, NoteForm, SendEmailModal } from "./forms.jsx";
@@ -597,13 +597,27 @@ export function OrgDetail({ org, people, classes, invoices, notes=[], contactDat
           <div onClick={()=>setInfoOpen(v=>!v)}
             style={{position: isMobile ? 'static' : 'sticky',top: isMobile?97:0,zIndex:4,background:C.card,display:'flex',alignItems:'center',gap:10,padding:'14px 20px',cursor:'pointer',borderBottom: infoOpen?`1px solid ${C.border}`:'none'}}>
             <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',gap:6,alignItems:'flex-start'}}>
-              <OrgBadge type={org.type} />
+              <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                <OrgBadge type={org.type} />
+                {org.type==='care_home' && org.outreachStage && (() => {
+                  const sm = CARE_HOME_STAGES[org.outreachStage];
+                  if (!sm) return null;
+                  return <span style={{background:sm.bg,color:sm.color,fontSize:10,fontWeight:600,padding:'2px 8px',borderRadius:20,letterSpacing:'0.7px',textTransform:'uppercase',whiteSpace:'nowrap'}}>{sm.label}</span>;
+                })()}
+              </div>
               {!infoOpen && <div style={{color:C.text,fontSize:14,fontWeight:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{org.name}</div>}
             </div>
             <span aria-hidden="true" style={{color:C.muted,fontSize:12,flexShrink:0,transition:'transform 0.18s',transform:infoOpen?'rotate(0deg)':'rotate(-90deg)',display:'inline-block'}}>▾</span>
           </div>
           {infoOpen && <div style={{padding:'12px 20px 20px'}}>
           <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {org.type==='care_home' && org.nextContactDate && (() => {
+              const overdue = org.nextContactDate < today();
+              const isToday = org.nextContactDate === today();
+              const color = overdue ? C.red : isToday ? C.gold : C.text;
+              const label = org.outreachStage === 'taster_booked' ? 'TASTER DATE' : 'NEXT CONTACT';
+              return <div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>{label}</div><div style={{color,fontSize:13,fontWeight:overdue||isToday?600:400}}>{fmt(org.nextContactDate)}{overdue?' (overdue)':isToday?' (today)':''}</div></div>;
+            })()}
             {org.contactName&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>CONTACT</div><div style={{color:C.text,fontSize:14}}>{org.contactName}</div></div>}
             {org.address&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>ADDRESS</div><div style={{color:C.text,fontSize:13}}>{org.address}</div></div>}
             {org.phone&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>PHONE</div><div style={{color:C.text,fontSize:13}}>{org.phone}</div></div>}

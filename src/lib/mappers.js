@@ -27,6 +27,13 @@ export const orgFromDb = (row) => ({
   contactName: row.contact_name || '',
   notes: row.notes || '',
   invoiceCounter: row.invoice_counter ?? 0,
+  // Care home outreach pipeline — null on any org that isn't an active
+  // Balance & Vitality prospect. See constants.js CARE_HOME_STAGES.
+  outreachStage: row.outreach_stage || null,
+  // Single mutable "when to act next" pointer — meaning depends on
+  // outreachStage: call-by date while cold, the taster date once booked,
+  // next check-in once in nurture. See CARE_HOME_STAGES doc comment.
+  nextContactDate: row.next_contact_date || null,
 });
 
 export const orgToDb = (o) => ({
@@ -38,6 +45,8 @@ export const orgToDb = (o) => ({
   website: o.website || null,
   contact_name: o.contactName || null,
   notes: o.notes || null,
+  outreach_stage: o.outreachStage || null,
+  next_contact_date: o.nextContactDate || null,
 });
 
 // ─── People ──────────────────────────────────────────────────────────────────

@@ -1,16 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { C, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, INTERACTION_KINDS, PAYMENT_MODELS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, SOURCES, TYPE_ICONS, TYPE_PALETTE } from "../lib/constants.js";
+import { C, CARE_HOME_STAGES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, INTERACTION_KINDS, PAYMENT_MODELS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, SOURCES, TYPE_ICONS, TYPE_PALETTE } from "../lib/constants.js";
 import { addDays, addMonths, BIRTHDAY_NO_YEAR, classKindKey, currentHourTime, fillTemplate, fmt, fmtMoney, isCountlessPkg, makeBirthdayNoYear, nextInvoiceNumber, packageRemaining, parseBirthday, primaryRole, scoreTemplates, today, uid, useTypes } from "../lib/helpers.jsx";
 import { Avatar, Btn, FI, KindBadge, Modal, RoleBadge, SearchSelect } from "./primitives.jsx";
 
 export function AddOrgForm({ existing, onSave, onClose, defaultType }) {
   const { orgTypes } = useTypes();
-  const [f, setF] = useState(existing || {name:'',type:defaultType||'care_home',address:'',phone:'',email:'',website:'',contactName:'',notes:''});
+  const [f, setF] = useState(existing || {name:'',type:defaultType||'care_home',address:'',phone:'',email:'',website:'',contactName:'',notes:'',outreachStage:'',nextContactDate:''});
   const s = k => v => setF(x=>({...x,[k]:v}));
   return (
     <Modal title={existing?`Edit: ${existing.name}`:"Add Organisation"} onClose={onClose}>
       <FI label="NAME" value={f.name} onChange={s('name')} />
       <FI label="TYPE" value={f.type} onChange={s('type')} opts={Object.entries(orgTypes).map(([v,m])=>({v,l:m.label}))} />
+      {f.type === 'care_home' && (
+        <div style={{display:'flex',gap:12}}>
+          <FI label="OUTREACH STAGE" half value={f.outreachStage||''} onChange={s('outreachStage')}
+            opts={[{v:'',l:'— not tracked —'}, ...Object.entries(CARE_HOME_STAGES).map(([v,m])=>({v,l:m.label}))]} />
+          <FI label="NEXT CONTACT DATE" type="date" half value={f.nextContactDate||''} onChange={s('nextContactDate')} />
+        </div>
+      )}
       <FI label="ADDRESS" value={f.address} onChange={s('address')} />
       <div style={{display:'flex',gap:12}}><FI label="PHONE" value={f.phone} onChange={s('phone')} half /><FI label="EMAIL" value={f.email} onChange={s('email')} half /></div>
       <FI label="WEBSITE" value={f.website||''} onChange={s('website')} />
