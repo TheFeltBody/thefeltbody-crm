@@ -500,12 +500,27 @@ export const Modal = ({ title, onClose, children, wide, xwide, topAlign }) => (
   </div>
 );
 
-export const FI = ({ label, value, onChange, type='text', opts, rows, half }) => (
+// groups: optional alternative to `opts` for a single <select> whose options
+// are clustered under native <optgroup> headers — e.g. organisations grouped
+// by type so a long flat list becomes scannable in one field rather than
+// needing a separate "pick a type first" control. Shape:
+//   groups: [{ label: 'Care Home', opts: [{v,l}, ...] }, ...]
+//   placeholder: {v:'', l:'— none —'} — rendered as the first, ungrouped option
+export const FI = ({ label, value, onChange, type='text', opts, groups, placeholder, rows, half }) => (
   <div style={{marginBottom:14,flex:half?'1 1 0':undefined,minWidth:half?0:undefined}}>
     <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>{label}</label>
     {opts ? (
       <select value={value} onChange={e=>onChange(e.target.value)} style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}}>
         {opts.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+      </select>
+    ) : groups ? (
+      <select value={value} onChange={e=>onChange(e.target.value)} style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}}>
+        {placeholder && <option value={placeholder.v}>{placeholder.l}</option>}
+        {groups.map(g => (
+          <optgroup key={g.label} label={g.label}>
+            {g.opts.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+          </optgroup>
+        ))}
       </select>
     ) : rows ? (
       <textarea value={value} onChange={e=>onChange(e.target.value)} rows={rows} style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif",resize:'vertical'}} />
