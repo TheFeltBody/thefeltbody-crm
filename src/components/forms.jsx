@@ -746,8 +746,8 @@ export function AddPackageForm({ onSave, onClose, personId, templates=[] }) {
 //     it automatically (no radio).
 //   - if values differ → small radio under each side picks which goes into master.
 // The master preview column is fully editable — typing into a field there
-// overrides whichever side was picked. Roles are intentionally NOT combined;
-// master keeps its own roles (loser's roles are discarded with the loser row).
+// overrides whichever side was picked. Roles are unioned server-side by
+// merge_people() — the master ends up with both contacts' labels (dupes skipped).
 //
 // All related rows (notes, attendance, packages, payments, org_contacts,
 // emails) are combined into the master server-side in a single transaction
@@ -907,7 +907,7 @@ export function MergePeopleForm({ personA, personB, orgs, onMerge, onClose }) {
     <Modal title="Merge Contacts" onClose={onClose} xwide>
       <div style={{color:C.muted,fontSize:12,marginBottom:18,lineHeight:1.5}}>
         Pick which contact survives as the <strong style={{color:C.text}}>master</strong>. The other is deleted, and
-        its linked records (notes, sessions, packages, payments, org links, emails) are re-pointed to the master.
+        its linked records (notes, sessions, packages, payments, org links, emails, contact type labels) are re-pointed to the master.
         Edit any master field below before confirming.
       </div>
 

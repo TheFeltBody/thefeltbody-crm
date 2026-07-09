@@ -285,8 +285,8 @@ export const people = {
   // the whole thing in a single transaction: reassigns FKs from loser to
   // master across attendance/interactions/packages/org_contacts/people_emails,
   // applies the masterPatch to the master row, writes a merge_audit row, and
-  // hard-deletes the loser. person_roles are NOT combined — master keeps its
-  // own roles (loser's roles cascade-delete with the loser row).
+  // hard-deletes the loser. person_roles are unioned into the master (roles the
+  // master already has are skipped); the loser's own rows cascade-delete.
   //
   // masterPatch keys must match DB column names (snake_case). The function
   // whitelists the allowed columns server-side; extra keys are ignored.
@@ -1160,20 +1160,9 @@ export const files = {
 // Throws on auth/validation/send failure. Error message is suitable for direct
 // display in the compose modal.
 export const email = {
-  // Group email (BUILD-2): pass `recipients` — [{ personId, role?:'to'|'cc' } |
-  // { email, role?:'to'|'cc' }] — for multi-recipient sends. The worker fans
-  // out one interactions row per recipient (shared thread_id + external_id).
-  // When `recipients` is absent, the legacy single-personId shape is sent —
-  // identical wire format to before, so this client works against either
-  // worker build. Callers should prefer `notes` (all fan-out rows) over
-  // `note` (first row, kept for compatibility) when splicing local state.
-  async send({ personId, recipients, subject, body, threadId, inReplyTo }) {
+  async send({ personId, subject, body, threadId, inReplyTo }) {
     const session = (await supabase.auth.getSession()).data.session;
     if (!session) throw new Error('Not signed in — refresh and try again.');
-
-    const payload = (Array.isArray(recipients) && recipients.length)
-      ? { recipients, subject, body, threadId, inReplyTo }
-      : { personId, subject, body, threadId, inReplyTo };
 
     const r = await fetch('https://forms.thefeltbody.com/send-email', {
       method: 'POST',
@@ -1181,7 +1170,7 @@ export const email = {
         'Authorization': `Bearer ${session.access_token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ personId, subject, body, threadId, inReplyTo }),
     });
 
     let parsed = {};
@@ -1195,15 +1184,11 @@ export const email = {
       throw new Error(msg + detail);
     }
 
-    const noteRows = Array.isArray(parsed.interactions)
-      ? parsed.interactions.map(noteFromDb)
-      : (parsed.interaction ? [noteFromDb(parsed.interaction)] : []);
     return {
       ok: true,
       logged: parsed.logged !== false,
       warning: parsed.warning || null,
-      note: noteRows[0] || null,
-      notes: noteRows,
+      note: parsed.interaction ? noteFromDb(parsed.interaction) : null,
     };
   },
 };
