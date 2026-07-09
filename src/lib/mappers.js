@@ -781,8 +781,15 @@ export const projectToDb = (p) => ({
 // mapper never writes it — mirrors projects / contact_dates. bucket, path,
 // filename, mimeType, sizeBytes are set once at upload and not edited after;
 // only `label` and the anchor are mutable via fileToDb. createdAt is read-only.
+//
+// store ('supabase' | 'r2') says where the BYTES live: 'supabase' = the
+// client-documents Storage bucket (manual uploads, signed URLs); 'r2' = the
+// feltbody-attachments R2 bucket (email attachments, served/deleted via the
+// forms-worker /file/:id endpoints). Set once at creation, like bucket/path.
+// Workers write their own rows; this mapper only sees 'r2' rows on read.
 export const fileFromDb = (row) => ({
   id: row.id,
+  store: row.store || 'supabase',
   bucket: row.bucket || 'client-documents',
   path: row.path,
   filename: row.filename,
@@ -799,6 +806,7 @@ export const fileFromDb = (row) => ({
 // edits (the immutable upload fields are simply re-sent unchanged). owner_id
 // omitted intentionally — DB default fills it.
 export const fileToDb = (f) => ({
+  store: f.store || 'supabase',
   bucket: f.bucket || 'client-documents',
   path: f.path,
   filename: f.filename,

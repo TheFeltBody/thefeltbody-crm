@@ -1,6 +1,58 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { C, INTERACTION_KINDS, KIND_META, ORG_META, PAYMENT_STATUS, PERSON_ROLES, SOURCES } from "../lib/constants.js";
 import { addDays, fmt, initials, labelAbbrev, primaryRole, smartSortPeople, today, useIsMobile, useMobileUI, useTypes } from "../lib/helpers.jsx";
+import { files as filesApi } from "../lib/dataLayer.js";
+
+// Paperclip chips for email attachments. Renders from raw_headers —
+// attachment_file_ids + attachment_names are stamped by BOTH workers on the
+// interaction row itself (inbound: log-worker; outbound: forms-worker, on
+// EVERY fan-out sibling, because thread display dedupes on brevo_message_id
+// and may keep any of them). So chips need no files-state lookup and no
+// prop-drilled handler: the r2 branch of files.signedUrl only needs { id,
+// store }, fetched here directly. Module scope — nested component
+// definitions remount on every parent render and lose state.
+export const AttachmentChips = ({ rh }) => {
+  const [busyId, setBusyId] = useState(null);
+  const ids = (rh && Array.isArray(rh.attachment_file_ids)) ? rh.attachment_file_ids : [];
+  if (!ids.length) return null;
+  const names = Array.isArray(rh.attachment_names) ? rh.attachment_names : [];
+  const open = async (e, id) => {
+    e.stopPropagation();  // chips live inside clickable cards/rows
+    if (busyId) return;
+    setBusyId(id);
+    try {
+      const url = await filesApi.signedUrl({ id, store: 'r2' });
+      const w = window.open(url, '_blank');
+      if (!w) alert('Popup blocked — allow popups for this site to view attachments.');
+      // Blob URLs live until revoked; give the tab a minute to finish
+      // loading, then release. A missed timing leaks one URL per click per
+      // session — harmless.
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 60_000);
+    } catch (err) {
+      alert(`Could not open attachment: ${err?.message || err}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+  return (
+    <div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:8}} onClick={e=>e.stopPropagation()}>
+      {ids.map((id, i) => (
+        <span key={id} onClick={(e)=>open(e, id)}
+          title={busyId === id ? 'Opening…' : `Open ${names[i] || 'attachment'}`}
+          style={{
+            display:'inline-flex',alignItems:'center',gap:5,
+            background:C.surf,border:`1px solid ${C.border}`,
+            color:busyId === id ? C.muted : C.text,
+            fontSize:11.5,padding:'3px 10px',borderRadius:14,
+            cursor:busyId === id ? 'wait' : 'pointer',maxWidth:220,
+          }}>
+          <span style={{opacity:0.75}}>📎</span>
+          <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{names[i] || 'attachment'}</span>
+        </span>
+      ))}
+    </div>
+  );
+};
 
 export const RoleBadge = ({ role, compact }) => {
   const { personRoles } = useTypes();
@@ -137,6 +189,7 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
       {!note.subject && !note.text && (
         <div style={{color:C.muted,fontSize:13,fontStyle:'italic',opacity:0.7}}>(no details)</div>
       )}
+      {isEmail && <AttachmentChips rh={note.rawHeaders} />}
 
       {note.actionDate && (
         <div style={{display:'flex',alignItems:'center',gap:8,marginTop:9,flexWrap:'wrap'}} onClick={e=>e.stopPropagation()}>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { C, CARE_HOME_STAGES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, INTERACTION_KINDS, PAYMENT_MODELS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, SOURCES, TYPE_ICONS, TYPE_PALETTE } from "../lib/constants.js";
 import { addDays, addMonths, BIRTHDAY_NO_YEAR, classKindKey, currentHourTime, fillTemplate, fmt, fmtMoney, isCountlessPkg, makeBirthdayNoYear, nextInvoiceNumber, packageRemaining, parseBirthday, primaryRole, scoreTemplates, today, uid, useTypes } from "../lib/helpers.jsx";
 import { Avatar, Btn, FI, KindBadge, Modal, RoleBadge, SearchSelect } from "./primitives.jsx";
+import { files as filesApi } from "../lib/dataLayer.js";
 
 export function AddOrgForm({ existing, onSave, onClose, defaultType }) {
   const { orgTypes } = useTypes();
@@ -2209,7 +2210,7 @@ export function PickPersonModal({ people, attendance, classes, onPick, onSkip, o
 // and returned to the caller via onSend, which is expected to splice it into
 // the parent's notes state so it appears on PersonDetail immediately.
 
-export function SendEmailModal({ person, org, templates = [], onSend, onClose, onSaveAsTemplate, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey }) {
+export function SendEmailModal({ person, org, people = [], initialRecipients = null, templates = [], onSend, onClose, onSaveAsTemplate, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey }) {
   // Draft persistence: if a draftKey is supplied, the in-progress subject AND
   // body survive closing/reopening the modal (and navigating away) via
   // localStorage. Stored as a single JSON blob {subject, body}. Falls back to
@@ -2232,6 +2233,50 @@ export function SendEmailModal({ person, org, templates = [], onSend, onClose, o
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
+  // Group sends (reply-all): ThreadsView / PersonDetail pass initialRecipients
+  // ([{ personId|email, name, role }] from deriveReplyAllRecipients). When
+  // present, the whole set goes to the worker as recipients[] — one Brevo
+  // send, fan-out rows server-side. Absent → classic single-person send.
+  const recipients = (Array.isArray(initialRecipients) && initialRecipients.length)
+    ? initialRecipients : null;
+  const recipLabel = (r) => r.name
+    || (r.personId && people.find(p => p.id === r.personId)?.name)
+    || r.email || '?';
+  const recipLine = recipients && (() => {
+    const to = recipients.filter(r => r.role !== 'cc').map(recipLabel).join(', ');
+    const cc = recipients.filter(r => r.role === 'cc').map(recipLabel).join(', ');
+    return { to, cc };
+  })();
+
+  // Attachments. Chips hold the picked File objects; bytes upload at send
+  // time (sequentially, via the forms-worker) so a closed modal leaves no
+  // orphan R2 objects. uploadedIds caches file→row-id across a failed send
+  // so retrying doesn't upload (or bill) the same bytes twice. NOT persisted
+  // in the draft — File handles don't survive localStorage.
+  const ATTACH_MAX_TOTAL = 15 * 1024 * 1024;  // worker + Brevo budget (raw)
+  const ATTACH_MAX_COUNT = 5;
+  const [attach, setAttach] = useState([]);       // [{ key, file }]
+  const [uploadingName, setUploadingName] = useState(null);
+  const uploadedIds = useRef({});                 // key → files-row id
+  const fileInputRef = useRef(null);
+  const attachTotal = attach.reduce((s, a) => s + (a.file.size || 0), 0);
+  const overBudget = attachTotal > ATTACH_MAX_TOTAL;
+  const fmtMb = (b) => `${(b / 1048576).toFixed(1)} MB`;
+  const addFiles = (list) => {
+    const incoming = Array.from(list || []);
+    if (!incoming.length) return;
+    setAttach(prev => {
+      const next = [...prev];
+      for (const f of incoming) {
+        if (next.length >= ATTACH_MAX_COUNT) break;
+        if (next.some(a => a.file.name === f.name && a.file.size === f.size)) continue;
+        next.push({ key: `${f.name}—${f.size}—${Date.now()}`, file: f });
+      }
+      return next;
+    });
+  };
+  const removeAttach = (key) => setAttach(prev => prev.filter(a => a.key !== key));
+
   // Persist subject + body as they change. Writes are cheap and the modal is
   // short-lived, so no debounce. Cleared on successful send.
   useEffect(() => {
@@ -2239,8 +2284,11 @@ export function SendEmailModal({ person, org, templates = [], onSend, onClose, o
     try { localStorage.setItem(draftKey, JSON.stringify({ subject, body })); } catch {}
   }, [subject, body, draftKey]);
 
-  const hasEmail = !!person.email;
-  const canSend = !busy && hasEmail && subject.trim() && body.trim();
+  // Group sends resolve addresses server-side (personId → primary email,
+  // failing the whole send with names if any is missing), so person.email
+  // only gates the single-recipient path.
+  const hasEmail = recipients ? true : !!person.email;
+  const canSend = !busy && hasEmail && subject.trim() && body.trim() && !overBudget;
 
   // Template picker. Show ALL templates, with the most relevant for this
   // recipient sorted to the top (scoreTemplates). Applying one fills subject +
@@ -2282,12 +2330,27 @@ export function SendEmailModal({ person, org, templates = [], onSend, onClose, o
     if (!canSend) return;
     setBusy(true); setErr(null);
     try {
+      // Upload pending attachments first (sequential — order matches chips,
+      // progress readable). Already-uploaded chips (a prior send attempt
+      // that failed later) reuse their cached row id.
+      const attachmentFileIds = [];
+      for (const a of attach) {
+        if (!uploadedIds.current[a.key]) {
+          setUploadingName(a.file.name);
+          const row = await filesApi.uploadAttachment(a.file);
+          uploadedIds.current[a.key] = row.id;
+        }
+        attachmentFileIds.push(uploadedIds.current[a.key]);
+      }
+      setUploadingName(null);
       const res = await onSend({
         personId: person.id,
+        recipients: recipients || undefined,  // group sends; undefined → single
         subject: subject.trim(),
         body, // server escapes + \n -> <br>; keep newlines intact
         threadId,   // undefined for fresh sends → server mints a new thread_id
         inReplyTo,  // undefined for fresh sends → no In-Reply-To header
+        attachmentFileIds: attachmentFileIds.length ? attachmentFileIds : undefined,
       });
       // Best-effort log failure: email *did* send, but the interaction row
       // didn't write. Surface and still close — user can add a manual note.
@@ -2296,16 +2359,24 @@ export function SendEmailModal({ person, org, templates = [], onSend, onClose, o
       onClose();
     } catch (e) {
       setErr(e.message || String(e));
+      setUploadingName(null);
       setBusy(false);
     }
   };
 
   return (
-    <Modal title={`Email ${person.name}`} onClose={busy ? ()=>{} : onClose} wide>
-      <div style={{color:C.muted,fontSize:11,marginBottom:14,letterSpacing:'0.3px'}}>
-        TO: {hasEmail
-          ? <span style={{color:C.text}}>{person.email}</span>
-          : <span style={{color:C.gold}}>⚠ No primary email — set one on this contact before sending</span>}
+    <Modal title={recipients ? `Email ${recipients.length} recipients` : `Email ${person.name}`} onClose={busy ? ()=>{} : onClose} wide>
+      <div style={{color:C.muted,fontSize:11,marginBottom:14,letterSpacing:'0.3px',lineHeight:1.6}}>
+        {recipients ? (
+          <>
+            TO: <span style={{color:C.text}}>{recipLine.to || '—'}</span>
+            {recipLine.cc && <> · CC: <span style={{color:C.text}}>{recipLine.cc}</span></>}
+          </>
+        ) : (
+          <>TO: {hasEmail
+            ? <span style={{color:C.text}}>{person.email}</span>
+            : <span style={{color:C.gold}}>⚠ No primary email — set one on this contact before sending</span>}</>
+        )}
       </div>
       {(rankedTemplates.length > 0 || onSaveAsTemplate) && (
         <div style={{marginBottom:10,display:'flex',gap:8,alignItems:'center'}}>
@@ -2369,6 +2440,39 @@ export function SendEmailModal({ person, org, templates = [], onSend, onClose, o
           lineHeight:1.6,
         }}
       />
+      {/* Attachments: picker + chips + running budget. Bytes upload at send
+          time; the server re-validates everything (extension allowlist, 25 MB
+          per file, 15 MB per send), so this UI only pre-checks the budget. */}
+      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:10}}>
+        <input ref={fileInputRef} type="file" multiple style={{display:'none'}}
+          onChange={e => { addFiles(e.target.files); e.target.value = ''; }} />
+        <button onClick={() => fileInputRef.current?.click()}
+          disabled={busy || attach.length >= ATTACH_MAX_COUNT}
+          title={attach.length >= ATTACH_MAX_COUNT ? `Max ${ATTACH_MAX_COUNT} attachments` : 'Attach files'}
+          style={{background:'none',border:`1px solid ${C.border}`,
+            color:attach.length >= ATTACH_MAX_COUNT ? C.muted : C.gold,
+            cursor:(busy || attach.length >= ATTACH_MAX_COUNT) ? 'default' : 'pointer',
+            borderRadius:6,fontSize:12,padding:'6px 12px',fontFamily:"'Jost',sans-serif"}}>
+          📎 Attach
+        </button>
+        {attach.map(a => (
+          <span key={a.key} style={{display:'inline-flex',alignItems:'center',gap:6,
+            background:C.card,border:`1px solid ${uploadingName === a.file.name ? C.gold : C.border}`,
+            color:C.text,fontSize:11.5,padding:'4px 10px',borderRadius:14,maxWidth:230}}>
+            <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.file.name}</span>
+            <span style={{color:C.muted,flexShrink:0}}>{fmtMb(a.file.size)}</span>
+            {!busy && (
+              <span onClick={() => removeAttach(a.key)} title="Remove"
+                style={{color:C.muted,cursor:'pointer',flexShrink:0,fontSize:13,lineHeight:1}}>×</span>
+            )}
+          </span>
+        ))}
+        {attach.length > 0 && (
+          <span style={{color:overBudget ? C.red : C.muted,fontSize:11,marginLeft:'auto'}}>
+            {fmtMb(attachTotal)} / 15 MB{overBudget && ' — too large to send'}
+          </span>
+        )}
+      </div>
       {err && (
         <div style={{
           marginTop:12,padding:'8px 12px',background:'#3a1f1f',
@@ -2380,7 +2484,9 @@ export function SendEmailModal({ person, org, templates = [], onSend, onClose, o
       )}
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:16}}>
         <Btn variant="ghost" small onClick={onClose} disabled={busy}>Cancel</Btn>
-        <Btn small onClick={send} disabled={!canSend}>{busy ? 'Sending…' : 'Send email'}</Btn>
+        <Btn small onClick={send} disabled={!canSend}>
+          {busy ? (uploadingName ? `Uploading ${uploadingName}…` : 'Sending…') : 'Send email'}
+        </Btn>
       </div>
     </Modal>
   );

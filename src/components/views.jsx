@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { BANK_DETAILS, C, CARE_HOME_STAGES, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
 import { PrintInvoiceOverlay, addDays, deriveReplyAllRecipients, birthdayInfo, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
-import { Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
+import { AttachmentChips, Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
 
 export function SidebarCustomTypeItem({ active, indent, label, icon, count, onNav, onDelete, onEdit }) {
@@ -1231,6 +1231,9 @@ export function InboxView({ notes, people, attendance, classes, onAssign, onDisc
                     : snippet(n.text)}
                 </div>
 
+                {/* Attachments: expanded rows only — collapsed rows stay scannable */}
+                {expandedId === n.id && <AttachmentChips rh={n.rawHeaders} />}
+
                 {/* Actions */}
                 <div style={{display:'flex',justifyContent:'flex-end',gap:8,alignItems:'center'}}
                   onClick={e => e.stopPropagation()}>
@@ -1776,6 +1779,9 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
         <div style={{ color: C.text, fontSize: 13.5, lineHeight: 1.65, whiteSpace: 'pre-wrap', opacity: 0.92 }}>
           {m.text || <span style={{ fontStyle: 'italic', opacity: 0.6 }}>(no body)</span>}
         </div>
+        {/* rawHeaders directly, NOT rh — rh is direction-gated above but
+            attachments render on inbound and outbound alike. */}
+        <AttachmentChips rh={m.rawHeaders} />
       </div>
     );
   };

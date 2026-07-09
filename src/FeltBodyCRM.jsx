@@ -575,8 +575,8 @@ export default function FeltBodyCRM() {
   // mapped to JSX shape, so we splice into local notes state immediately
   // rather than waiting on the 60s poll. Throws propagate up to the
   // SendEmailModal so it can render the error inline (without alert + close).
-  const sendEmail = async ({ personId, recipients, subject, body, threadId, inReplyTo }) => {
-    const res = await data.email.send({ personId, recipients, subject, body, threadId, inReplyTo });
+  const sendEmail = async ({ personId, recipients, subject, body, threadId, inReplyTo, attachmentFileIds }) => {
+    const res = await data.email.send({ personId, recipients, subject, body, threadId, inReplyTo, attachmentFileIds });
     // Group sends fan out one row per recipient — splice them all so the email
     // appears on every participant's record immediately. `notes` always holds
     // the full set (single sends included); `note` fallback covers a mid-deploy

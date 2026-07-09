@@ -1059,6 +1059,21 @@ export const settings = {
 const BUCKET = 'client-documents';
 const MAX_BYTES = 50 * 1024 * 1024;
 
+// Email attachments (files.store === 'r2') live in the feltbody-attachments
+// R2 bucket, written by the log-worker (inbound) and forms-worker (outbound).
+// The browser can't touch R2 directly — viewing and deleting go through the
+// forms-worker /file/:id endpoints, authenticated with the session JWT (same
+// pattern as email.send below).
+const FORMS_WORKER_URL = 'https://forms.thefeltbody.com';
+
+// Session JWT header for forms-worker calls. Throws if signed out so callers
+// surface a clear message instead of an opaque 401.
+async function workerAuthHeaders() {
+  const session = (await supabase.auth.getSession()).data.session;
+  if (!session) throw new Error('Not signed in — refresh and try again.');
+  return { 'Authorization': `Bearer ${session.access_token}` };
+}
+
 export const files = {
   // Upload a File/Blob to storage, then insert the metadata row.
   // `file` is a browser File object (from an <input type="file">).
@@ -1094,6 +1109,7 @@ export const files = {
 
     try {
       const row = await supabase.from('files').insert(fileToDb({
+        store: 'supabase',
         bucket: BUCKET,
         path,
         filename: file.name || safeName,
@@ -1112,9 +1128,49 @@ export const files = {
     }
   },
 
-  // Mint a short-lived signed URL for viewing/downloading a stored object.
-  // `expiresIn` seconds (default 1 hour). Returns the URL string.
+  // Upload an email attachment through the forms-worker: R2 object + files
+  // row (store='r2', unanchored — /send-email links it to the outbound
+  // interaction after the fan-out insert). Raw-body POST, filename travels
+  // URI-encoded in X-Filename (headers are ISO-8859-1; real filenames
+  // aren't). Server enforces the 25 MB cap and Brevo's extension allowlist;
+  // its 400 messages name the file and are modal-displayable as-is.
+  async uploadAttachment(file) {
+    const headers = await workerAuthHeaders();
+    const r = await fetch(`${FORMS_WORKER_URL}/upload-attachment`, {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'X-Filename': encodeURIComponent(file.name || 'attachment'),
+        'Content-Type': file.type || 'application/octet-stream',
+      },
+      body: file,
+    });
+    let parsed = {};
+    try { parsed = await r.json(); } catch { /* non-JSON 5xx */ }
+    if (!r.ok) throw new Error(parsed.error || `Upload failed (HTTP ${r.status})`);
+    return fileFromDb(parsed.file);
+  },
+
+  // Mint a URL for viewing/downloading a stored object. Returns a URL string
+  // either way, so call sites don't care where the bytes live:
+  //   supabase — short-lived signed URL (`expiresIn` seconds, default 1 hour).
+  //   r2       — fetch the bytes from the forms-worker (JWT auth) and return
+  //              a blob object URL. expiresIn is ignored; the URL lives until
+  //              the caller revokes it or the page unloads. Callers that open
+  //              a tab and forget it are fine — a handful of leaked blob URLs
+  //              per session is harmless.
   async signedUrl(file, expiresIn = 3600) {
+    if (file.store === 'r2') {
+      const headers = await workerAuthHeaders();
+      const r = await fetch(`${FORMS_WORKER_URL}/file/${file.id}`, { headers });
+      if (!r.ok) {
+        let msg = `Could not fetch file (HTTP ${r.status})`;
+        try { msg = (await r.json()).error || msg; } catch { /* non-JSON */ }
+        throw new Error(msg);
+      }
+      const blob = await r.blob();
+      return URL.createObjectURL(blob);
+    }
     const { data, error } = await supabase.storage
       .from(file.bucket || BUCKET)
       .createSignedUrl(file.path, expiresIn);
@@ -1135,6 +1191,21 @@ export const files = {
   // with deleted_at set so any FK / audit reference survives, and active_files
   // filters it out on next load. Pass the full file object so we have the path.
   async remove(file) {
+    // r2 rows: the browser can't delete R2 objects, so the forms-worker owns
+    // the whole removal — it deletes the object AND soft-deletes the row in
+    // one call. Throws on failure (row untouched → state stays consistent).
+    if (file.store === 'r2') {
+      const headers = await workerAuthHeaders();
+      const r = await fetch(`${FORMS_WORKER_URL}/file/${file.id}`, {
+        method: 'DELETE', headers,
+      });
+      if (!r.ok) {
+        let msg = `Delete failed (HTTP ${r.status})`;
+        try { msg = (await r.json()).error || msg; } catch { /* non-JSON */ }
+        throw new Error(msg);
+      }
+      return file.id;
+    }
     await softDelete('files', file.id);
     // Best-effort object removal — if this fails the row is already hidden;
     // a stray object is harmless and can be swept later.
@@ -1160,17 +1231,22 @@ export const files = {
 // Throws on auth/validation/send failure. Error message is suitable for direct
 // display in the compose modal.
 export const email = {
-  async send({ personId, subject, body, threadId, inReplyTo }) {
+  async send({ personId, recipients, subject, body, threadId, inReplyTo, attachmentFileIds }) {
     const session = (await supabase.auth.getSession()).data.session;
     if (!session) throw new Error('Not signed in — refresh and try again.');
 
+    // recipients: optional [{ personId|email, role:'to'|'cc' }] for group
+    // sends (reply-all) — the worker treats a bare personId as a one-entry
+    // list, so both shapes share one server path. attachmentFileIds: optional
+    // ids of files rows previously created via uploadAttachment; the worker
+    // validates (existence, store, extension, 15 MB budget) before sending.
     const r = await fetch('https://forms.thefeltbody.com/send-email', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${session.access_token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ personId, subject, body, threadId, inReplyTo }),
+      body: JSON.stringify({ personId, recipients, subject, body, threadId, inReplyTo, attachmentFileIds }),
     });
 
     let parsed = {};
@@ -1189,6 +1265,12 @@ export const email = {
       logged: parsed.logged !== false,
       warning: parsed.warning || null,
       note: parsed.interaction ? noteFromDb(parsed.interaction) : null,
+      // Group fan-out: one row per recipient. Callers splice ALL of them so
+      // the email lands on every participant's record immediately. Falls
+      // back to wrapping the single row for a mid-deploy old worker.
+      notes: Array.isArray(parsed.interactions)
+        ? parsed.interactions.map(noteFromDb)
+        : (parsed.interaction ? [noteFromDb(parsed.interaction)] : []),
     };
   },
 };
