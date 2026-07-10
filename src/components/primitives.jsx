@@ -189,7 +189,9 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
       {!note.subject && !note.text && (
         <div style={{color:C.muted,fontSize:13,fontStyle:'italic',opacity:0.7}}>(no details)</div>
       )}
-      {isEmail && <AttachmentChips rh={note.rawHeaders} />}
+      {/* Any kind can carry attachments now (notes/meetings/calls too);
+          the component is null-safe when raw_headers has no ids. */}
+      <AttachmentChips rh={note.rawHeaders} />
 
       {note.actionDate && (
         <div style={{display:'flex',alignItems:'center',gap:8,marginTop:9,flexWrap:'wrap'}} onClick={e=>e.stopPropagation()}>

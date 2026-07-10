@@ -1128,6 +1128,16 @@ export const files = {
     }
   },
 
+  // Point files rows at an interaction after the fact. Used by the note
+  // handlers (the row id doesn't exist until the note is created) and safe
+  // client-side: the rows were written by the worker with owner_id = the
+  // same auth.uid(), so owner-scoped RLS passes.
+  async anchorToInteraction(ids, interactionId) {
+    if (!Array.isArray(ids) || !ids.length || !interactionId) return;
+    await supabase.from('files').update({ interaction_id: interactionId })
+      .in('id', ids).then(ok);
+  },
+
   // Upload an email attachment through the forms-worker: R2 object + files
   // row (store='r2', unanchored — /send-email links it to the outbound
   // interaction after the fan-out insert). Raw-body POST, filename travels

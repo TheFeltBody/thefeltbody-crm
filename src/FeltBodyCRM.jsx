@@ -518,7 +518,18 @@ export default function FeltBodyCRM() {
 
   // ── Notes (interactions)
   const addNote = (n) => data.notes.create(n)
-    .then(saved => setNotes(p => [...p, saved]))
+    .then(saved => {
+      setNotes(p => [...p, saved]);
+      // Attachments were uploaded (unanchored) before the row existed —
+      // point their files rows here now. Best-effort: chips render from
+      // raw_headers regardless; the anchor is for the Documents view.
+      const attIds = saved.rawHeaders?.attachment_file_ids;
+      if (Array.isArray(attIds) && attIds.length) {
+        data.files.anchorToInteraction(attIds, saved.id)
+          .catch(onError('Link attachments'));
+      }
+      return saved;
+    })
     .catch(onError('Add note'));
   // Diary entries are interactions with kind='diary' — same create path as a
   // note, splicing into local notes state so the new block appears on the
@@ -671,8 +682,22 @@ export default function FeltBodyCRM() {
       subject: edited.subject || '',  // notePatchToDb normalises '' → null
       durationMins: edited.durationMins ?? null,
     };
+    // Attachment edits ride along only when the form touched them — the
+    // merged raw_headers (undefined otherwise, so untouched edits leave the
+    // column alone via notePatchToDb's presence check).
+    if (edited.rawHeaders !== undefined) patch.rawHeaders = edited.rawHeaders;
     setNotes(p => p.map(n => n.id === id ? { ...n, ...patch } : n));
     data.notes.patch(id, patch).catch(onError('Update note'));
+    // New uploads get anchored; removed chips get their file (R2 object +
+    // row) deleted — the form only marks removals, execution happens here
+    // after the patch is on its way. Both best-effort.
+    if (edited._newAttachmentIds?.length) {
+      data.files.anchorToInteraction(edited._newAttachmentIds, id)
+        .catch(onError('Link attachments'));
+    }
+    (edited._removedAttachmentIds || []).forEach(fid => {
+      data.files.remove({ id: fid, store: 'r2' }).catch(onError('Remove attachment'));
+    });
   };
 
   // ─── Projects ──────────────────────────────────────────────────────────

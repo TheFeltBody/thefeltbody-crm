@@ -1650,6 +1650,44 @@ export function NoteForm({ personId, classId, kind='note', existing, onSave, onC
   const [editKind, setEditKind] = useState(existing?.kind || kind || 'note');
   const activeKind = isEdit ? editKind : kind;
 
+  // Attachments — same rails as email: bytes to R2 via the forms-worker
+  // (Supabase storage untouched), ids + names in the note's raw_headers (the
+  // AttachmentChips render contract), files rows anchored to the interaction
+  // by the parent handler after save. Existing chips come from
+  // existing.rawHeaders; removing one is collected into removedIds and
+  // executed by the parent AFTER a successful save (transient _-prefixed
+  // keys on the note object — noteToDb ignores unknown keys). Per-file cap
+  // mirrors the worker's 25 MB; no total budget — that was Brevo's limit,
+  // and notes never travel through Brevo.
+  const NOTE_ATTACH_MAX = 25 * 1024 * 1024;
+  const [attach, setAttach] = useState([]);            // new picks: [{ key, file }]
+  const [keptExisting, setKeptExisting] = useState(() => {
+    const ids = existing?.rawHeaders?.attachment_file_ids;
+    if (!Array.isArray(ids) || !ids.length) return [];
+    const names = existing.rawHeaders.attachment_names || [];
+    return ids.map((id, i) => ({ id, name: names[i] || 'attachment' }));
+  });
+  const [removedIds, setRemovedIds] = useState([]);
+  const [attBusy, setAttBusy] = useState(false);       // uploading during save
+  const [attErr, setAttErr] = useState(null);
+  const attUploadedIds = useRef({});                   // key → files-row id (retry cache)
+  const attInputRef = useRef(null);
+  const attTooBig = attach.filter(a => a.file.size > NOTE_ATTACH_MAX);
+  const addNoteFiles = (list) => {
+    setAttach(prev => {
+      const next = [...prev];
+      for (const f of Array.from(list || [])) {
+        if (next.some(a => a.file.name === f.name && a.file.size === f.size)) continue;
+        next.push({ key: `${f.name}—${f.size}—${Date.now()}`, file: f });
+      }
+      return next;
+    });
+  };
+  const removeExistingAtt = (id) => {
+    setKeptExisting(prev => prev.filter(a => a.id !== id));
+    setRemovedIds(prev => [...prev, id]);
+  };
+
   const meta = INTERACTION_KINDS[activeKind] || INTERACTION_KINDS.note;
   const needsDirection = activeKind === 'call' || activeKind === 'email';
   const needsSubject = activeKind === 'email';
@@ -1662,8 +1700,8 @@ export function NoteForm({ personId, classId, kind='note', existing, onSave, onC
   }[activeKind] || 'Add a note...';
   const saveLabel = isEdit ? 'Save changes' : `Save ${meta.label.toLowerCase()}`;
 
-  const save = () => {
-    if(!text.trim()) return;
+  const save = async () => {
+    if(!text.trim() || attBusy || attTooBig.length) return;
     const note = {
       personId,
       classId,
@@ -1671,6 +1709,51 @@ export function NoteForm({ personId, classId, kind='note', existing, onSave, onC
       important: imp,
       kind: activeKind,
     };
+
+    // Upload new attachments first (sequential; ids cached across a failed
+    // attempt so retry never re-uploads). Any failure keeps the form open
+    // with the error inline — nothing saves half-attached.
+    let newAtt = [];
+    if (attach.length) {
+      setAttBusy(true); setAttErr(null);
+      try {
+        for (const a of attach) {
+          if (!attUploadedIds.current[a.key]) {
+            const row = await filesApi.uploadAttachment(a.file);
+            attUploadedIds.current[a.key] = row.id;
+          }
+          newAtt.push({ id: attUploadedIds.current[a.key], name: a.file.name });
+        }
+      } catch (e) {
+        setAttErr(e?.message || String(e));
+        setAttBusy(false);
+        return;
+      }
+      setAttBusy(false);
+    }
+    const finalAtt = [...keptExisting, ...newAtt];
+    if (isEdit) {
+      // Merge into the EXISTING raw_headers so nothing else in there is
+      // disturbed (manual-inbound thread ids etc.); strip the keys entirely
+      // when the last attachment is removed.
+      const merged = { ...(existing.rawHeaders || {}) };
+      if (finalAtt.length) {
+        merged.attachment_file_ids = finalAtt.map(a => a.id);
+        merged.attachment_names = finalAtt.map(a => a.name);
+      } else {
+        delete merged.attachment_file_ids;
+        delete merged.attachment_names;
+      }
+      note.rawHeaders = Object.keys(merged).length ? merged : null;
+      // Transient instructions for the parent handler (never hit the DB):
+      note._newAttachmentIds = newAtt.map(a => a.id);
+      note._removedAttachmentIds = removedIds;
+    } else if (finalAtt.length) {
+      note.rawHeaders = {
+        attachment_file_ids: finalAtt.map(a => a.id),
+        attachment_names: finalAtt.map(a => a.name),
+      };
+    }
     // Add mode sets today; edit mode preserves the original date so the timeline
     // ordering doesn't shift when a note is touched up.
     if(!isEdit) note.date = today();
@@ -1715,6 +1798,7 @@ export function NoteForm({ personId, classId, kind='note', existing, onSave, onC
     if(!isEdit) {
       setText(''); setImp(false); setActionDate('');
       setDirection('outbound'); setSubject(''); setDurationMins('');
+      setAttach([]); setAttErr(null); attUploadedIds.current = {};
     }
   };
 
@@ -1791,6 +1875,53 @@ export function NoteForm({ personId, classId, kind='note', existing, onSave, onC
       )}
 
       <textarea value={text} onChange={e=>setText(e.target.value)} rows={3} placeholder={placeholder} style={{width:'100%',background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:14,padding:'10px 12px',fontFamily:"'Jost',sans-serif",resize:'vertical',outline:'none',lineHeight:1.6}} />
+
+      {/* Attachments: kept-existing chips (edit mode) + new picks + adder. */}
+      <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginTop:8}}>
+        <input ref={attInputRef} type="file" multiple style={{display:'none'}}
+          onChange={e => { addNoteFiles(e.target.files); e.target.value = ''; }} />
+        <button onClick={() => attInputRef.current?.click()} disabled={attBusy}
+          title="Attach files to this entry"
+          style={{background:'none',border:`1px solid ${C.border}`,color:C.gold,
+            cursor:attBusy ? 'default' : 'pointer',borderRadius:6,fontSize:12,
+            padding:'4px 10px',fontFamily:"'Jost',sans-serif"}}>
+          📎 Attach
+        </button>
+        {keptExisting.map(a => (
+          <span key={a.id} style={{display:'inline-flex',alignItems:'center',gap:6,
+            background:C.surf,border:`1px solid ${C.border}`,color:C.text,
+            fontSize:11.5,padding:'3px 10px',borderRadius:14,maxWidth:220}}>
+            <span style={{opacity:0.75}}>📎</span>
+            <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.name}</span>
+            {!attBusy && (
+              <span onClick={() => removeExistingAtt(a.id)} title="Remove (deletes the file on save)"
+                style={{color:C.muted,cursor:'pointer',fontSize:13,lineHeight:1}}>×</span>
+            )}
+          </span>
+        ))}
+        {attach.map(a => (
+          <span key={a.key} style={{display:'inline-flex',alignItems:'center',gap:6,
+            background:C.surf,border:`1px solid ${a.file.size > NOTE_ATTACH_MAX ? C.red : C.border}`,
+            color:C.text,fontSize:11.5,padding:'3px 10px',borderRadius:14,maxWidth:220}}>
+            <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.file.name}</span>
+            <span style={{color:C.muted,flexShrink:0}}>{(a.file.size / 1048576).toFixed(1)} MB</span>
+            {!attBusy && (
+              <span onClick={() => setAttach(prev => prev.filter(x => x.key !== a.key))} title="Remove"
+                style={{color:C.muted,cursor:'pointer',fontSize:13,lineHeight:1}}>×</span>
+            )}
+          </span>
+        ))}
+      </div>
+      {attTooBig.length > 0 && (
+        <div style={{color:C.gold,fontSize:11,marginTop:6}}>
+          ⚠ Over the 25 MB per-file limit: {attTooBig.map(a => a.file.name).join(', ')}
+        </div>
+      )}
+      {attErr && (
+        <div style={{marginTop:8,padding:'6px 10px',background:'#3a1f1f',border:'1px solid #6b2e2e',
+          borderRadius:6,color:'#e8a4a4',fontSize:12,lineHeight:1.5}}>{attErr}</div>
+      )}
+
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginTop:10,gap:14,flexWrap:'wrap'}}>
         <div style={{display:'flex',alignItems:'center',gap:18,flexWrap:'wrap'}}>
           <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',color:imp?C.gold:C.muted,fontSize:13}}>
@@ -1804,8 +1935,10 @@ export function NoteForm({ personId, classId, kind='note', existing, onSave, onC
           </label>
         </div>
         <div style={{display:'flex',gap:8}}>
-          <Btn variant="ghost" small onClick={onCancel}>Cancel</Btn>
-          <Btn small onClick={save}>{saveLabel}</Btn>
+          <Btn variant="ghost" small onClick={onCancel} disabled={attBusy}>Cancel</Btn>
+          <Btn small onClick={save} disabled={attBusy || attTooBig.length > 0}>
+            {attBusy ? 'Uploading…' : saveLabel}
+          </Btn>
         </div>
       </div>
     </div>
@@ -2233,20 +2366,52 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
-  // Group sends (reply-all): ThreadsView / PersonDetail pass initialRecipients
-  // ([{ personId|email, name, role }] from deriveReplyAllRecipients). When
-  // present, the whole set goes to the worker as recipients[] — one Brevo
-  // send, fan-out rows server-side. Absent → classic single-person send.
-  const recipients = (Array.isArray(initialRecipients) && initialRecipients.length)
-    ? initialRecipients : null;
+  // Editable recipient set. Seeded from initialRecipients (reply-all —
+  // derived by deriveReplyAllRecipients upstream) or from the person the
+  // modal was opened on; then freely editable — add CRM contacts via search,
+  // add raw addresses for people not in the CRM (their fan-out rows land in
+  // the Inbox for linking), toggle To/Cc per chip, remove. ALWAYS sent to
+  // the worker as recipients[] — a one-entry list is identical to the
+  // legacy personId path server-side. Not draft-persisted (subject/body
+  // are; a recipient set is cheap to rebuild and stale sets are risky).
+  const MAX_RECIPIENTS = 10;  // mirrors the worker's ADHOC_MAX_RECIPIENTS
+  const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const [recips, setRecips] = useState(() => {
+    if (Array.isArray(initialRecipients) && initialRecipients.length) {
+      return initialRecipients.map(r => ({ ...r, role: r.role === 'cc' ? 'cc' : 'to' }));
+    }
+    return person?.id
+      ? [{ personId: person.id, name: person.name || null, email: person.email || '', role: 'to' }]
+      : [];
+  });
+  const [adding, setAdding] = useState(false);
+  const [rawEmail, setRawEmail] = useState('');
   const recipLabel = (r) => r.name
     || (r.personId && people.find(p => p.id === r.personId)?.name)
     || r.email || '?';
-  const recipLine = recipients && (() => {
-    const to = recipients.filter(r => r.role !== 'cc').map(recipLabel).join(', ');
-    const cc = recipients.filter(r => r.role === 'cc').map(recipLabel).join(', ');
-    return { to, cc };
-  })();
+  const addPerson = (p) => {
+    if (!p || recips.some(r => r.personId === p.id)) { setAdding(false); return; }
+    setRecips(prev => [...prev, { personId: p.id, name: p.name || null, email: p.email || '', role: 'to' }]);
+    setAdding(false);
+  };
+  const addRaw = () => {
+    const em = rawEmail.trim().toLowerCase();
+    if (!EMAIL_OK.test(em)) return;
+    if (!recips.some(r => (r.email || '').toLowerCase() === em)) {
+      setRecips(prev => [...prev, { personId: null, name: null, email: em, role: 'to' }]);
+    }
+    setRawEmail('');
+    setAdding(false);
+  };
+  const toggleRole = (i) => setRecips(prev =>
+    prev.map((r, x) => x === i ? { ...r, role: r.role === 'cc' ? 'to' : 'cc' } : r));
+  const removeRecip = (i) => setRecips(prev => prev.filter((_, x) => x !== i));
+  // A CRM contact with no primary email fails the whole send server-side —
+  // catch it here with the name attached instead. Raw addresses always pass.
+  const noEmailNames = recips
+    .filter(r => r.personId && !(r.email || people.find(p => p.id === r.personId)?.email))
+    .map(recipLabel);
+  const hasTo = recips.some(r => r.role === 'to');
 
   // Attachments. Chips hold the picked File objects; bytes upload at send
   // time (sequentially, via the forms-worker) so a closed modal leaves no
@@ -2284,11 +2449,9 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
     try { localStorage.setItem(draftKey, JSON.stringify({ subject, body })); } catch {}
   }, [subject, body, draftKey]);
 
-  // Group sends resolve addresses server-side (personId → primary email,
-  // failing the whole send with names if any is missing), so person.email
-  // only gates the single-recipient path.
-  const hasEmail = recipients ? true : !!person.email;
-  const canSend = !busy && hasEmail && subject.trim() && body.trim() && !overBudget;
+  const canSend = !busy && recips.length > 0 && recips.length <= MAX_RECIPIENTS
+    && hasTo && noEmailNames.length === 0
+    && subject.trim() && body.trim() && !overBudget;
 
   // Template picker. Show ALL templates, with the most relevant for this
   // recipient sorted to the top (scoreTemplates). Applying one fills subject +
@@ -2344,8 +2507,10 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
       }
       setUploadingName(null);
       const res = await onSend({
-        personId: person.id,
-        recipients: recipients || undefined,  // group sends; undefined → single
+        personId: person?.id,  // legacy field; worker prefers recipients[]
+        recipients: recips.map(r => r.personId
+          ? { personId: r.personId, role: r.role }
+          : { email: r.email, role: r.role }),
         subject: subject.trim(),
         body, // server escapes + \n -> <br>; keep newlines intact
         threadId,   // undefined for fresh sends → server mints a new thread_id
@@ -2365,17 +2530,58 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
   };
 
   return (
-    <Modal title={recipients ? `Email ${recipients.length} recipients` : `Email ${person.name}`} onClose={busy ? ()=>{} : onClose} wide>
-      <div style={{color:C.muted,fontSize:11,marginBottom:14,letterSpacing:'0.3px',lineHeight:1.6}}>
-        {recipients ? (
-          <>
-            TO: <span style={{color:C.text}}>{recipLine.to || '—'}</span>
-            {recipLine.cc && <> · CC: <span style={{color:C.text}}>{recipLine.cc}</span></>}
-          </>
-        ) : (
-          <>TO: {hasEmail
-            ? <span style={{color:C.text}}>{person.email}</span>
-            : <span style={{color:C.gold}}>⚠ No primary email — set one on this contact before sending</span>}</>
+    <Modal title={recips.length === 1 ? `Email ${recipLabel(recips[0])}` : `Email ${recips.length} recipients`} onClose={busy ? ()=>{} : onClose} wide>
+      {/* Recipient chips: tap the To/Cc tag to toggle, × to remove. */}
+      <div style={{marginBottom:14}}>
+        <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center'}}>
+          {recips.map((r, i) => (
+            <span key={r.personId || r.email || i} style={{display:'inline-flex',alignItems:'center',gap:6,
+              background:C.card,border:`1px solid ${C.border}`,color:C.text,
+              fontSize:12,padding:'4px 10px',borderRadius:14,maxWidth:240}}>
+              <span onClick={() => !busy && toggleRole(i)} title="Toggle To / Cc"
+                style={{color:r.role === 'cc' ? C.muted : C.gold,fontSize:9,fontWeight:700,
+                  letterSpacing:'0.6px',cursor:busy ? 'default' : 'pointer',flexShrink:0}}>
+                {r.role === 'cc' ? 'CC' : 'TO'}
+              </span>
+              <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{recipLabel(r)}</span>
+              {!busy && (
+                <span onClick={() => removeRecip(i)} title="Remove"
+                  style={{color:C.muted,cursor:'pointer',fontSize:13,lineHeight:1,flexShrink:0}}>×</span>
+              )}
+            </span>
+          ))}
+          <button onClick={() => setAdding(a => !a)}
+            disabled={busy || recips.length >= MAX_RECIPIENTS}
+            title={recips.length >= MAX_RECIPIENTS ? `Max ${MAX_RECIPIENTS} recipients` : 'Add a recipient'}
+            style={{background:'none',border:`1px solid ${C.border}`,
+              color:recips.length >= MAX_RECIPIENTS ? C.muted : C.gold,
+              cursor:(busy || recips.length >= MAX_RECIPIENTS) ? 'default' : 'pointer',
+              borderRadius:14,fontSize:11,padding:'4px 10px',fontFamily:"'Jost',sans-serif"}}>
+            {adding ? '× Close' : '+ Add'}
+          </button>
+        </div>
+        {noEmailNames.length > 0 && (
+          <div style={{color:C.gold,fontSize:11,marginTop:6}}>
+            ⚠ No primary email: {noEmailNames.join(', ')} — set one on the contact, or remove them here
+          </div>
+        )}
+        {recips.length > 0 && !hasTo && (
+          <div style={{color:C.gold,fontSize:11,marginTop:6}}>⚠ At least one recipient must be To (not just Cc)</div>
+        )}
+        {adding && (
+          <div style={{marginTop:8,padding:10,border:`1px solid ${C.border}`,borderRadius:8,background:C.surf}}>
+            <div style={{display:'flex',gap:8,marginBottom:8}}>
+              <input value={rawEmail} onChange={e=>setRawEmail(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') addRaw(); }}
+                placeholder="Type an address not in the CRM…"
+                style={{flex:1,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,
+                  color:C.text,fontSize:13,padding:'7px 10px',fontFamily:"'Jost',sans-serif",outline:'none'}} />
+              <Btn small onClick={addRaw} disabled={!EMAIL_OK.test(rawEmail.trim().toLowerCase())}>Add</Btn>
+            </div>
+            <SearchSelect people={people} attendance={[]} classes={[]}
+              existing={recips.map(r => r.personId).filter(Boolean)}
+              onSelect={addPerson} />
+          </div>
         )}
       </div>
       {(rankedTemplates.length > 0 || onSaveAsTemplate) && (
