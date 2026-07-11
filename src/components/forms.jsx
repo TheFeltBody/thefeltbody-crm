@@ -596,8 +596,9 @@ export function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, de
 }
 
 
-export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onClose, orgs }) {
+export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onExtend, seriesLastDate, recurrence, onClose, orgs }) {
   const [f, setF] = useState({...cls, time: cls.time || '', duration: cls.duration || 60});
+  const [extendCount, setExtendCount] = useState('');
   const s = k => v => setF(x=>({...x,[k]:v}));
   return (
     <Modal title="Edit Recurring Class" onClose={onClose} wide>
@@ -636,6 +637,20 @@ export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onClose, or
               </div>
             </div>
           )}
+        </div>
+      )}
+      {onExtend && (
+        <div style={{marginTop:8,marginBottom:14,padding:'14px 16px',border:`1px solid ${C.border}`,borderRadius:6,background:C.surf}}>
+          <div style={{color:C.muted,fontSize:11,letterSpacing:'0.5px',marginBottom:6}}>EXTEND SERIES</div>
+          <div style={{display:'flex',alignItems:'flex-end',gap:10}}>
+            <FI label={`ADD HOW MANY MORE ${(RECURRENCE[recurrence]||recurrence||'').toUpperCase()} CLASSES`} value={extendCount} onChange={setExtendCount} type="number" half />
+            <div style={{marginBottom:14}}>
+              <Btn variant="secondary" onClick={()=>{const n=parseInt(extendCount)||0;if(n>0){onExtend(n);onClose();}}}>+ Extend</Btn>
+            </div>
+          </div>
+          <div style={{color:C.muted,fontSize:11,marginTop:-6}}>
+            New classes are appended after the last scheduled date{seriesLastDate?` (${fmt(seriesLastDate)})`:''}, inheriting the series settings — name, time, rate, bookability — not one-off tweaks made to individual dates.
+          </div>
         </div>
       )}
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
