@@ -278,6 +278,9 @@ export const attendanceFromDb = (row) => ({
   // Payment method for drop-in (paymentStatus==='paid') rows. Null/undefined for
   // legacy rows recorded before this column existed → surfaced as 'Unspecified'.
   paidVia: row.paid_via || undefined,
+  // Date the payment was received (drop-in rows only). Legacy rows have no
+  // paid_date; callers fall back to the class date for display/sorting.
+  paidDate: row.paid_date || undefined,
 });
 
 export const attendanceToDb = (a) => {
@@ -290,6 +293,7 @@ export const attendanceToDb = (a) => {
   };
   if (a.paidAmount !== undefined) out.paid_amount = a.paidAmount;
   if (a.paidVia !== undefined) out.paid_via = a.paidVia;
+  if (a.paidDate !== undefined) out.paid_date = a.paidDate;
   return out;
 };
 

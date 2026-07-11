@@ -458,15 +458,21 @@ export function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, de
   const [payMode, setPayMode] = useState(() => personPkgs.length > 0 ? 'package' : 'unpaid');
   const [payAmount, setPayAmount] = useState(f.rate ?? '');
   const [payPackageId, setPayPackageId] = useState(personPkgs[0]?.pk.id || '');
+  // Method + date of payment. Date tracks the session date while 'Drop-in' is
+  // selected (paid on the day is the norm); both remain editable.
+  const [payVia, setPayVia] = useState('cash');
+  const [payDate, setPayDate] = useState(f.date || today());
 
   // Keep amount in sync if user edits the session rate before saving
   useEffect(() => { if(payMode === 'paid') setPayAmount(f.rate ?? ''); }, [f.rate, payMode]);
+  // Same pattern for the payment date following the session date
+  useEffect(() => { if(payMode === 'paid') setPayDate(f.date || today()); }, [f.date, payMode]);
 
   const buildPaymentChoice = () => {
     if(!showPaymentPicker) return undefined;
     if(payMode === 'paid') {
       const amt = parseFloat(payAmount);
-      return { paymentStatus: 'paid', paidAmount: isNaN(amt) ? 0 : amt };
+      return { paymentStatus: 'paid', paidAmount: isNaN(amt) ? 0 : amt, paidVia: payVia, paidDate: payDate || null };
     }
     if(payMode === 'package' && payPackageId) {
       return { paymentStatus: 'package', packageId: payPackageId };
@@ -516,6 +522,22 @@ export function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, de
                 </div>
               )}
             </div>
+            {payMode==='paid' && (
+              <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',paddingLeft:23}}>
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <span style={{color:C.muted,fontSize:11,letterSpacing:'0.4px'}}>VIA</span>
+                  <select value={payVia} onChange={e=>setPayVia(e.target.value)}
+                    style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:4,color:C.text,fontSize:13,padding:'4px 8px',fontFamily:"'Jost',sans-serif",outline:'none'}}>
+                    {Object.entries(PAY_VIA).map(([v,l])=><option key={v} value={v}>{l}</option>)}
+                  </select>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <span style={{color:C.muted,fontSize:11,letterSpacing:'0.4px'}}>ON</span>
+                  <input type="date" value={payDate} onChange={e=>setPayDate(e.target.value)}
+                    style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:4,color:C.text,fontSize:13,padding:'3px 8px',fontFamily:"'Jost',sans-serif",outline:'none',colorScheme:'dark'}} />
+                </div>
+              </div>
+            )}
             {personPkgs.length > 0 && (
               <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
                 {payRadio('package','Use package')}

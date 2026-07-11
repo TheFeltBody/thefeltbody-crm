@@ -4661,7 +4661,8 @@ export function InvoiceDetail({ inv, org, onEdit, onStatusChange, nav, backInfo 
 //   • package purchases (packages with a purchase date / amount)
 // Package-funded sessions aren't listed individually — they'd double-count the
 // lump package payment. Each row links to the person. Filter by method (PAY_VIA);
-// drop-ins have no recorded method, so they're grouped under 'unspecified'.
+// drop-ins recorded before the method picker existed have no method and are
+// grouped under 'unspecified'.
 export function PaymentsView({ attendance, packages, classes, people, nav }) {
   const isMobile = useIsMobile();
   const [method, setMethod] = useState('all');
@@ -4673,7 +4674,8 @@ export function PaymentsView({ attendance, packages, classes, people, nav }) {
       if (a.paymentStatus !== 'paid') return;
       const cls = classes.find(c => c.id === a.classId);
       if (!cls) return;
-      rows.push({ id:`drop_${a.id}`, kind:'drop_in', date:cls.date, amount:a.paidAmount ?? null,
+      // Prefer the recorded payment date; legacy rows fall back to the class date.
+      rows.push({ id:`drop_${a.id}`, kind:'drop_in', date:a.paidDate || cls.date, amount:a.paidAmount ?? null,
         title:cls.name, personId:a.personId, classId:cls.id, method:a.paidVia || null });
     });
     packages.forEach(pk => {

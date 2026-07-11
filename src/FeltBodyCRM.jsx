@@ -820,8 +820,8 @@ export default function FeltBodyCRM() {
       if (a.id !== attId) return a;
       const next = { ...a, ...patch };
       if (patch.paymentStatus === 'paid') { delete next.packageId; }
-      else if (patch.paymentStatus === 'package') { delete next.paidAmount; delete next.paidVia; }
-      else if (patch.paymentStatus === 'unpaid') { delete next.packageId; delete next.paidAmount; delete next.paidVia; }
+      else if (patch.paymentStatus === 'package') { delete next.paidAmount; delete next.paidVia; delete next.paidDate; }
+      else if (patch.paymentStatus === 'unpaid') { delete next.packageId; delete next.paidAmount; delete next.paidVia; delete next.paidDate; }
       return next;
     }));
     data.attendance.setPayment(attId, patch).catch(onError('Set payment'));

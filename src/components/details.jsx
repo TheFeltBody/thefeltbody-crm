@@ -1313,7 +1313,7 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
       if (!cls) return;
       if (a.paymentStatus === 'paid') {
         rows.push({ id:`drop_${a.id}`, kind:'drop_in', date:cls.date, amount:a.paidAmount ?? null,
-          title:cls.name, classId:cls.id, status:'paid' });
+          title:cls.name, classId:cls.id, status:'paid', paidVia:a.paidVia, paidDate:a.paidDate });
       } else if (a.paymentStatus !== 'package') {
         // unpaid (or any non-package, non-paid status) — owed iff the class has a rate
         const owed = (cls.paymentModel !== 'org') ? (cls.rate || 0) : 0;
@@ -1865,6 +1865,12 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
                                 <span style={{color:C.text}}>{PAY_VIA[r.paidVia]||r.paidVia}</span>
                               </div>
                             )}
+                            {r.paidDate && (
+                              <div style={{display:'flex',justifyContent:'space-between',fontSize:12}}>
+                                <span style={{color:C.muted}}>Paid on</span>
+                                <span style={{color:C.text}}>{fmt(r.paidDate)}</span>
+                              </div>
+                            )}
                             {r.classId && (
                               <div onClick={()=>nav('class_detail',{classId:r.classId})}
                                 style={{color:C.blue,fontSize:12,cursor:'pointer',marginTop:2}}>
@@ -2132,11 +2138,15 @@ export function PaymentEditor({ attendance: a, cls, packages, allAttendance, onS
   const [mode, setMode] = useState(a.paymentStatus || 'unpaid');
   const [amount, setAmount] = useState(a.paidAmount ?? cls.rate ?? '');
   const [packageId, setPackageId] = useState(a.packageId || personPkgs[0]?.pk.id || '');
+  // Method + date of payment. Date defaults to the class date (drop-ins are
+  // usually paid on the day); both are editable before saving.
+  const [paidVia, setPaidVia] = useState(a.paidVia || 'cash');
+  const [paidDate, setPaidDate] = useState(a.paidDate || cls.date || today());
 
   const handleSave = () => {
     if(mode === 'paid') {
       const amt = parseFloat(amount);
-      onSave({ paymentStatus:'paid', paidAmount: isNaN(amt) ? 0 : amt });
+      onSave({ paymentStatus:'paid', paidAmount: isNaN(amt) ? 0 : amt, paidVia, paidDate: paidDate || null });
     } else if(mode === 'package') {
       if(!packageId) return;
       onSave({ paymentStatus:'package', packageId });
@@ -2166,6 +2176,22 @@ export function PaymentEditor({ attendance: a, cls, packages, allAttendance, onS
             </div>
           )}
         </div>
+        {mode==='paid' && (
+          <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',paddingLeft:23}}>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <span style={{color:C.muted,fontSize:11,letterSpacing:'0.4px'}}>VIA</span>
+              <select value={paidVia} onChange={e=>setPaidVia(e.target.value)}
+                style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:4,color:C.text,fontSize:13,padding:'4px 8px',fontFamily:"'Jost',sans-serif",outline:'none'}}>
+                {Object.entries(PAY_VIA).map(([v,l])=><option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <span style={{color:C.muted,fontSize:11,letterSpacing:'0.4px'}}>ON</span>
+              <input type="date" value={paidDate} onChange={e=>setPaidDate(e.target.value)}
+                style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:4,color:C.text,fontSize:13,padding:'3px 8px',fontFamily:"'Jost',sans-serif",outline:'none',colorScheme:'dark'}} />
+            </div>
+          </div>
+        )}
         <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
           {radio('package','Use package', personPkgs.length===0)}
           {mode==='package' && personPkgs.length>0 && (
