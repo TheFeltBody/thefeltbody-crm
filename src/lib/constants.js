@@ -202,15 +202,18 @@ export const SELF_PERSON_ID = '5974b9b3-1aa2-4a33-947f-ea0425a7f5c5';
 // because the column is free-text and code owns the valid values.
 //
 // Colours chosen to stay distinct when stacked: blue (Mine, legacy), purple
-// (Sienna, matches the private-client family), amber (Rosie). Teal is
+// (Sienna, matches the private-client family), amber (Rosie), rose (Scarlett),
+// slate (Luna). Teal is
 // deliberately avoided — it's already the web_booking provenance marker.
 export const DIARY_CALENDARS = {
   mine:   { label: 'Jesse',  color: C.blue,    bg: '#131d2a' },
   sienna: { label: 'Sienna', color: '#a07fd4', bg: '#1a1428' },
   rosie:  { label: 'Rosie',  color: '#d49966', bg: '#2a1d10' },
+  scarlett: { label: 'Scarlett', color: '#cf6f8f', bg: '#2a1018' },
+  luna:     { label: 'Luna',     color: '#7f8fa6', bg: '#14181f' },
 };
 // Render/iteration order for pickers, toggles and copy-to menus.
-export const DIARY_CALENDAR_KEYS = ['mine','sienna','rosie'];
+export const DIARY_CALENDAR_KEYS = ['mine','sienna','rosie','scarlett','luna'];
 // Resolve a layer's colour, falling back to legacy personal-blue for any
 // unknown/legacy value so nothing ever renders colourless.
 export const diaryCalColor = (key) => (DIARY_CALENDARS[key]?.color || C.blue);

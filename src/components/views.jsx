@@ -3484,6 +3484,12 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
     setCalVis({ ...calVis, [k]: turningOn });
     if (turningOn) setLayerOrder([...layerOrder.filter(x => x !== k), k]); // to top
   };
+  // Personal mode: classes are hidden by default (colour clash with the diary
+  // layers); a sticky toggle brings them back greyed. Business mode always
+  // shows classes. Shared localStorage key with the 3-Week view so the
+  // preference follows you between calendar views.
+  const [showClasses, setShowClasses] = useLocalStorage('fbc.fw.showClasses', false);
+  const classesVisible = !personalMode || showClasses;
   const weekDiaryVisible = useMemo(
     () => personalMode ? weekDiary.filter(d => layerOn(d.calendar)) : weekDiary,
     [weekDiary, personalMode, calVis]);
@@ -3625,62 +3631,78 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                 </button>
               );
             })}
+            <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',color:C.muted,fontSize:11,marginLeft:4,fontFamily:"'Jost',sans-serif"}}>
+              <input type="checkbox" checked={showClasses} onChange={e=>setShowClasses(e.target.checked)} />
+              Show classes (greyed)
+            </label>
           </div>
         ) : (
           <div style={{color:C.muted,fontSize:12}}>{weekClasses.length} class{weekClasses.length!==1?'es':''}</div>
         )}
       </div>
 
-      {/* Header row of day names */}
-      <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',marginBottom:8}}>
+      {/* Slim Mon–Sun header — mirrors the 3-Week grid's day row. The date
+          numbers moved into the DATES strip below (boxed, one per column, same
+          as the 3-Week view) so they sit visibly attached to their columns
+          instead of floating in a separate row. Today's day name stays gold. */}
+      <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',marginBottom:4}}>
         <div />
         {days.map((d,i) => {
           const lbl = dayLabel(d, i);
           return (
-            <div key={d} style={{textAlign:'center',padding:'6px 4px'}}>
-              <div style={{color:lbl.isToday?C.gold:C.muted,fontSize:10,fontWeight:600,letterSpacing:'1.5px'}}>{lbl.dow}</div>
+            <div key={d} style={{textAlign:'center',color:lbl.isToday?C.gold:C.muted,fontSize:10,fontWeight:600,letterSpacing:'1.5px',padding:'2px'}}>{lbl.dow}</div>
+          );
+        })}
+      </div>
+
+      {/* DATES strip — mirrors the 3-Week grid: event chips (cropped, stacked)
+          on the left of each day cell, the day-of-month number in an open-top
+          line box on the right. Always rendered — the day numbers live here
+          now that the header row is day names only. Chips keep their
+          click-through to the contact. Today's number + box sit gold. */}
+      <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`}}>
+        <div style={{color:C.muted,fontSize:8,letterSpacing:'1px',padding:'3px 4px 0',textAlign:'right',fontWeight:600}}>DATES</div>
+        {days.map((d,i) => {
+          const lbl = dayLabel(d, i);
+          const items = weekDates.filter(e => e.date === d);
+          return (
+            <div key={d} style={{display:'grid',gridTemplateColumns:'1fr 24px',gap:3,alignItems:'start',
+              padding:'2px 3px 3px',minHeight:20,borderRight:i<6?`1px solid ${C.border}`:'none'}}>
+              {/* Col 1 — event chips, cropped, stacked */}
+              <div style={{minWidth:0,display:'flex',flexDirection:'column',gap:2,overflow:'hidden'}}>
+                {items.map(e => (
+                  <div key={e.id} onClick={()=>e.personId&&nav('person_detail',{personId:e.personId})}
+                    title={e.label}
+                    style={{background:C.gold+'18',borderLeft:`2px solid ${C.gold}`,borderRadius:3,
+                      padding:'1px 5px',cursor:e.personId?'pointer':'default',fontSize:10,color:C.text,
+                      lineHeight:1.3,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0}}>
+                    {e.emoji} {e.label}
+                  </div>
+                ))}
+              </div>
+              {/* Col 2 — day number in an open-top line box (pen-on-paper) */}
               <div style={{
-                color:lbl.isToday?C.gold:C.text,
-                fontSize:18,fontWeight:lbl.isToday?600:400,
-                fontFamily:"'Cormorant Garamond',serif",
-                marginTop:2,
+                width:24,textAlign:'center',padding:'0 2px 1px',justifySelf:'end',
+                fontFamily:"'Cormorant Garamond',serif",fontSize:15,fontWeight:600,lineHeight:1.25,
+                color: lbl.isToday ? C.gold : (i>=5 ? C.muted : C.text),
+                borderLeft:`1px solid ${lbl.isToday ? C.gold+'88' : C.border}`,
+                borderBottom:`1px solid ${lbl.isToday ? C.gold+'88' : C.border}`,
               }}>{lbl.day}</div>
             </div>
           );
         })}
       </div>
 
-      {/* Birthdays / anniversaries row — all-day banner, both modes. Click → contact. */}
-      {weekDates.length > 0 && (
-        <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`,marginBottom:6}}>
-          <div style={{color:C.muted,fontSize:9,letterSpacing:'1.2px',padding:'6px 4px',textAlign:'right',fontWeight:600}}>DATES</div>
-          {days.map(d => {
-            const items = weekDates.filter(e => e.date === d);
-            return (
-              <div key={d} style={{padding:'4px',display:'flex',flexDirection:'column',gap:3,minHeight:24}}>
-                {items.map(e => (
-                  <div key={e.id} onClick={()=>e.personId&&nav('person_detail',{personId:e.personId})}
-                    title={e.label}
-                    style={{background:C.gold+'18',border:`1px solid ${C.gold}55`,borderRadius:4,
-                      padding:'3px 6px',cursor:e.personId?'pointer':'default',fontSize:11,color:C.text,
-                      lineHeight:1.3,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-                    {e.emoji} {e.label}
-                  </div>
-                ))}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Untimed (all-day) row — shown only if any class in the week has no time set */}
-      {weekClasses.some(c => !timeToMin(c.time)) && (
+      {/* Untimed (all-day) row — shown only if any class in the week has no
+          time set. Follows the class toggle: hidden in personal mode unless
+          classes are toggled back on (the row only ever contains classes). */}
+      {classesVisible && weekClasses.some(c => !timeToMin(c.time)) && (
         <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',borderBottom:`1px solid ${C.border}`,marginBottom:6}}>
           <div style={{color:C.muted,fontSize:9,letterSpacing:'1.2px',padding:'6px 4px',textAlign:'right',fontWeight:600}}>UNTIMED</div>
-          {days.map(d => {
+          {days.map((d,i) => {
             const items = weekClasses.filter(c => c.date === d && !timeToMin(c.time));
             return (
-              <div key={d} style={{padding:'4px',display:'flex',flexDirection:'column',gap:3,minHeight:30}}>
+              <div key={d} style={{padding:'4px',display:'flex',flexDirection:'column',gap:3,minHeight:30,borderRight:i<6?`1px solid ${C.border}`:'none'}}>
                 {items.map(c => {
                   const cOrg = orgs.find(o=>o.id===c.orgId);
                   const kk = classKindKey(c, cOrg);
@@ -3700,9 +3722,9 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
       )}
 
       {/* Time grid */}
-      <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',position:'relative',border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+      <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',position:'relative',border:`1px solid ${C.border}`,borderRadius:6,overflow:'hidden',background:C.surf+'66'}}>
         {/* Hour-label column — labels appear at full hours; half-hour gridlines are subtle */}
-        <div style={{position:'relative',height:gridHeight,borderRight:`1px solid ${C.border}`,background:C.bg}}>
+        <div style={{position:'relative',height:gridHeight,borderRight:`1px solid ${C.border}`}}>
           {Array.from({length: totalSlots}, (_, i) => {
             const minute = gridStart + i * SLOT_MIN;
             const isFullHour = minute % 60 === 0;
@@ -3710,7 +3732,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
             const h = Math.floor(minute / 60);
             const display = h === 0 ? '12am' : h < 12 ? `${h}am` : h === 12 ? '12pm' : `${h-12}pm`;
             return (
-              <div key={i} style={{position:'absolute',top:i*SLOT_HEIGHT,right:6,color:C.muted,fontSize:10,letterSpacing:'0.5px'}}>
+              <div key={i} style={{position:'absolute',top:i*SLOT_HEIGHT-6,right:4,color:C.muted,fontSize:9,letterSpacing:'0.3px'}}>
                 {display}
               </div>
             );
@@ -3750,7 +3772,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
           };
           return (
             <div key={d} onClick={onColumnClick}
-              style={{position:'relative',height:gridHeight,borderRight:i<6?`1px solid ${C.border}`:'none',background:lbl.isToday?C.goldBg+'22':'transparent',cursor:onAddDiary?'copy':'default'}}>
+              style={{position:'relative',height:gridHeight,borderRight:i<6?`1px solid ${C.border}`:'none',background:lbl.isToday?C.goldBg+'22':(i>=5?C.bg+'88':'transparent'),cursor:onAddDiary?'copy':'default'}}>
               {/* Half-hourly gridlines: full lines on the hour, subtle lines on the half */}
               {Array.from({length: totalSlots}, (_, j) => {
                 const minute = gridStart + j * SLOT_MIN;
@@ -3802,13 +3824,19 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                   </div>
                 );
               })}
-              {/* Class blocks — name + venue only, time/details on hover */}
-              {dayItems.map(c => {
+              {/* Class blocks — name + venue only, time/details on hover. In
+                  personal mode these are hidden unless the show-classes toggle
+                  is on; when shown they're greyed (muted), not coloured, so
+                  they can't clash with the diary layers — same as 3-Week. */}
+              {classesVisible && dayItems.map(c => {
                 const block = classBlock(c);
                 if(!block) return null;
                 const cOrg = orgs.find(o=>o.id===c.orgId);
                 const kk = classKindKey(c, cOrg);
                 const meta = KIND_META[kk] || { color:C.gold };
+                // Personal mode → grey underlayer; business mode → full colour.
+                const accent = personalMode ? C.muted : meta.color;
+                const faint = personalMode;
                 // With 16px slots, a 30-min class is 16px (single line) and 60-min is 32px (two lines).
                 // Compact mode hides venue and reduces padding so the name still reads.
                 const compact = block.height < 28;
@@ -3817,19 +3845,19 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                     style={{
                       position:'absolute', top:block.top, height:block.height, left:3, right:3,
                       zIndex:2,
-                      background: meta.color+'22',
-                      border:`1px solid ${meta.color}66`,
-                      borderLeft:`3px solid ${meta.color}`,
+                      background: accent+(faint?'12':'22'),
+                      border:`1px solid ${accent}${faint?'33':'66'}`,
+                      borderLeft:`3px solid ${accent}`,
                       borderRadius:4, padding: compact ? '1px 6px' : '2px 6px',
-                      cursor:'pointer', overflow:'hidden',
+                      cursor:'pointer', overflow:'hidden', opacity: faint?0.55:1,
                       fontFamily:"'Jost',sans-serif",
                       transition:'all 0.12s',
                       display:'flex', flexDirection:'column', justifyContent: compact ? 'center' : 'flex-start',
                     }}
-                    onMouseEnter={e=>{e.currentTarget.style.background=meta.color+'33';e.currentTarget.style.zIndex=20;}}
-                    onMouseLeave={e=>{e.currentTarget.style.background=meta.color+'22';e.currentTarget.style.zIndex=2;}}
+                    onMouseEnter={e=>{e.currentTarget.style.background=accent+(faint?'1e':'33');e.currentTarget.style.zIndex=20;}}
+                    onMouseLeave={e=>{e.currentTarget.style.background=accent+(faint?'12':'22');e.currentTarget.style.zIndex=2;}}
                     title={tooltipFor(c)}>
-                    <div style={{color:C.text,fontSize:11,fontWeight:500,lineHeight:1.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{c.name}</div>
+                    <div style={{color:faint?C.muted:C.text,fontSize:11,fontWeight:500,lineHeight:1.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{c.name}</div>
                     {!compact && c.location && (
                       <div style={{color:C.muted,fontSize:10,marginTop:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{c.location}</div>
                     )}
