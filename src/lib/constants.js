@@ -214,9 +214,26 @@ export const DIARY_CALENDARS = {
 };
 // Render/iteration order for pickers, toggles and copy-to menus.
 export const DIARY_CALENDAR_KEYS = ['mine','sienna','rosie','scarlett','luna'];
-// Resolve a layer's colour, falling back to legacy personal-blue for any
-// unknown/legacy value so nothing ever renders colourless.
-export const diaryCalColor = (key) => (DIARY_CALENDARS[key]?.color || C.blue);
+// ── Multi-tag calendars ──────────────────────────────────────────────────
+// The `calendar` column optionally carries SEVERAL layer keys, comma-
+// separated ('rosie,scarlett') — one interaction row can sit on multiple
+// diaries. calKeys() is the single parse point every consumer goes through:
+//   - the FIRST key is the PRIMARY and drives block/chip colour + stacking
+//   - visibility is any-match: an entry shows if ANY tagged layer is on
+//   - unknown / empty / legacy values resolve to ['mine'] so nothing ever
+//     renders colourless or vanishes
+// The share worker duplicates these rules (its LAYERS map + per-key
+// validation) — keep in sync if the semantics change.
+export const calKeys = (calendar) => {
+  const ks = String(calendar || '').split(',').map(s => s.trim()).filter(k => DIARY_CALENDARS[k]);
+  return ks.length ? ks : ['mine'];
+};
+// Human label for a calendar value: 'Rosie' or 'Rosie + Scarlett'.
+export const calLabel = (calendar) =>
+  calKeys(calendar).map(k => DIARY_CALENDARS[k].label).join(' + ');
+// Resolve a calendar value's colour from its PRIMARY (first) key, falling
+// back to legacy personal-blue so nothing ever renders colourless.
+export const diaryCalColor = (key) => (DIARY_CALENDARS[calKeys(key)[0]]?.color || C.blue);
 
 export const RELATIONSHIP_LABELS = {
   adult:       'Adult',

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BANK_DETAILS, C, CARE_HOME_STAGES, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
+import { BANK_DETAILS, C, CARE_HOME_STAGES, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, calKeys, calLabel, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
 import { PrintInvoiceOverlay, addDays, deriveReplyAllRecipients, birthdayInfo, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
 import { AttachmentChips, Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
@@ -3491,7 +3491,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
   const [showClasses, setShowClasses] = useLocalStorage('fbc.fw.showClasses', false);
   const classesVisible = !personalMode || showClasses;
   const weekDiaryVisible = useMemo(
-    () => personalMode ? weekDiary.filter(d => layerOn(d.calendar)) : weekDiary,
+    () => personalMode ? weekDiary.filter(d => calKeys(d.calendar).some(layerOn)) : weekDiary,
     [weekDiary, personalMode, calVis]);
   // Birthdays + anniversaries falling in the visible week, as all-day banner
   // items. Shown in both modes (personal life-admin AND business — a client's
@@ -3665,6 +3665,14 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
         {days.map((d,i) => {
           const lbl = dayLabel(d, i);
           const items = weekDates.filter(e => e.date === d);
+          // Untimed diary entries = all-day events (holidays, reminders).
+          // They have no y-position on the time grid — the timed-block render
+          // below filters them out — so this strip is their home: slim
+          // layer-coloured chips, one per day. Multi-day spans are N untimed
+          // rows sharing a diary_group (the intended model — NOT a 7am +
+          // 1440-min block, which paints a full-height column). Off-mode
+          // entries grey out, same convention as the timed blocks.
+          const allday = weekDiaryVisible.filter(e => e.date === d && timeToMin(e.time) === null);
           return (
             <div key={d} style={{display:'grid',gridTemplateColumns:'1fr 24px',gap:3,alignItems:'start',
               padding:'2px 3px 3px',minHeight:20,borderRight:i<6?`1px solid ${C.border}`:'none'}}>
@@ -3679,6 +3687,30 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                     {e.emoji} {e.label}
                   </div>
                 ))}
+                {allday.map(e => {
+                  // NB: weekDiary entries are the MAPPED class-like shape
+                  // (name/body/__note), not raw notes — read those fields and
+                  // pass __note back to the edit handler, same as the timed
+                  // diary blocks below.
+                  const offMode = e.isPersonal !== personalMode;
+                  const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
+                  const calLbl = e.isPersonal ? calLabel(e.calendar) : '';
+                  const onClick = () => {
+                    if(onEditDiary) onEditDiary(e.__note);
+                    else if(e.__personId) nav('person_detail',{personId:e.__personId});
+                  };
+                  return (
+                    <div key={e.id} onClick={onClick}
+                      title={`${e.name}${calLbl && !offMode ? ` · ${calLbl}` : ''}${e.body ? `\n\n${e.body}` : ''}`}
+                      style={{background:offMode?C.card:accent+'1e',
+                        border:`1px dashed ${accent}${offMode?'44':'66'}`,borderLeft:`3px solid ${accent}`,borderRadius:3,
+                        padding:'1px 5px',cursor:(onEditDiary||e.__personId)?'pointer':'default',fontSize:10,fontStyle:'italic',
+                        color:offMode?C.muted:C.text,opacity:offMode?0.55:1,
+                        lineHeight:1.3,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0}}>
+                      {e.name}
+                    </div>
+                  );
+                })}
               </div>
               {/* Col 2 — day number in an open-top line box (pen-on-paper) */}
               <div style={{
@@ -3871,9 +3903,9 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                 const block = classBlock(e);
                 if(!block) return null;
                 const accent = e.isPersonal ? diaryCalColor(e.calendar) : C.gold;
-                const calLbl = DIARY_CALENDARS[e.calendar]?.label || '';
+                const calLbl = e.isPersonal ? calLabel(e.calendar) : '';
                 const compact = block.height < 28;
-                const z = 4 + orderOf(e.calendar); // coloured band, above classes (z=2)
+                const z = 4 + orderOf(calKeys(e.calendar)[0]); // primary layer ranks the stack; coloured band above classes (z=2)
                 const onClick = () => {
                   if(onEditDiary) onEditDiary(e.__note);
                   else if(e.__personId) nav('person_detail',{personId:e.__personId,highlightNoteId:e.__noteId});
@@ -4020,7 +4052,7 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
     setCalVis({ ...calVis, [k]: turningOn });
     if (turningOn) setLayerOrder([...layerOrder.filter(x => x !== k), k]);
   };
-  const diaryVisible = (n) => !personalMode || layerOn(n.calendar || 'mine');
+  const diaryVisible = (n) => !personalMode || calKeys(n.calendar).some(layerOn);
   // Birthdays + anniversaries across the visible 6-week grid, grouped by date.
   // Shown as gold banner pills at the top of each day cell, both modes.
   const datesByDate = useMemo(() => {
@@ -4086,7 +4118,7 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
   const DiaryPill = ({ n }) => {
     const offMode = !!n.isPersonal !== personalMode;
     const accent = offMode ? C.muted : (n.isPersonal ? diaryCalColor(n.calendar) : C.gold);
-    const calLbl = DIARY_CALENDARS[n.calendar]?.label || '';
+    const calLbl = n.isPersonal ? calLabel(n.calendar) : '';
     const label = n.subject || n.text;       // title is the label
     const body = n.subject ? (n.text || '') : '';  // longer note for tooltip
     const tip = `${label}${calLbl&&!offMode?` · ${calLbl}`:''}${fmtTime(n.time)?` · ${fmtTime(n.time)}`:''}${offMode?` · ${n.isPersonal?'personal':'business'}`:''}${body?`\n\n${body}`:''}`;
@@ -4971,7 +5003,7 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
         date: n.date, time: n.time || null, duration: n.durationMins || 60,
         isPersonal: !!n.isPersonal, calendar: n.calendar || 'mine',
       }));
-    const wDiary = personalMode ? wDiaryAll.filter(d => layerOn(d.calendar)) : wDiaryAll;
+    const wDiary = personalMode ? wDiaryAll.filter(d => calKeys(d.calendar).some(layerOn)) : wDiaryAll;
     const wDates = calendarDateEvents(people, contactDates, wAnchor, wEnd);
     return { wAnchor, wEnd, wClasses, wDiary, wDates };
   };
@@ -5084,6 +5116,9 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
             const dt = new Date(d+'T12:00');
             const isToday = d === t;
             const items = wk.wDates.filter(e => e.date === d);
+            // Untimed diary = all-day events; same treatment as WeekView's
+            // DATES strip (the timed-block render below filters these out).
+            const allday = wk.wDiary.filter(e => e.date === d && timeToMin(e.time) === null);
             return (
               <div key={d} style={{display:'grid',gridTemplateColumns:'1fr 22px',gap:3,alignItems:'start',
                 padding:'2px 3px 3px',minHeight:18,borderRight:i<6?`1px solid ${C.border}`:'none'}}>
@@ -5097,6 +5132,20 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
                       {e.emoji} {e.label}
                     </div>
                   ))}
+                  {allday.map(e => {
+                    const offMode = e.isPersonal !== personalMode;
+                    const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
+                    return (
+                      <div key={e.id} className="fw-block" title={e.name}
+                        onClick={()=>{ if(onEditDiary) onEditDiary(e.__note); }}
+                        style={{background:offMode?C.card:accent+'1e',
+                          border:`1px dashed ${accent}${offMode?'44':'66'}`,borderLeft:`2px solid ${accent}`,borderRadius:3,
+                          padding:'0 4px',fontSize:9,fontStyle:'italic',color:offMode?C.muted:C.text,opacity:offMode?0.55:1,
+                          cursor:onEditDiary?'pointer':'default',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0}}>
+                        {e.name}
+                      </div>
+                    );
+                  })}
                 </div>
                 {/* Col 2 — day number in an open-top line box (pen-on-paper). No
                     today-highlight; weekends sit a touch lighter. */}
@@ -5172,11 +5221,11 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
                   const block = classBlock(e); if(!block) return null;
                   const offMode = e.isPersonal !== personalMode;
                   const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
-                  const calLbl = DIARY_CALENDARS[e.calendar]?.label || '';
+                  const calLbl = e.isPersonal ? calLabel(e.calendar) : '';
                   // Off-mode (greyed) diary drops below the class layer so it
                   // never covers coloured content; on-mode coloured diary sits
                   // above, ranked by layer order. Mirrors the Week view banding.
-                  const z = offMode ? 0 : (4 + orderOf(e.calendar));
+                  const z = offMode ? 0 : (4 + orderOf(calKeys(e.calendar)[0]));
                   const onClick = () => {
                     if(onEditDiary) onEditDiary(e.__note);
                     else if(e.__personId) nav('person_detail',{personId:e.__personId});
