@@ -3665,6 +3665,14 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
         {days.map((d,i) => {
           const lbl = dayLabel(d, i);
           const items = weekDates.filter(e => e.date === d);
+          // Untimed diary entries = all-day events (holidays, reminders).
+          // They have no y-position on the time grid — the timed-block render
+          // below filters them out — so this strip is their home: slim
+          // layer-coloured chips, one per day. Multi-day spans are N untimed
+          // rows sharing a diary_group (the intended model — NOT a 7am +
+          // 1440-min block, which paints a full-height column). Off-mode
+          // entries grey out, same convention as the timed blocks.
+          const allday = weekDiaryVisible.filter(e => e.date === d && timeToMin(e.time) === null);
           return (
             <div key={d} style={{display:'grid',gridTemplateColumns:'1fr 24px',gap:3,alignItems:'start',
               padding:'2px 3px 3px',minHeight:20,borderRight:i<6?`1px solid ${C.border}`:'none'}}>
@@ -3679,6 +3687,22 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                     {e.emoji} {e.label}
                   </div>
                 ))}
+                {allday.map(e => {
+                  const offMode = e.isPersonal !== personalMode;
+                  const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
+                  const calLbl = DIARY_CALENDARS[e.calendar]?.label || '';
+                  return (
+                    <div key={e.id} onClick={()=>onEditDiary && onEditDiary(e)}
+                      title={`${e.subject || e.text}${calLbl && !offMode ? ` · ${calLbl}` : ''}${e.subject && e.text ? `\n\n${e.text}` : ''}`}
+                      style={{background:offMode?C.card:accent+'1e',
+                        border:`1px dashed ${accent}${offMode?'44':'66'}`,borderLeft:`3px solid ${accent}`,borderRadius:3,
+                        padding:'1px 5px',cursor:onEditDiary?'pointer':'default',fontSize:10,fontStyle:'italic',
+                        color:offMode?C.muted:C.text,opacity:offMode?0.55:1,
+                        lineHeight:1.3,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0}}>
+                      {e.subject || e.text}
+                    </div>
+                  );
+                })}
               </div>
               {/* Col 2 — day number in an open-top line box (pen-on-paper) */}
               <div style={{
@@ -5084,6 +5108,9 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
             const dt = new Date(d+'T12:00');
             const isToday = d === t;
             const items = wk.wDates.filter(e => e.date === d);
+            // Untimed diary = all-day events; same treatment as WeekView's
+            // DATES strip (the timed-block render below filters these out).
+            const allday = wk.wDiary.filter(e => e.date === d && timeToMin(e.time) === null);
             return (
               <div key={d} style={{display:'grid',gridTemplateColumns:'1fr 22px',gap:3,alignItems:'start',
                 padding:'2px 3px 3px',minHeight:18,borderRight:i<6?`1px solid ${C.border}`:'none'}}>
@@ -5097,6 +5124,20 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
                       {e.emoji} {e.label}
                     </div>
                   ))}
+                  {allday.map(e => {
+                    const offMode = e.isPersonal !== personalMode;
+                    const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
+                    return (
+                      <div key={e.id} className="fw-block" title={e.name}
+                        onClick={()=>{ if(onEditDiary) onEditDiary(e.__note); }}
+                        style={{background:offMode?C.card:accent+'1e',
+                          border:`1px dashed ${accent}${offMode?'44':'66'}`,borderLeft:`2px solid ${accent}`,borderRadius:3,
+                          padding:'0 4px',fontSize:9,fontStyle:'italic',color:offMode?C.muted:C.text,opacity:offMode?0.55:1,
+                          cursor:onEditDiary?'pointer':'default',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0}}>
+                        {e.name}
+                      </div>
+                    );
+                  })}
                 </div>
                 {/* Col 2 — day number in an open-top line box (pen-on-paper). No
                     today-highlight; weekends sit a touch lighter. */}
