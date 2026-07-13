@@ -234,6 +234,35 @@ export const calLabel = (calendar) =>
 // Resolve a calendar value's colour from its PRIMARY (first) key, falling
 // back to legacy personal-blue so nothing ever renders colourless.
 export const diaryCalColor = (key) => (DIARY_CALENDARS[calKeys(key)[0]]?.color || C.blue);
+// Multi-tag "rainbow" stripe: equal vertical segments of every tagged
+// layer's colour, as a hard-stop gradient. null for single-key values —
+// callers keep their plain solid/dashed border in that case.
+export const calStripe = (calendar) => {
+  const ks = calKeys(calendar);
+  if (ks.length < 2) return null;
+  const n = ks.length;
+  const stops = ks.map((k, i) =>
+    `${DIARY_CALENDARS[k].color} ${((i / n) * 100).toFixed(2)}% ${(((i + 1) / n) * 100).toFixed(2)}%`
+  ).join(', ');
+  return `linear-gradient(to bottom, ${stops})`;
+};
+// Style fragment for the stripe. Spread into a block/chip's style AFTER its
+// border properties: the gradient paints in the background layer and shows
+// through a transparent left border (background-origin: border-box paints
+// under the border, so no extra DOM and the dashed edges stay untouched).
+// No-op ({}) for single-tag entries. Only call for on-mode personal entries —
+// off-mode grey and business gold stay single-colour.
+export const calStripeStyle = (calendar, widthPx = 3) => {
+  const g = calStripe(calendar);
+  return g ? {
+    borderLeft: `${widthPx}px solid transparent`,
+    backgroundImage: g,
+    backgroundSize: `${widthPx}px 100%`,
+    backgroundRepeat: 'no-repeat',
+    backgroundOrigin: 'border-box',
+    backgroundClip: 'border-box',
+  } : {};
+};
 
 export const RELATIONSHIP_LABELS = {
   adult:       'Adult',

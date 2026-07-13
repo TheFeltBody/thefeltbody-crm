@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BANK_DETAILS, C, CARE_HOME_STAGES, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, calKeys, calLabel, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
+import { BANK_DETAILS, C, CARE_HOME_STAGES, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, calKeys, calLabel, calStripeStyle, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
 import { PrintInvoiceOverlay, addDays, deriveReplyAllRecipients, birthdayInfo, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
 import { AttachmentChips, Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
@@ -3407,6 +3407,7 @@ export function MiniWeek({ classes, notes, people=[], contactDates=[], mode='cli
                     style={{position:'absolute',top,height:h,left:1,right:1,borderRadius:2,
                       background: offMode ? C.muted+'22' : accent+'2e',
                       borderLeft:`2px ${it.diary?'dashed':'solid'} ${accent}`,
+                      ...((it.diary && !offMode && it.isPersonal) ? calStripeStyle(it.calendar, 2) : {}),
                       opacity: offMode ? 0.7 : 1,
                       overflow:'hidden',padding:'0 2px',
                       display:'flex',alignItems:'center'}}>
@@ -3691,7 +3692,8 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                         border:`1px dashed ${accent}${offMode?'44':'66'}`,borderLeft:`3px solid ${accent}`,borderRadius:3,
                         padding:'1px 5px',cursor:(onEditDiary||e.__personId)?'pointer':'default',fontSize:10,fontStyle:'italic',
                         color:offMode?C.muted:C.text,opacity:offMode?0.55:1,
-                        lineHeight:1.3,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0}}>
+                        lineHeight:1.3,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0,
+                        ...((!offMode && e.isPersonal) ? calStripeStyle(e.calendar) : {})}}>
                       {e.name}
                     </div>
                   );
@@ -3905,6 +3907,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                       background: accent+'1e',
                       border:`1px dashed ${accent}88`,
                       borderLeft:`3px solid ${accent}`,
+                      ...(e.isPersonal ? calStripeStyle(e.calendar) : {}),
                       borderRadius:4, padding: compact ? '1px 6px' : '2px 6px',
                       cursor:'pointer', overflow:'hidden',
                       opacity: 1,
@@ -4117,7 +4120,7 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
     };
     return (
       <div onClick={go} title={tip}
-        style={{background:offMode?'transparent':accent+'18',borderLeft:`2px dashed ${accent}`,borderRadius:3,padding:isMobile?'1px 3px':'1px 4px',marginBottom:2,cursor:'pointer',opacity:offMode?0.55:1,display:'flex',alignItems:'center',gap:4,overflow:'hidden',minWidth:0,flexShrink:0}}>
+        style={{background:offMode?'transparent':accent+'18',borderLeft:`2px dashed ${accent}`,borderRadius:3,padding:isMobile?'1px 3px':'1px 4px',marginBottom:2,cursor:'pointer',opacity:offMode?0.55:1,display:'flex',alignItems:'center',gap:4,overflow:'hidden',minWidth:0,flexShrink:0,...((!offMode && n.isPersonal) ? calStripeStyle(n.calendar, 2) : {})}}>
         {!isMobile && n.time && <span style={{color:accent,fontSize:9,fontWeight:600,flexShrink:0}}>{fmtTime(n.time)}</span>}
         <span style={{color:offMode?C.muted:C.text,fontSize:10,fontStyle:'italic',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0,flex:1}}>{isMobile ? (fmtTime(n.time)||label) : label}</span>
       </div>
@@ -5127,6 +5130,7 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
                         onClick={()=>{ if(onEditDiary) onEditDiary(e.__note); }}
                         style={{background:offMode?C.card:accent+'1e',
                           border:`1px dashed ${accent}${offMode?'44':'66'}`,borderLeft:`2px solid ${accent}`,borderRadius:3,
+                          ...((!offMode && e.isPersonal) ? calStripeStyle(e.calendar, 2) : {}),
                           padding:'0 4px',fontSize:9,fontStyle:'italic',color:offMode?C.muted:C.text,opacity:offMode?0.55:1,
                           cursor:onEditDiary?'pointer':'default',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0}}>
                         {e.name}
@@ -5224,6 +5228,7 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
                         background: offMode ? C.card : accent+'1e',
                         border:`1px dashed ${accent}${offMode?'55':'88'}`,
                         borderLeft:`3px solid ${accent}`,borderRadius:3,padding:'1px 5px 0',
+                        ...((!offMode && e.isPersonal) ? calStripeStyle(e.calendar) : {}),
                         cursor:'pointer',overflow:'hidden',opacity:offMode?0.5:1,
                         fontFamily:"'Jost',sans-serif",display:'flex',flexDirection:'column',justifyContent:'flex-start'}}
                       title={`${e.name}${calLbl&&!offMode?` · ${calLbl}`:''}${fmtTime(e.time)?` · ${fmtTime(e.time)} · ${e.duration} min`:''}${e.body?`\n\n${e.body}`:''}`}>
