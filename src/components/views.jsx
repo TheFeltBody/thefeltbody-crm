@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { BANK_DETAILS, C, CARE_HOME_STAGES, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BANK_DETAILS, C, CARE_HOME_STAGES, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, calKeys, calLabel, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
 import { PrintInvoiceOverlay, addDays, deriveReplyAllRecipients, birthdayInfo, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
 import { AttachmentChips, Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
@@ -3491,7 +3491,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
   const [showClasses, setShowClasses] = useLocalStorage('fbc.fw.showClasses', false);
   const classesVisible = !personalMode || showClasses;
   const weekDiaryVisible = useMemo(
-    () => personalMode ? weekDiary.filter(d => layerOn(d.calendar)) : weekDiary,
+    () => personalMode ? weekDiary.filter(d => calKeys(d.calendar).some(layerOn)) : weekDiary,
     [weekDiary, personalMode, calVis]);
   // Birthdays + anniversaries falling in the visible week, as all-day banner
   // items. Shown in both modes (personal life-admin AND business — a client's
@@ -3506,49 +3506,27 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
       .sort((a,b) => a.actionDate.localeCompare(b.actionDate)),
     [notes, anchor, weekEnd]);
 
-  // Grid resolution: 30-minute slots ("2 columns per hour"). 6:30am-9pm by default.
-  // Auto-extends in both directions if any timed class falls outside.
+  // Grid resolution: 30-minute slots ("2 columns per hour").
   const SLOT_MIN = 30;
   const SLOT_HEIGHT = 16; // px per 30-min slot — compact vertical spacing for at-a-glance scanning
-  const DEFAULT_START = 6*60 + 30;
-  const DEFAULT_END = 21*60;
-  // Sane bounds on the auto-extend. Two separate problems, two separate guards:
-  // 1) A single bad item (mistyped time, or a duration entered in the wrong
-  //    unit) must not drag the whole shared axis miles from the real content —
-  //    so each item's start/end is capped to a generous but finite window
-  //    around the default hours before it's allowed to move s/e.
-  // 2) Even after that, the final axis is clamped to a single calendar day so
-  //    the hour-label math (which assumes h stays 0-23) can never print
-  //    garbage like "416pm".
-  const AXIS_MIN = 0, AXIS_MAX = 24*60;
-  // How far a single item may legitimately push the axis beyond the default
-  // window — e.g. a genuine 5am start or an 11pm finish should still work.
-  const REACH = 5*60;
-  const { gridStart, gridEnd } = useMemo(() => {
-    let s = DEFAULT_START, e = DEFAULT_END;
-    const scan = (item) => {
-      const m = timeToMin(item.time);
-      if(m === null) return;
-      const dur = item.duration || 60;
-      const startSlot = Math.floor(m / SLOT_MIN) * SLOT_MIN;
-      const endSlot = Math.ceil((m + dur) / SLOT_MIN) * SLOT_MIN;
-      // Ignore this item's influence on the shared axis if it would reach
-      // further than REACH beyond the default window — that's a sign of bad
-      // data (huge duration, wrong units), not a real early/late booking.
-      // The item still renders on its own day at its actual (clamped) time;
-      // it just can't stretch every week's axis to match.
-      if(startSlot >= DEFAULT_START - REACH && startSlot < s) s = startSlot;
-      if(endSlot <= DEFAULT_END + REACH && endSlot > e) e = endSlot;
-    };
-    weekClasses.forEach(scan);
-    weekDiaryVisible.forEach(scan);
-    s = Math.max(AXIS_MIN, s);
-    e = Math.min(AXIS_MAX, e);
-    if(e <= s) e = s + SLOT_MIN; // never collapse/invert the axis
-    return { gridStart: s, gridEnd: e };
-  }, [weekClasses, weekDiaryVisible]);
+  // Full 24h axis inside a scroll window. The grid always spans midnight to
+  // midnight — no per-item auto-extend, no REACH capping, positional maths is
+  // unconditional — and a fixed-height scroller shows the working day by
+  // default (6am at the top, ~9pm at the bottom); scroll for the small hours.
+  // This replaced the old auto-extending axis, whose bad-data guards and
+  // capping logic all existed because the axis was variable.
+  const gridStart = 0, gridEnd = 24*60;
   const totalSlots = (gridEnd - gridStart) / SLOT_MIN;
-  const gridHeight = totalSlots * SLOT_HEIGHT;
+  const gridHeight = totalSlots * SLOT_HEIGHT;            // 48 slots → 768px
+  const VISIBLE_START = 6*60;                             // default scroll lands here
+  const visibleHeight = ((21*60 - VISIBLE_START) / SLOT_MIN) * SLOT_HEIGHT; // 6am–9pm ≈ 480px
+  const scrollerRef = useRef(null);
+  // Land at 6am on mount. Week navigation deliberately keeps whatever hour
+  // the user scrolled to (they're usually comparing the same time of day).
+  useEffect(() => {
+    if (scrollerRef.current) scrollerRef.current.scrollTop = (VISIBLE_START / SLOT_MIN) * SLOT_HEIGHT;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Position a timed class block. Height reflects duration in 30-min units.
   const classBlock = (c) => {
@@ -3641,6 +3619,13 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
         )}
       </div>
 
+      {/* Scroll window for the 24h grid. The dow header / DATES / UNTIMED
+          strips live INSIDE the scroller as one sticky block so their content
+          width always matches the grid's (both sit left of the same
+          scrollbar) — mounting them outside would re-introduce the
+          header-vs-column misalignment the DATES-strip rework fixed. */}
+      <div ref={scrollerRef} style={{maxHeight:visibleHeight + 64, overflowY:'auto', overscrollBehavior:'contain'}}>
+      <div style={{position:'sticky',top:0,zIndex:60,background:C.bg}}>
       {/* Slim Mon–Sun header — mirrors the 3-Week grid's day row. The date
           numbers moved into the DATES strip below (boxed, one per column, same
           as the 3-Week view) so they sit visibly attached to their columns
@@ -3688,18 +3673,26 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                   </div>
                 ))}
                 {allday.map(e => {
+                  // NB: weekDiary entries are the MAPPED class-like shape
+                  // (name/body/__note), not raw notes — read those fields and
+                  // pass __note back to the edit handler, same as the timed
+                  // diary blocks below.
                   const offMode = e.isPersonal !== personalMode;
                   const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
-                  const calLbl = DIARY_CALENDARS[e.calendar]?.label || '';
+                  const calLbl = e.isPersonal ? calLabel(e.calendar) : '';
+                  const onClick = () => {
+                    if(onEditDiary) onEditDiary(e.__note);
+                    else if(e.__personId) nav('person_detail',{personId:e.__personId});
+                  };
                   return (
-                    <div key={e.id} onClick={()=>onEditDiary && onEditDiary(e)}
-                      title={`${e.subject || e.text}${calLbl && !offMode ? ` · ${calLbl}` : ''}${e.subject && e.text ? `\n\n${e.text}` : ''}`}
+                    <div key={e.id} onClick={onClick}
+                      title={`${e.name}${calLbl && !offMode ? ` · ${calLbl}` : ''}${e.body ? `\n\n${e.body}` : ''}`}
                       style={{background:offMode?C.card:accent+'1e',
                         border:`1px dashed ${accent}${offMode?'44':'66'}`,borderLeft:`3px solid ${accent}`,borderRadius:3,
-                        padding:'1px 5px',cursor:onEditDiary?'pointer':'default',fontSize:10,fontStyle:'italic',
+                        padding:'1px 5px',cursor:(onEditDiary||e.__personId)?'pointer':'default',fontSize:10,fontStyle:'italic',
                         color:offMode?C.muted:C.text,opacity:offMode?0.55:1,
                         lineHeight:1.3,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0}}>
-                      {e.subject || e.text}
+                      {e.name}
                     </div>
                   );
                 })}
@@ -3746,6 +3739,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
       )}
 
       {/* Time grid */}
+      </div>{/* /sticky strip */}
       <div style={{display:'grid',gridTemplateColumns:'44px repeat(7, 1fr)',position:'relative',border:`1px solid ${C.border}`,borderRadius:6,overflow:'hidden',background:C.surf+'66'}}>
         {/* Hour-label column — labels appear at full hours; half-hour gridlines are subtle */}
         <div style={{position:'relative',height:gridHeight,borderRight:`1px solid ${C.border}`}}>
@@ -3756,7 +3750,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
             const h = Math.floor(minute / 60);
             const display = h === 0 ? '12am' : h < 12 ? `${h}am` : h === 12 ? '12pm' : `${h-12}pm`;
             return (
-              <div key={i} style={{position:'absolute',top:i*SLOT_HEIGHT-6,right:4,color:C.muted,fontSize:9,letterSpacing:'0.3px'}}>
+              <div key={i} style={{position:'absolute',top:i===0?0:i*SLOT_HEIGHT-6,right:4,color:C.muted,fontSize:9,letterSpacing:'0.3px'}}>
                 {display}
               </div>
             );
@@ -3895,9 +3889,9 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                 const block = classBlock(e);
                 if(!block) return null;
                 const accent = e.isPersonal ? diaryCalColor(e.calendar) : C.gold;
-                const calLbl = DIARY_CALENDARS[e.calendar]?.label || '';
+                const calLbl = e.isPersonal ? calLabel(e.calendar) : '';
                 const compact = block.height < 28;
-                const z = 4 + orderOf(e.calendar); // coloured band, above classes (z=2)
+                const z = 4 + orderOf(calKeys(e.calendar)[0]); // primary layer ranks the stack; coloured band above classes (z=2)
                 const onClick = () => {
                   if(onEditDiary) onEditDiary(e.__note);
                   else if(e.__personId) nav('person_detail',{personId:e.__personId,highlightNoteId:e.__noteId});
@@ -3929,6 +3923,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
           );
         })}
       </div>
+      </div>{/* /scroll window */}
 
       {/* Action-by notes for this week */}
       {weekActionNotes.length > 0 && (
@@ -4044,7 +4039,7 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
     setCalVis({ ...calVis, [k]: turningOn });
     if (turningOn) setLayerOrder([...layerOrder.filter(x => x !== k), k]);
   };
-  const diaryVisible = (n) => !personalMode || layerOn(n.calendar || 'mine');
+  const diaryVisible = (n) => !personalMode || calKeys(n.calendar).some(layerOn);
   // Birthdays + anniversaries across the visible 6-week grid, grouped by date.
   // Shown as gold banner pills at the top of each day cell, both modes.
   const datesByDate = useMemo(() => {
@@ -4110,7 +4105,7 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
   const DiaryPill = ({ n }) => {
     const offMode = !!n.isPersonal !== personalMode;
     const accent = offMode ? C.muted : (n.isPersonal ? diaryCalColor(n.calendar) : C.gold);
-    const calLbl = DIARY_CALENDARS[n.calendar]?.label || '';
+    const calLbl = n.isPersonal ? calLabel(n.calendar) : '';
     const label = n.subject || n.text;       // title is the label
     const body = n.subject ? (n.text || '') : '';  // longer note for tooltip
     const tip = `${label}${calLbl&&!offMode?` · ${calLbl}`:''}${fmtTime(n.time)?` · ${fmtTime(n.time)}`:''}${offMode?` · ${n.isPersonal?'personal':'business'}`:''}${body?`\n\n${body}`:''}`;
@@ -4995,7 +4990,7 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
         date: n.date, time: n.time || null, duration: n.durationMins || 60,
         isPersonal: !!n.isPersonal, calendar: n.calendar || 'mine',
       }));
-    const wDiary = personalMode ? wDiaryAll.filter(d => layerOn(d.calendar)) : wDiaryAll;
+    const wDiary = personalMode ? wDiaryAll.filter(d => calKeys(d.calendar).some(layerOn)) : wDiaryAll;
     const wDates = calendarDateEvents(people, contactDates, wAnchor, wEnd);
     return { wAnchor, wEnd, wClasses, wDiary, wDates };
   };
@@ -5213,11 +5208,11 @@ export function FourWeekView({ classes, orgs, notes, people, contactDates=[], na
                   const block = classBlock(e); if(!block) return null;
                   const offMode = e.isPersonal !== personalMode;
                   const accent = offMode ? C.muted : (e.isPersonal ? diaryCalColor(e.calendar) : C.gold);
-                  const calLbl = DIARY_CALENDARS[e.calendar]?.label || '';
+                  const calLbl = e.isPersonal ? calLabel(e.calendar) : '';
                   // Off-mode (greyed) diary drops below the class layer so it
                   // never covers coloured content; on-mode coloured diary sits
                   // above, ranked by layer order. Mirrors the Week view banding.
-                  const z = offMode ? 0 : (4 + orderOf(e.calendar));
+                  const z = offMode ? 0 : (4 + orderOf(calKeys(e.calendar)[0]));
                   const onClick = () => {
                     if(onEditDiary) onEditDiary(e.__note);
                     else if(e.__personId) nav('person_detail',{personId:e.__personId});
