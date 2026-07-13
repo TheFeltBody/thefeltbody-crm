@@ -234,9 +234,10 @@ export const calLabel = (calendar) =>
 // Resolve a calendar value's colour from its PRIMARY (first) key, falling
 // back to legacy personal-blue so nothing ever renders colourless.
 export const diaryCalColor = (key) => (DIARY_CALENDARS[calKeys(key)[0]]?.color || C.blue);
-// Multi-tag "rainbow" stripe: equal vertical segments of every tagged
-// layer's colour, as a hard-stop gradient. null for single-key values —
-// callers keep their plain solid/dashed border in that case.
+// Multi-tag "rainbow" stripes: one full-height PINSTRIPE PER TAGGED LAYER,
+// running side by side down the left edge (not one stripe chopped into
+// segments) — a hard-stop left-to-right gradient. null for single-key
+// values — callers keep their plain solid/dashed border in that case.
 export const calStripe = (calendar) => {
   const ks = calKeys(calendar);
   if (ks.length < 2) return null;
@@ -244,24 +245,28 @@ export const calStripe = (calendar) => {
   const stops = ks.map((k, i) =>
     `${DIARY_CALENDARS[k].color} ${((i / n) * 100).toFixed(2)}% ${(((i + 1) / n) * 100).toFixed(2)}%`
   ).join(', ');
-  return `linear-gradient(to bottom, ${stops})`;
+  return `linear-gradient(to right, ${stops})`;
 };
-// Style fragment for the stripe. Spread into a block/chip's style AFTER its
+// Style fragment for the stripes. Spread into a block/chip's style AFTER its
 // border properties: the gradient paints in the background layer and shows
 // through a transparent left border (background-origin: border-box paints
 // under the border, so no extra DOM and the dashed edges stay untouched).
-// No-op ({}) for single-tag entries. Only call for on-mode personal entries —
-// off-mode grey and business gold stay single-colour.
+// widthPx is the PER-STRIPE width — the left border widens to n × widthPx so
+// two tags read as two pinstripes, three as three, etc. No-op ({}) for
+// single-tag entries. Only call for on-mode personal entries — off-mode grey
+// and business gold stay single-colour.
 export const calStripeStyle = (calendar, widthPx = 3) => {
   const g = calStripe(calendar);
-  return g ? {
-    borderLeft: `${widthPx}px solid transparent`,
+  if (!g) return {};
+  const total = calKeys(calendar).length * widthPx;
+  return {
+    borderLeft: `${total}px solid transparent`,
     backgroundImage: g,
-    backgroundSize: `${widthPx}px 100%`,
+    backgroundSize: `${total}px 100%`,
     backgroundRepeat: 'no-repeat',
     backgroundOrigin: 'border-box',
     backgroundClip: 'border-box',
-  } : {};
+  };
 };
 
 export const RELATIONSHIP_LABELS = {
