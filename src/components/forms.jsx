@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { C, CARE_HOME_STAGES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, INTERACTION_KINDS, PAYMENT_MODELS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, SOURCES, TYPE_ICONS, TYPE_PALETTE } from "../lib/constants.js";
+import { C, CARE_HOME_STAGES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, calKeys, INTERACTION_KINDS, PAYMENT_MODELS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, SOURCES, TYPE_ICONS, TYPE_PALETTE } from "../lib/constants.js";
 import { addDays, addMonths, BIRTHDAY_NO_YEAR, classKindKey, currentHourTime, fillTemplate, fmt, fmtMoney, isCountlessPkg, makeBirthdayNoYear, nextInvoiceNumber, packageRemaining, parseBirthday, primaryRole, scoreTemplates, today, uid, useTypes } from "../lib/helpers.jsx";
 import { Avatar, Btn, FI, KindBadge, Modal, RoleBadge, SearchSelect } from "./primitives.jsx";
 import { files as filesApi } from "../lib/dataLayer.js";
@@ -2243,27 +2243,46 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
         </div>
       </div>
 
-      {/* Layer picker — only meaningful for personal entries. Files the entry
-          onto Mine / Sienna / Rosie. Colour-coded to match the calendar render. */}
+      {/* Layer picker — only meaningful for personal entries. MULTI-TAG:
+          tap several layers to put ONE entry on several diaries (a family
+          holiday is one row tagged rosie,scarlett — not four copies). The
+          value stays the single `calendar` text column, comma-joined in
+          SELECTION ORDER: the first-picked key is the primary and sets the
+          block colour. Tapping the last remaining key is a no-op (an entry
+          always belongs somewhere). */}
       {f.isPersonal && (
         <div style={{marginTop:4,marginBottom:14}}>
-          <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:8}}>WHOSE CALENDAR</div>
+          <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:8}}>WHOSE CALENDAR — TAP SEVERAL TO SHARE ONE ENTRY</div>
           <div style={{display:'flex',gap:8}}>
             {DIARY_CALENDAR_KEYS.map(k=>{
               const cal = DIARY_CALENDARS[k];
-              const on = f.calendar===k;
+              const sel = calKeys(f.calendar);
+              const on = sel.includes(k);
+              const toggle = () => {
+                if (on) {
+                  if (sel.length === 1) return; // never leave it layerless
+                  s('calendar')(sel.filter(x=>x!==k).join(','));
+                } else {
+                  s('calendar')([...sel, k].join(','));
+                }
+              };
               return (
-                <button key={k} onClick={()=>s('calendar')(k)}
+                <button key={k} onClick={toggle}
                   style={{flex:1,padding:'9px 12px',borderRadius:6,cursor:'pointer',fontSize:13,
                     fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',
                     background: on ? cal.color+'22' : C.card,
                     border:`1px solid ${on ? cal.color : C.border}`,
                     color: on ? cal.color : C.muted}}>
-                  {on ? '● ' : '○ '}{cal.label}
+                  {on ? (sel[0]===k ? '● ' : '◉ ') : '○ '}{cal.label}
                 </button>
               );
             })}
           </div>
+          {calKeys(f.calendar).length > 1 && (
+            <div style={{color:C.muted,fontSize:10,marginTop:6,fontStyle:'italic',opacity:0.8}}>
+              On {calKeys(f.calendar).length} calendars — first pick ({DIARY_CALENDARS[calKeys(f.calendar)[0]].label}) sets the colour.
+            </div>
+          )}
         </div>
       )}
 
@@ -2275,7 +2294,7 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
         <div style={{marginTop:4,marginBottom:14,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
           <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:8}}>COPY THIS ENTRY TO</div>
           <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-            {DIARY_CALENDAR_KEYS.filter(k=>k!==f.calendar).map(k=>{
+            {DIARY_CALENDAR_KEYS.filter(k=>!calKeys(f.calendar).includes(k)).map(k=>{
               const cal = DIARY_CALENDARS[k];
               return (
                 <button key={k} onClick={()=>copyTo(k)}
