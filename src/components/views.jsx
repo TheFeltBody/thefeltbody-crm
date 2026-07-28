@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BANK_DETAILS, C, CARE_HOME_STAGES, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, calKeys, calLabel, calStripeStyle, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
-import { PrintInvoiceOverlay, addDays, deriveReplyAllRecipients, birthdayInfo, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
+import { PrintInvoiceOverlay, addDays, buildInvoicePdfFile, deriveReplyAllRecipients, birthdayInfo, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
 import { AttachmentChips, Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
 
@@ -4674,18 +4674,54 @@ export function InvoiceList({ invoices, orgs, nav, onAdd }) {
 }
 
 
-export function InvoiceDetail({ inv, org, onEdit, onStatusChange, nav, backInfo }) {
+export function InvoiceDetail({ inv, org, onEdit, onStatusChange, nav, backInfo, onSendEmail, people = [], emailTemplates = [], onSaveAsTemplate }) {
   const isMobile = useIsMobile();
   const sm=INV_STATUS[inv.status]||INV_STATUS.draft;
   const [showPrint, setShowPrint] = useState(false);
+  // Send-by-email: build the branded invoice PDF once, open the compose
+  // modal with it pre-attached and the org contact prefilled (editable).
+  // Sending after 'Mark as Sent' is fine; we don't force a status flip here
+  // (the invoice may be resent, or sent while still draft as a proof).
+  const [emailSeed, setEmailSeed] = useState(null); // { recipients, subject, body, attachments }
+  const openSendEmail = () => {
+    let attachments = [];
+    try { attachments = [buildInvoicePdfFile(inv, org)]; }
+    catch (e) { alert('Could not build the invoice PDF: ' + (e.message || e)); return; }
+    const recipients = org?.email
+      ? [{ email: org.email, name: org.contactName || org.name || null, role: 'to' }]
+      : [];
+    const subject = `Invoice ${inv.invoiceNumber} from The Felt Body`;
+    const greet = org?.contactName ? org.contactName.split(' ')[0] : 'there';
+    const body = `Hi ${greet},\n\nPlease find attached invoice ${inv.invoiceNumber}`
+      + `${inv.total != null ? ` for ${fmtMoney(inv.total)}` : ''}`
+      + `${inv.dueDate ? `, due ${fmt(inv.dueDate)}` : ''}.\n\n`
+      + `Payment details are on the invoice. Do let me know if you have any questions.\n\n`
+      + `With warmth,\nJesse`;
+    setEmailSeed({ recipients, subject, body, attachments });
+  };
   return (
     <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px',maxWidth:760}}>
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={<>
+        {onSendEmail && <Btn small={isMobile} onClick={openSendEmail} title="Attach the invoice PDF to an email">✉ Send invoice</Btn>}
         <Btn variant="secondary" small onClick={()=>downloadInvoiceHtml(inv, org)} title="Download as HTML — open in any browser to print or Save as PDF">↓ Download</Btn>
         <Btn variant="secondary" small={isMobile} onClick={()=>setShowPrint(true)}>Print / PDF</Btn>
         <Btn variant="secondary" small={isMobile} onClick={onEdit}>Edit</Btn>
       </>}>{inv.invoiceNumber}</PageHead>
       {showPrint && <PrintInvoiceOverlay inv={inv} org={org} onClose={()=>setShowPrint(false)} />}
+      {emailSeed && (
+        <SendEmailModal
+          org={org}
+          people={people}
+          initialRecipients={emailSeed.recipients}
+          initialSubject={emailSeed.subject}
+          initialBody={emailSeed.body}
+          initialAttachments={emailSeed.attachments}
+          templates={emailTemplates}
+          onSaveAsTemplate={onSaveAsTemplate}
+          onSend={onSendEmail}
+          onClose={()=>setEmailSeed(null)}
+        />
+      )}
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:28}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:28}}>
           <div>

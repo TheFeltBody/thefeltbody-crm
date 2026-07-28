@@ -1,5 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { BANK_DETAILS, ORG_META, OWN_EMAIL_ADDRESSES, PERSON_ROLES } from "./constants.js";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 
 // helpers.jsx — contexts, hooks, pure helpers, invoice rendering
 // extracted from FeltBodyCRM.jsx
@@ -531,6 +533,157 @@ export const buildStandaloneInvoiceHtml = (inv, org) => {
 </head>
 <body>${bodyHtml}</body>
 </html>`;
+};
+
+// Build the invoice as a branded PDF File (jsPDF), ready to hand to the email
+// compose modal as a pre-seeded attachment. Layout mirrors renderPrintableInvoice
+// (brand header + gold rule, billed-to block, line-item table, total, bank block,
+// notes) so the emailed PDF and the on-screen/print invoice read the same.
+//
+// Returns a File named "Invoice <number>.pdf" so the compose modal's chip and the
+// forms-worker (Brevo extension allowlist includes pdf) both accept it as-is.
+// Pure client-side — no worker change, no stored R2 object until the email sends.
+export const buildInvoicePdfFile = (inv, org) => {
+  const GREEN = [26, 58, 37];
+  const GOLD = [201, 168, 76];
+  const SAGE = [105, 138, 120];
+  const INK = [31, 42, 34];
+
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const M = 48;                 // page margin
+  const right = pageW - M;
+  let y = 56;
+
+  // ── Header: brand (left) / invoice meta (right) ──────────────────────────
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...GREEN);
+  doc.setFontSize(26);
+  doc.text('The Felt Body', M, y);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...SAGE);
+  doc.setFontSize(8);
+  doc.text('SOMATIC MOVEMENT', M, y + 14, { charSpace: 1.5 });
+
+  doc.setFontSize(9);
+  doc.setTextColor(...SAGE);
+  doc.text('INVOICE', right, y - 14, { align: 'right', charSpace: 1.5 });
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...GREEN);
+  doc.setFontSize(20);
+  doc.text(String(inv.invoiceNumber || ''), right, y + 4, { align: 'right' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(...SAGE);
+  doc.text(`Issued: ${fmt(inv.issueDate)}`, right, y + 20, { align: 'right' });
+  doc.text(`Due: ${fmt(inv.dueDate)}`, right, y + 33, { align: 'right' });
+
+  // Gold rule under the header
+  y += 46;
+  doc.setDrawColor(...GOLD);
+  doc.setLineWidth(1.5);
+  doc.line(M, y, right, y);
+  y += 28;
+
+  // ── Billed to ────────────────────────────────────────────────────────────
+  doc.setFontSize(8);
+  doc.setTextColor(...SAGE);
+  doc.text('BILLED TO', M, y, { charSpace: 1.2 });
+  y += 16;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(15);
+  doc.setTextColor(...GREEN);
+  doc.text(String(org?.name || '\u2014'), M, y);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(...SAGE);
+  if (org?.address) { y += 15; doc.text(String(org.address), M, y); }
+  if (org?.contactName) { y += 14; doc.text(`Attn: ${org.contactName}`, M, y); }
+  if (org?.email) { y += 14; doc.text(String(org.email), M, y); }
+  y += 26;
+
+  // ── Line items table ─────────────────────────────────────────────────────
+  const rows = (inv.lineItems || []).map(li => [
+    String(li.description || ''),
+    String(li.qty ?? ''),
+    `\u00a3${(li.rate || 0).toFixed(2)}`,
+    `\u00a3${((li.qty || 1) * (li.rate || 0)).toFixed(2)}`,
+  ]);
+  autoTable(doc, {
+    startY: y,
+    margin: { left: M, right: M },
+    head: [['Description', 'Qty', 'Rate', 'Amount']],
+    body: rows,
+    theme: 'plain',
+    headStyles: {
+      fillColor: [245, 243, 238], textColor: SAGE, fontSize: 8,
+      fontStyle: 'bold', cellPadding: { top: 7, bottom: 7, left: 10, right: 10 },
+      halign: 'left',
+    },
+    bodyStyles: {
+      textColor: INK, fontSize: 10.5,
+      cellPadding: { top: 8, bottom: 8, left: 10, right: 10 },
+      lineColor: [236, 232, 222], lineWidth: { bottom: 0.5 },
+    },
+    columnStyles: {
+      0: { halign: 'left' },
+      1: { halign: 'right', cellWidth: 50 },
+      2: { halign: 'right', cellWidth: 70 },
+      3: { halign: 'right', cellWidth: 80, textColor: GREEN, fontStyle: 'bold' },
+    },
+  });
+  y = doc.lastAutoTable.finalY + 16;
+
+  // ── Total ────────────────────────────────────────────────────────────────
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(17);
+  doc.setTextColor(...GREEN);
+  doc.text(`Total: \u00a3${(inv.total || 0).toFixed(2)}`, right, y, { align: 'right' });
+  y += 30;
+
+  // ── Payment block (bank transfer) ────────────────────────────────────────
+  const payRows = [
+    ['Account name', BANK_DETAILS.accountName],
+    ['Bank', BANK_DETAILS.bank],
+    ['Sort code', BANK_DETAILS.sortCode],
+    ['Account number', BANK_DETAILS.accountNumber],
+    ['Reference', String(inv.invoiceNumber || '')],
+  ];
+  const blockH = 34 + payRows.length * 16;
+  doc.setFillColor(250, 248, 243);
+  doc.setDrawColor(232, 226, 208);
+  doc.setLineWidth(0.75);
+  doc.roundedRect(M, y, right - M, blockH, 5, 5, 'FD');
+  let py = y + 22;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(...GREEN);
+  doc.text('PAYMENT \u2014 BANK TRANSFER', M + 18, py, { charSpace: 1.5 });
+  py += 18;
+  doc.setFontSize(10);
+  for (const [lbl, val] of payRows) {
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...SAGE);
+    doc.text(String(lbl), M + 18, py);
+    doc.setTextColor(...INK);
+    doc.text(String(val ?? ''), right - 18, py, { align: 'right' });
+    py += 16;
+  }
+  y += blockH + 22;
+
+  // ── Notes (optional) ─────────────────────────────────────────────────────
+  if (inv.notes) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(10);
+    doc.setTextColor(...SAGE);
+    const wrapped = doc.splitTextToSize(String(inv.notes), right - M);
+    doc.text(wrapped, M, y);
+    y += wrapped.length * 13 + 10;
+  }
+
+  const blob = doc.output('blob');
+  return new File([blob], `Invoice ${inv.invoiceNumber}.pdf`, { type: 'application/pdf' });
 };
 
 // Download the invoice as a self-contained HTML file. This is the most reliable

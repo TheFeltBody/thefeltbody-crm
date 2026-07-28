@@ -2399,7 +2399,7 @@ export function PickPersonModal({ people, attendance, classes, onPick, onSkip, o
 // and returned to the caller via onSend, which is expected to splice it into
 // the parent's notes state so it appears on PersonDetail immediately.
 
-export function SendEmailModal({ person, org, people = [], initialRecipients = null, templates = [], onSend, onClose, onSaveAsTemplate, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey }) {
+export function SendEmailModal({ person, org, people = [], initialRecipients = null, templates = [], onSend, onClose, onSaveAsTemplate, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey, initialAttachments = null }) {
   // Draft persistence: if a draftKey is supplied, the in-progress subject AND
   // body survive closing/reopening the modal (and navigating away) via
   // localStorage. Stored as a single JSON blob {subject, body}. Falls back to
@@ -2476,7 +2476,10 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
   // in the draft — File handles don't survive localStorage.
   const ATTACH_MAX_TOTAL = 15 * 1024 * 1024;  // worker + Brevo budget (raw)
   const ATTACH_MAX_COUNT = 5;
-  const [attach, setAttach] = useState([]);       // [{ key, file }]
+  const [attach, setAttach] = useState(() =>
+    Array.isArray(initialAttachments)
+      ? initialAttachments.map(f => ({ key: `${f.name}\u2014${f.size}\u2014${Date.now()}`, file: f }))
+      : []);       // [{ key, file }]
   const [uploadingName, setUploadingName] = useState(null);
   const uploadedIds = useRef({});                 // key → files-row id
   const fileInputRef = useRef(null);

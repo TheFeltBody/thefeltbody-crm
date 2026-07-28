@@ -1482,6 +1482,8 @@ export default function FeltBodyCRM() {
         const org=orgs.find(o=>o.id===inv.orgId);
         return <InvoiceDetail inv={inv} org={org} nav={nav} backInfo={backInfo}
           onEdit={()=>setModal({type:'edit_invoice',inv})}
+          onSendEmail={sendEmail} people={people}
+          emailTemplates={settings.email_templates?.templates || []} onSaveAsTemplate={saveDraftAsTemplate}
           onStatusChange={st=>setInvoiceStatus(inv.id, st)} />;
       }
       default: return null;
