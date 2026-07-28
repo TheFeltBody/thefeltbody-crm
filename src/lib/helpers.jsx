@@ -551,9 +551,16 @@ export const buildInvoicePdfFile = (inv, org) => {
 
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
   const M = 48;                 // page margin
   const right = pageW - M;
+  const BOTTOM = pageH - 40;    // keep a bottom margin
   let y = 56;
+  // If the next block of height `h` won't fit above the bottom margin,
+  // start a fresh page and reset the cursor. autoTable paginates its own
+  // rows; this guards the hand-drawn total / bank block / notes that come
+  // after it, so a long line-item list can't push them off the page.
+  const need = (h) => { if (y + h > BOTTOM) { doc.addPage(); y = 56; } };
 
   // ── Header: brand (left) / invoice meta (right) ──────────────────────────
   doc.setFont('helvetica', 'bold');
@@ -635,6 +642,7 @@ export const buildInvoicePdfFile = (inv, org) => {
   });
   y = doc.lastAutoTable.finalY + 16;
 
+  need(30);
   // ── Total ────────────────────────────────────────────────────────────────
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(17);
@@ -651,6 +659,7 @@ export const buildInvoicePdfFile = (inv, org) => {
     ['Reference', String(inv.invoiceNumber || '')],
   ];
   const blockH = 34 + payRows.length * 16;
+  need(blockH + 10);
   doc.setFillColor(250, 248, 243);
   doc.setDrawColor(232, 226, 208);
   doc.setLineWidth(0.75);
@@ -674,6 +683,7 @@ export const buildInvoicePdfFile = (inv, org) => {
 
   // ── Notes (optional) ─────────────────────────────────────────────────────
   if (inv.notes) {
+    need(30);
     doc.setFont('helvetica', 'italic');
     doc.setFontSize(10);
     doc.setTextColor(...SAGE);
