@@ -345,6 +345,11 @@ export const noteFromDb = (row) => ({
   fromEmail: row.from_email || '',
   toEmail: row.to_email || '',
   rawHeaders: row.raw_headers || null,
+  // Full HTML email body (inbound mail only, written by the log-worker).
+  // Read-only — the CRM never writes it, so there's no noteToDb/patch
+  // counterpart. Rendered on demand in a sandboxed iframe on NoteCard;
+  // null for plaintext mail and every non-email row.
+  htmlBody: row.html_body || null,
   source: row.source || 'manual',
   // Threads: null = unread (never opened in Threads view). Set server-side
   // by notes.markThreadRead / notes.markRead. Backfilled to now() on migration

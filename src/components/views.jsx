@@ -1733,6 +1733,11 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
   // ─── MESSAGE (in expanded thread) ──────────────────────────────────────────
   const Message = ({ m }) => {
     const inbound = m.direction === 'inbound';
+    // HTML-view toggle, mirroring NoteCard. Default plaintext (m.text);
+    // offered only when the log-worker captured an HTML body for this
+    // message. Per-message state — Message is a real component rendered
+    // per row, so the hook is safe here (unlike an inline .map body).
+    const [showHtml, setShowHtml] = useState(false);
     const person = personById[m.personId];
     // Group outbound rows carry the full recipient line in raw_headers
     // (to_list/cc_list, written by the forms-worker fan-out). Render that
@@ -1776,9 +1781,39 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
             {m.subject}
           </div>
         )}
-        <div style={{ color: C.text, fontSize: 13.5, lineHeight: 1.65, whiteSpace: 'pre-wrap', opacity: 0.92 }}>
-          {m.text || <span style={{ fontStyle: 'italic', opacity: 0.6 }}>(no body)</span>}
-        </div>
+        {/* HTML/Text switch — shown only when an HTML body was captured. */}
+        {m.htmlBody && (
+          <div style={{ display: 'flex', gap: 6, marginBottom: 7 }}>
+            {['text', 'html'].map(mode => {
+              const active = (mode === 'html') === showHtml;
+              return (
+                <button key={mode} onClick={() => setShowHtml(mode === 'html')}
+                  style={{ background: active ? C.surf : 'transparent', color: active ? C.text : C.muted,
+                    border: `1px solid ${active ? C.border : 'transparent'}`, borderRadius: 4, fontSize: 10,
+                    fontWeight: 600, letterSpacing: '0.4px', textTransform: 'uppercase', padding: '2px 8px',
+                    cursor: 'pointer', fontFamily: "'Jost',sans-serif" }}>
+                  {mode === 'html' ? 'HTML' : 'Text'}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {/* HTML view: sandboxed iframe. sandbox="" (empty) is the load-bearing
+            safety control — no scripts, no same-origin, no forms, no top-level
+            nav — so hostile email markup can't touch the CRM origin. The CSP
+            meta blocks all remote loads (kills tracking pixels too). Never use
+            dangerouslySetInnerHTML for m.htmlBody. Same contract as NoteCard. */}
+        {m.htmlBody && showHtml ? (
+          <iframe
+            title="email"
+            sandbox=""
+            srcDoc={`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:;"><base target="_blank"><style>html,body{margin:0;padding:0;background:#fff;color:#111;font-family:sans-serif;font-size:14px;line-height:1.5;word-break:break-word}img{max-width:100%;height:auto}</style></head><body>${m.htmlBody}</body></html>`}
+            style={{ width: '100%', minHeight: 200, border: `1px solid ${C.border}`, borderRadius: 6, background: '#fff' }} />
+        ) : (
+          <div style={{ color: C.text, fontSize: 13.5, lineHeight: 1.65, whiteSpace: 'pre-wrap', opacity: 0.92 }}>
+            {m.text || <span style={{ fontStyle: 'italic', opacity: 0.6 }}>(no body)</span>}
+          </div>
+        )}
         {/* rawHeaders directly, NOT rh — rh is direction-gated above but
             attachments render on inbound and outbound alike. */}
         <AttachmentChips rh={m.rawHeaders} />

@@ -93,6 +93,10 @@ export const Avatar = ({ name, size=36, role }) => {
 export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote, onUpdateActionDate, onDelete, onClick, onAddToCalendar, onReply, onReplyAll, onOpenThread, highlight, dimReason }) => {
   const [editingDate, setEditingDate] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  // HTML-view toggle for logged emails. Default false = plaintext (note.text),
+  // the readable-preview column. When note.htmlBody exists the card offers a
+  // switch to the full HTML, rendered in a sandboxed iframe (see below).
+  const [showHtml, setShowHtml] = useState(false);
   // Auto-disarm the delete-confirm if user looks away
   useEffect(()=>{
     if(!confirmingDelete) return;
@@ -183,10 +187,43 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
       {note.subject && (
         <div style={{color:textColor,fontSize:14,fontWeight:600,lineHeight:1.5,marginBottom:note.text?3:0,opacity:completed?0.75:1}}>{note.subject}</div>
       )}
-      {note.text && (
-        <div style={{color:textColor,fontSize:14,lineHeight:1.7,opacity:completed?0.75:1}}>{note.text}</div>
+      {/* HTML/Text switch — only shown when the log-worker captured an HTML
+          body for this email. Stops propagation so tapping the switch doesn't
+          trigger the card's onClick (edit/open). */}
+      {isEmail && note.htmlBody && (
+        <div style={{display:'flex',gap:6,marginBottom:6}} onClick={e=>e.stopPropagation()}>
+          {['text','html'].map(mode => {
+            const active = (mode==='html') === showHtml;
+            return (
+              <button key={mode} onClick={()=>setShowHtml(mode==='html')}
+                style={{background:active?C.surf:'transparent',color:active?C.text:C.muted,
+                  border:`1px solid ${active?C.border:'transparent'}`,borderRadius:4,fontSize:10,
+                  fontWeight:600,letterSpacing:'0.4px',textTransform:'uppercase',padding:'2px 8px',
+                  cursor:'pointer',fontFamily:"'Jost',sans-serif"}}>
+                {mode==='html' ? 'HTML' : 'Text'}
+              </button>
+            );
+          })}
+        </div>
       )}
-      {!note.subject && !note.text && (
+      {/* HTML view: sandboxed iframe. sandbox="" (empty) is the load-bearing
+          safety control — no script execution, no same-origin access, no form
+          submission, no top-level navigation, so hostile email markup is fully
+          quarantined from the CRM origin. The CSP meta injected ahead of the
+          body additionally blocks ALL remote loads (img/style/etc.), which
+          kills tracking pixels — merely viewing a logged email won't ping the
+          sender. Never render note.htmlBody via dangerouslySetInnerHTML. */}
+      {isEmail && note.htmlBody && showHtml ? (
+        <iframe
+          title="email"
+          sandbox=""
+          onClick={e=>e.stopPropagation()}
+          srcDoc={`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:;"><base target="_blank"><style>html,body{margin:0;padding:0;background:#fff;color:#111;font-family:sans-serif;font-size:14px;line-height:1.5;word-break:break-word}img{max-width:100%;height:auto}</style></head><body>${note.htmlBody}</body></html>`}
+          style={{width:'100%',minHeight:200,border:`1px solid ${C.border}`,borderRadius:6,background:'#fff'}} />
+      ) : note.text ? (
+        <div style={{color:textColor,fontSize:14,lineHeight:1.7,opacity:completed?0.75:1}}>{note.text}</div>
+      ) : null}
+      {!note.subject && !note.text && !(isEmail && note.htmlBody) && (
         <div style={{color:C.muted,fontSize:13,fontStyle:'italic',opacity:0.7}}>(no details)</div>
       )}
       {/* Any kind can carry attachments now (notes/meetings/calls too);
