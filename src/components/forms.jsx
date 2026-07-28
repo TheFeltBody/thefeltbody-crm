@@ -2026,7 +2026,12 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
     text: existing?.text || prefill?.text || '',
     date: existing?.date || prefill?.date || defaultDate || today(),
     time: existing?.time || defaultTime || currentHourTime(),
-    duration: existing?.durationMins || 60,
+    // Display value. Stored duration is always minutes; when we seed the unit to
+    // hours (clean whole-hour), the displayed value must be divided down too, or
+    // "60 mins" shows as "60" under an hours unit and saves back as 60*60.
+    duration: (existing?.durationMins && existing.durationMins % 60 === 0)
+      ? existing.durationMins / 60
+      : (existing?.durationMins || 60),
     // Display unit for the duration field. Stored value is always minutes; this
     // just lets the user enter "2 hours" instead of "120". Seed to hours when an
     // existing entry is a clean whole-hour, else minutes.
