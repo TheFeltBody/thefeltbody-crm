@@ -1527,9 +1527,9 @@ export function BookableClassRow({ cls, orgs, primary, onClick }) {
 }
 
 
-export function CreateInvoiceForm({ onSave, onClose, orgs, classes, invoices, existing }) {
+export function CreateInvoiceForm({ onSave, onClose, orgs, classes, invoices, existing, presetOrgId }) {
   const billableOrgs = orgs.filter(o=>o.type==='care_home'||o.type==='gym');
-  const initialOrgId = existing?.orgId || billableOrgs[0]?.id || '';
+  const initialOrgId = existing?.orgId || presetOrgId || billableOrgs[0]?.id || '';
   const [f, setF] = useState(existing || {
     orgId: initialOrgId,
     invoiceNumber: initialOrgId ? nextInvoiceNumber(invoices, initialOrgId, orgs) : '',

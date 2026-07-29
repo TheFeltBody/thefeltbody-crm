@@ -1286,7 +1286,7 @@ export default function FeltBodyCRM() {
           }}
           onClose={close} />;
       }
-      case 'create_invoice': return <CreateInvoiceForm orgs={orgs} classes={classes} invoices={invoices} onSave={addInvoice} onClose={close} />;
+      case 'create_invoice': return <CreateInvoiceForm presetOrgId={modal.orgId} orgs={orgs} classes={classes} invoices={invoices} onSave={addInvoice} onClose={close} />;
       case 'edit_invoice': return <CreateInvoiceForm existing={modal.inv} orgs={orgs} classes={classes} invoices={invoices} onSave={inv=>updateInvoice(modal.inv.id, inv)} onClose={close} />;
       case 'household_manage': {
         // Opened from the Households view. HouseholdModal is anchored to a
