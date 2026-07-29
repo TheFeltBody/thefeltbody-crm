@@ -32,10 +32,10 @@ export const SEED = {
 // hex+alpha concatenation (C.gold+'88') keeps working — do NOT convert these
 // to CSS variables.
 export const THEME_BUSINESS = {
-  bg:'#0c1c13', sbg:'#091409', surf:'#122018', card:'#192c1f',
-  border:'#243b2b', gold:'#c9a84c', goldBg:'#1b2813',
-  text:'#f0ece4', muted:'#698a78', active:'#1c3224',
-  green:'#4db879', red:'#c97070', blue:'#6ba3d4', purple:'#a07fd4',
+  bg:'#0d2016', sbg:'#0a1810', surf:'#16271c', card:'#1e3325',
+  border:'#34503c', gold:'#d8b75f', goldBg:'#20301a',
+  text:'#f4f1ea', muted:'#93b5a1', active:'#254432',
+  green:'#5ac986', red:'#d98484', blue:'#7fb6e0', purple:'#b79ae0',
 };
 // Personal mode: the forest theme inverted to light. Same token shape, but the
 // lightness ladder flips — cards lift above the background, inputs sit as

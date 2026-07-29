@@ -369,6 +369,19 @@ export function OrgDetail({ org, people, classes, invoices, notes=[], contactDat
   const effectiveRole = (noteRole!=='all' && !memberRoles.includes(noteRole)) ? 'all' : noteRole;
   const visibleNotes = effectiveRole==='all' ? orgNotes : orgNotes.filter(n => (n._person?.roles||[]).includes(effectiveRole));
 
+  // ── People tab: role quick-filter + name search. Role chips are built from
+  // the roles actually present on this org's members (reuses memberRoles).
+  const [peopleRole, setPeopleRole] = useState('all');
+  const [peopleQuery, setPeopleQuery] = useState('');
+  const effectivePeopleRole = (peopleRole!=='all' && !memberRoles.includes(peopleRole)) ? 'all' : peopleRole;
+  const visiblePeople = useMemo(()=>{
+    const q = peopleQuery.trim().toLowerCase();
+    return op.filter(p =>
+      (effectivePeopleRole==='all' || (p.roles||[]).includes(effectivePeopleRole)) &&
+      (!q || (p.name||'').toLowerCase().includes(q))
+    );
+  }, [op, effectivePeopleRole, peopleQuery]);
+
   // ── Invoice status filter. Chips for 'all' + each status present on this
   // org's invoices (hides empty ones, same idea as the comms chips).
   const [invStatus, setInvStatus] = useState('all');
@@ -637,16 +650,31 @@ export function OrgDetail({ org, people, classes, invoices, notes=[], contactDat
             <Tabs tabs={tabList} active={tab} onChange={setTab} />
           )}
           {tab==='people'&&<>
-            <div style={{display:'flex',justifyContent:'flex-end',marginBottom:12}}><Btn small onClick={onAddPerson}>+ Add Person</Btn></div>
-            {op.length?<div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
-              {op.map(p=>(
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:12,flexWrap:'wrap'}}>
+              <input value={peopleQuery} onChange={e=>setPeopleQuery(e.target.value)} placeholder="Search by name..." style={{flex:'1 1 200px',maxWidth:280,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 12px',fontFamily:"'Jost',sans-serif",boxSizing:'border-box'}} />
+              <Btn small onClick={onAddPerson}>+ Add Person</Btn>
+            </div>
+            {op.length>0 && memberRoles.length>0 && (
+              <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
+                {['all',...memberRoles].map(r=>{
+                  const active=effectivePeopleRole===r;
+                  const count = r==='all' ? op.length : op.filter(p=>(p.roles||[]).includes(r)).length;
+                  const meta = r==='all' ? null : (personRoles[r]||PERSON_ROLES[r]);
+                  return <button key={r} onClick={()=>setPeopleRole(r)} style={{background:active?(meta?meta.bg:C.surf):'transparent',color:active?(meta?meta.color:C.text):C.muted,border:`1px solid ${active?(meta?meta.color+'88':C.border):C.border}`,borderRadius:4,fontSize:11,fontWeight:500,letterSpacing:'0.3px',padding:'4px 10px',cursor:'pointer',fontFamily:"'Jost',sans-serif",display:'inline-flex',alignItems:'center',gap:5}}>
+                    <span>{r==='all'?'All':roleLabel(r)}</span><span style={{opacity:0.55,fontSize:10}}>{count}</span>
+                  </button>;
+                })}
+              </div>
+            )}
+            {op.length?(visiblePeople.length?<div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+              {visiblePeople.map(p=>(
                 <Row key={p.id} onClick={()=>nav('person_detail',{personId:p.id})}>
                   <Avatar name={p.name} size={34} role={primaryRole(p)} />
                   <div style={{flex:1}}><div style={{color:C.text,fontSize:14}}>{p.name}</div></div>
                   <div style={{display:'flex',gap:4,flexWrap:'wrap',justifyContent:'flex-end'}}>{p.roles.map(r=><RoleBadge key={r} role={r} />)}</div>
                 </Row>
               ))}
-            </div>:<Empty text="No people added yet" />}
+            </div>:<Empty text="No people match" />):<Empty text="No people added yet" />}
           </>}
           {tab==='classes'&&<>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,gap:12,flexWrap:'wrap'}}>
