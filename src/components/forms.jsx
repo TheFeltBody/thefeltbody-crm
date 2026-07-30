@@ -664,41 +664,37 @@ export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onExtend, s
 
 
 export function AddToRegisterForm({ onSave, onClose, people, classId, existing, attendance, classes, cls, onAddNew }) {
-  const [selected, setSelected] = useState(null);
   // Names added this session, kept on-screen so the modal stays open for adding
   // several people in a row. `existing` (from the parent) is captured once at
   // mount via initialExisting so newly-added rows still render correctly until
   // the modal is closed and the parent re-reads attendance.
   const [addedNames, setAddedNames] = useState([]);
   const [addedIds, setAddedIds] = useState(()=>new Set());
+  // Bumped on each add to force SearchSelect to remount, which clears its query
+  // and refocuses the input — so tapping a name adds them and leaves the search
+  // live and empty, ready to type the next name (no confirm step, no re-tap).
+  const [pickerKey, setPickerKey] = useState(0);
   const initialExisting = useRef(existing);
   const available = people.filter(p=>p.status!=='inactive' && !addedIds.has(p.id));
 
-  const handleAdd = () => {
-    if (!selected) return;
-    onSave(classId, selected.id);
-    setAddedNames(prev => [...prev, selected.name]);
-    setAddedIds(prev => { const n=new Set(prev); n.add(selected.id); return n; });
-    setSelected(null); // clear the picker, keep the modal open for the next person
+  const handleAdd = (person) => {
+    if (!person) return;
+    onSave(classId, person.id);
+    setAddedNames(prev => [...prev, person.name]);
+    setAddedIds(prev => { const n=new Set(prev); n.add(person.id); return n; });
+    setPickerKey(k => k + 1); // remount the search: clears + refocuses for the next name
   };
 
   return (
     <Modal title="Add to Register" onClose={onClose} wide topAlign>
-      <SearchSelect people={available} onSelect={p=>setSelected(p)} attendance={attendance} classes={classes} contextSeriesId={cls?.seriesId} existing={initialExisting.current} />
-      {selected && (
-        <div style={{marginTop:14,background:C.active,border:`1px solid ${C.gold}55`,borderRadius:6,padding:'10px 14px',display:'flex',alignItems:'center',gap:12}}>
-          <Avatar name={selected.name} size={28} role={primaryRole(selected)} />
-          <span style={{color:C.text,fontSize:14,flex:1}}>{selected.name}</span>
-          <Btn small onClick={handleAdd}>Add to register</Btn>
-        </div>
-      )}
+      <SearchSelect key={pickerKey} people={available} onSelect={handleAdd} attendance={attendance} classes={classes} contextSeriesId={cls?.seriesId} existing={initialExisting.current} />
       {addedNames.length > 0 && (
         <div style={{marginTop:14,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 14px'}}>
           <div style={{color:C.green,fontSize:12,fontWeight:600,marginBottom:6}}>Added · {addedNames.length}</div>
           <div style={{color:C.text,fontSize:13,lineHeight:1.6}}>{addedNames.join(', ')}</div>
         </div>
       )}
-      {onAddNew && !selected && (
+      {onAddNew && (
         <div style={{marginTop:18,paddingTop:16,borderTop:`1px solid ${C.border}`,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
           <div style={{color:C.muted,fontSize:12}}>Can't find them?</div>
           <Btn variant="ghost" small onClick={onAddNew}>+ Add new contact</Btn>
