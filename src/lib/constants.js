@@ -44,10 +44,10 @@ export const THEME_BUSINESS = {
 // they hold contrast as text on pale backgrounds (the originals were tuned
 // for light-on-dark).
 export const THEME_PERSONAL = {
-  bg:'#e9f1e8', sbg:'#dce8db', surf:'#dfeadd', card:'#f6faf4',
-  border:'#c3d6c2', gold:'#9a7c2a', goldBg:'#f0ead0',
-  text:'#1e2b21', muted:'#5c7a66', active:'#d8e7d6',
-  green:'#2f8f57', red:'#b54f4f', blue:'#3d76a8', purple:'#7a55b8',
+  bg:'#e9f1e8', sbg:'#d6e4d5', surf:'#dfeadd', card:'#f8fbf6',
+  border:'#a9c4a8', gold:'#7d6318', goldBg:'#f0ead0',
+  text:'#152018', muted:'#456052', active:'#cde0cb',
+  green:'#1f7a45', red:'#a13c3c', blue:'#2c6191', purple:'#654a9e',
 };
 export const C = { ...THEME_BUSINESS };
 // Idempotent; safe to call at the top of App's render body so the palette is
