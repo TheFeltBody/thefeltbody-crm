@@ -173,6 +173,10 @@ export const INTERACTION_KINDS = {
   // and whose body (`text`) is usually empty. Surfaced in Comms only under their
   // own filter chip — excluded from the default 'All' view to avoid clutter.
   diary:   { label:'Diary',   icon:'📔', color:'#6ba3d4', bg:'#131d2a' },
+  // Practice logs (kind='practice'): self-logged 5t's sessions from /5t. The
+  // rich per-Tibetan detail lives in the practice_logs table; this interaction
+  // row is the summary that threads them into Comms and Recent Activity.
+  practice:{ label:'Practice', icon:'🧘', color:'#8fc4a0', bg:'#13251b' },
 };
 
 // Household member relationship labels. Keys match the DB CHECK constraint on

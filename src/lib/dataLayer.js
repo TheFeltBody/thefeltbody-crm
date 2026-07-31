@@ -37,6 +37,7 @@ import {
   settingFromDb,
   projectFromDb, projectToDb,
   fileFromDb, fileToDb,
+  practiceLogFromDb,
 } from './mappers.js';;
 
 // Throw on any Supabase error so callers (and React error boundaries) see
@@ -104,6 +105,7 @@ export async function loadAll() {
     packageTemplateRows,
     fileRows,
     roleParentRows,
+    practiceLogRows,
   ] = await Promise.all([
     supabase.from('active_organisations').select('*').order('name').then(ok),
     // Ranged reads: these tables cross (or are near) PostgREST's 1000-row cap.
@@ -137,6 +139,9 @@ export async function loadAll() {
     supabase.from('package_templates').select('*').order('position').then(ok),
     supabase.from('active_files').select('*').order('created_at', { ascending: false }).then(ok),
     supabase.from('role_parents').select('*').order('position').then(ok),
+    // Practice logs (self-logged 5t's sessions). Read-only here; written by
+    // the forms worker. RLS scopes to the owner. Newest first for the tab.
+    supabase.from('practice_logs').select('*').order('logged_at', { ascending: false }).then(ok),
   ]);
 
   // Group person_roles by person_id -> array of role keys
@@ -194,6 +199,7 @@ export async function loadAll() {
     projects: projectRows.map(projectFromDb),
     packageTemplates: packageTemplateRows.map(packageTemplateFromDb),
     files: fileRows.map(fileFromDb),
+    practiceLogs: practiceLogRows.map(practiceLogFromDb),
   };
 }
 

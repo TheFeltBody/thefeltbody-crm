@@ -78,6 +78,10 @@ export default function FeltBodyCRM() {
   // org / interaction. Surfaced via DocumentsView; binaries fetched on demand
   // through short-lived signed URLs.
   const [files, setFiles] = useState([]);
+  // Practice logs (self-logged 5t's sessions from /5t). Read-only in the CRM
+  // (written by the forms worker). Surfaced as a conditional 5T tab on
+  // PersonDetail and, via their interaction rows, in Recent Activity.
+  const [practiceLogs, setPracticeLogs] = useState([]);
   // Mobile nav state (Phase 1: basic hamburger button + modal nav for small screens)
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   // Mobile accordion expand/contract toggle, persisted per-device so the user's
@@ -130,6 +134,7 @@ export default function FeltBodyCRM() {
         setProjects(all.projects || []);
         setPackageTemplates(all.packageTemplates || []);
         setFiles(all.files || []);
+        setPracticeLogs(all.practiceLogs || []);
         setLoadStatus('ready');
       } catch (e) {
         if (cancelled) return;
@@ -1405,6 +1410,7 @@ export default function FeltBodyCRM() {
         const pc=attendance.filter(a=>a.personId===person.id).map(a=>classes.find(c=>c.id===a.classId)).filter(Boolean).sort((a,b)=>b.date.localeCompare(a.date));
         return <PersonDetail person={person} org={org} pNotes={pn} pClasses={pc} attendance={attendance} packages={packages} classes={classes} notes={notes} forms={forms} orgs={orgs} nav={nav} backInfo={backInfo} highlightNoteId={highlightNoteId} emailTemplates={settings.email_templates?.templates || []} onSaveAsTemplate={saveDraftAsTemplate}
           people={people} households={households} householdMembers={householdMembers} contactDates={contactDates}
+          practiceLogs={practiceLogs}
           onCreateHousehold={createHousehold}
           onRenameHousehold={renameHousehold}
           onDeleteHousehold={deleteHousehold}

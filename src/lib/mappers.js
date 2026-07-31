@@ -826,3 +826,32 @@ export const fileToDb = (f) => ({
   org_id: f.orgId || null,
   interaction_id: f.interactionId || null,
 });
+
+// ─── Practice logs (self-logged 5t's practice from /5t) ──────────────────────
+// Read-only in the CRM: rows are written by the forms worker (service role).
+// The rich per-Tibetan detail lives in the `tibetans` jsonb column:
+//   [{ t:1, reps:21, approx:false, note:'…' }, …]
+// Supabase returns jsonb already-parsed, so no JSON.parse needed. We normalise
+// to a stable array shape so the view can map it without guarding every field.
+export const practiceLogFromDb = (row) => ({
+  id: row.id,
+  personId: row.person_id || null,
+  email: row.email || null,
+  practice: row.practice || '5ts',
+  loggedAt: row.logged_at,
+  reps: row.reps ?? null,                    // total across the five Tibetans
+  tibetans: Array.isArray(row.tibetans)
+    ? row.tibetans.map((t, i) => ({
+        t: t?.t ?? i + 1,
+        reps: t?.reps ?? null,
+        approx: !!t?.approx,
+        note: t?.note || '',
+      }))
+    : [],
+  effort: row.effort || null,                // 'easy' | 'steady' | 'hard'
+  longHolds: row.long_holds ?? false,
+  durationMins: row.duration_mins ?? null,
+  qualityRating: row.quality_rating ?? null, // 1–5
+  qualityNote: row.quality_note || '',
+  createdAt: row.created_at,
+});

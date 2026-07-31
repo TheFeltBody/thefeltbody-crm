@@ -1168,7 +1168,7 @@ export function ContactDatesCard({ anchor, contactDates, onAdd, onUpdate, onRemo
 }
 
 
-export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], forms=[], orgs, nav, backInfo, highlightNoteId, emailTemplates=[], onSaveAsTemplate, people, households, householdMembers, contactDates=[], onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onAddToCalendar, onSendEmail, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {
+export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], forms=[], orgs, nav, backInfo, highlightNoteId, emailTemplates=[], onSaveAsTemplate, people, households, householdMembers, contactDates=[], practiceLogs=[], onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onAddToCalendar, onSendEmail, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {
   const isMobile = useIsMobile();  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
@@ -1275,8 +1275,20 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
   // Diary entries (kind='diary') are also excluded from the default/'All' view —
   // they're calendar items, mostly title-only, and would clutter the record.
   // They're reachable via their own Diary chip (diaryNotes below).
-  const commsNotes = pNotes.filter(n => !['booking','payment','diary'].includes(n.kind));
+  const commsNotes = pNotes.filter(n => !['booking','payment','diary','practice'].includes(n.kind));
   const diaryNotes = pNotes.filter(n => n.kind === 'diary');
+  // ── Practice logs (self-logged 5t's sessions). Full per-Tibetan detail comes
+  // from the practice_logs table (not interactions), newest first. The tab only
+  // appears when this person has logged at least one — same conditional-tab
+  // pattern as OrgDetail's Invoices. Anonymous logs (no personId) never reach
+  // here; they have no contact to attach to.
+  const pPractice = (practiceLogs || [])
+    .filter(pl => pl.personId === person.id)
+    .sort((a,b) => (b.loggedAt||'').localeCompare(a.loggedAt||''));
+  // If the persisted tab is 'practice' but this contact has none, fall back to
+  // Comms so the user isn't stranded on a hidden, empty tab (the tab chip only
+  // renders when pPractice.length, so without this the active state is orphaned).
+  useEffect(() => { if(tab==='practice' && !pPractice.length) setTab('notes'); }, [tab, pPractice.length]);
   // Diary is a valid filter target even though it's not in commsNotes. For every
   // other kind, validity is checked against commsNotes.
   const filterValid = filterKind==='all'
@@ -1633,14 +1645,24 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
         </div>
         <div>
           {isMobile ? (
-            <MobileTabBar topOffset={97} active={tab} onChange={setTab} tabs={[
-              {id:'notes',    icon:'💬', name:'Comms',    count:commsNotes.length},
-              {id:'bookings', icon:'📅', name:'Bookings', count:pClasses.length},
-              {id:'packages', icon:'🎟', name:'Packages', count:pPkgs.length},
-              {id:'payments', icon:'💷', name:'Payments', count:pPayments.length},
-            ]} />
+            <MobileTabBar topOffset={97} active={tab} onChange={setTab} tabs={(() => {
+              const t = [
+                {id:'notes',    icon:'💬', name:'Comms',    count:commsNotes.length},
+                {id:'bookings', icon:'📅', name:'Bookings', count:pClasses.length},
+                {id:'packages', icon:'🎟', name:'Packages', count:pPkgs.length},
+                {id:'payments', icon:'💷', name:'Payments', count:pPayments.length},
+              ];
+              // Practice tab only when this person has logged some (same pattern
+              // as OrgDetail Invoices) — keeps the bar clean for non-practisers.
+              if(pPractice.length) t.push({id:'practice', icon:'🧘', name:'5T', count:pPractice.length});
+              return t;
+            })()} />
           ) : (
-            <Tabs tabs={[{id:'notes',label:`Comms (${commsNotes.length})`},{id:'bookings',label:`Bookings (${pClasses.length})`},{id:'packages',label:`Packages (${pPkgs.length})`},{id:'payments',label:`Payments (${pPayments.length})`}]} active={tab} onChange={setTab} />
+            <Tabs tabs={(() => {
+              const t = [{id:'notes',label:`Comms (${commsNotes.length})`},{id:'bookings',label:`Bookings (${pClasses.length})`},{id:'packages',label:`Packages (${pPkgs.length})`},{id:'payments',label:`Payments (${pPayments.length})`}];
+              if(pPractice.length) t.push({id:'practice',label:`5T (${pPractice.length})`});
+              return t;
+            })()} active={tab} onChange={setTab} />
           )}
           {tab==='bookings'&&<>
             {bookingsList(false)}
@@ -1919,6 +1941,68 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
                 })}
               </div>
             ) : <Empty text="No payments recorded yet" />}
+          </>}
+          {tab==='practice'&&<>
+            {pPractice.length ? (() => {
+              // Summary strip: total sessions + a gentle streak-ish signal (the
+              // whole point of the practice is regular return, so surface that).
+              const total = pPractice.length;
+              const last = pPractice[0];
+              const EFFORT = {easy:'Took it easy', steady:'Steady', hard:'Worked hard'};
+              const fmtDT = (iso) => { try { const d=new Date(iso);
+                return d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})
+                  + ' · ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); }
+                catch(e){ return iso; } };
+              return <>
+                <div style={{display:'flex',gap:10,marginBottom:16,flexWrap:'wrap'}}>
+                  <div style={{flex:1,minWidth:120,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 14px'}}>
+                    <div style={{color:C.muted,fontSize:10,letterSpacing:'0.4px',marginBottom:3}}>PRACTICES LOGGED</div>
+                    <div style={{color:C.green,fontSize:18,fontWeight:600}}>{total}</div>
+                  </div>
+                  <div style={{flex:1,minWidth:120,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 14px'}}>
+                    <div style={{color:C.muted,fontSize:10,letterSpacing:'0.4px',marginBottom:3}}>MOST RECENT</div>
+                    <div style={{color:C.text,fontSize:13,fontWeight:500}}>{last.loggedAt?fmtDT(last.loggedAt).split(' · ')[0]:'—'}</div>
+                  </div>
+                </div>
+                <div style={pPractice.length>6 ? {maxHeight:600,overflowY:'auto',paddingRight:4} : undefined}>
+                  {pPractice.map(pl => {
+                    const tibs = pl.tibetans && pl.tibetans.length ? pl.tibetans : null;
+                    return (
+                      <div key={pl.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,marginBottom:8,padding:'12px 14px'}}>
+                        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginBottom:tibs||pl.qualityNote?10:0,flexWrap:'wrap'}}>
+                          <div style={{color:C.text,fontSize:13,fontWeight:500}}>
+                            🧘 {pl.loggedAt?fmtDT(pl.loggedAt):'Practice'}
+                          </div>
+                          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+                            {pl.effort && <span style={{fontSize:10,color:C.muted,background:C.bg,border:`1px solid ${C.border}`,borderRadius:20,padding:'2px 9px'}}>{EFFORT[pl.effort]||pl.effort}</span>}
+                            {pl.longHolds && <span style={{fontSize:10,color:C.gold,background:C.gold+'18',border:`1px solid ${C.gold}55`,borderRadius:20,padding:'2px 9px'}}>Long holds</span>}
+                            {pl.qualityRating!=null && <span style={{fontSize:11,color:C.gold}}>{'✦'.repeat(pl.qualityRating)}<span style={{color:C.border}}>{'✦'.repeat(Math.max(0,5-pl.qualityRating))}</span></span>}
+                          </div>
+                        </div>
+                        {tibs && (
+                          <div style={{display:'flex',flexDirection:'column',gap:5,marginBottom:pl.qualityNote?10:0}}>
+                            {tibs.map(t => (
+                              <div key={t.t} style={{display:'flex',alignItems:'baseline',gap:10,fontSize:12}}>
+                                <span style={{color:C.gold,fontWeight:600,flexShrink:0,width:24}}>T{t.t}</span>
+                                <span style={{color:C.text,flexShrink:0,width:52,fontStyle:t.approx?'italic':'normal'}}>
+                                  {t.reps!=null ? (t.approx?'~':'')+t.reps : '—'}
+                                </span>
+                                {t.note && <span style={{color:C.muted}}>{t.note}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {pl.qualityNote && (
+                          <div style={{color:C.muted,fontSize:12,fontStyle:'italic',paddingTop:tibs?10:0,borderTop:tibs?`1px solid ${C.border}`:'none',lineHeight:1.5}}>
+                            "{pl.qualityNote}"
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>;
+            })() : <Empty text="No practices logged yet" />}
           </>}
         </div>
       </div>
