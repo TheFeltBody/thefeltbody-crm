@@ -349,12 +349,22 @@ export const deriveActivity = (attendance, classes, packages) => [
 // Recent Activity feed (which is mostly deriveActivity register entries) and
 // from Inbox (unlinked inbound comms). Unread state reuses interactions.read_at
 // — the same column Threads uses — so "seen on one machine" clears everywhere.
+// Web Activity = genuine inbound website events (public bookings + form
+// submissions). Two guards learned the hard way:
+//   • Exclude kind='diary' outright. A diary entry is never a website event,
+//     whatever its source — the CRM diary form and the household-share worker
+//     don't set source='form', but belt-and-braces we never want diary here.
+//   • These are events that ARRIVED from the outside world, so their meaningful
+//     ordering is arrival time (created_at), NOT their `date` (which for a
+//     booking is the class date — often far in the future, so a mixed
+//     created_at||date sort floated next term's entries to the top).
 export const WEB_EVENT_SOURCES = ['form', 'stripe'];
 export const isWebEvent = (n) =>
-  !n._derived && WEB_EVENT_SOURCES.includes(n.source) && n.direction !== 'outbound';
+  !n._derived && n.kind !== 'diary'
+  && WEB_EVENT_SOURCES.includes(n.source) && n.direction !== 'outbound';
 export const webEvents = (notes) =>
   notes.filter(isWebEvent).sort((a, b) =>
-    (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || ''));
+    (b.createdAt || '').localeCompare(a.createdAt || ''));
 export const webUnreadCount = (notes) => notes.filter(n => isWebEvent(n) && !n.readAt).length;
 
 // UK convention: weeks run Monday–Sunday. Returns the Monday of the week containing dateStr.
