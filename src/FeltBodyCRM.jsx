@@ -268,6 +268,47 @@ export default function FeltBodyCRM() {
     setMode(m);
     setHistory([{ name:'dashboard' }]);
   };
+
+  // ─── Hardware / browser back button integration ───────────────────────
+  // The app's navigation is an in-memory stack (`history` state). On mobile the
+  // OS back button fires the browser's popstate; with nothing listening it
+  // unwinds the SPA's own page entry and closes the app. We mirror our stack
+  // depth into window.history so each in-app level has a matching browser entry,
+  // and translate a popstate into our own goBack(). Views, nav() and goBack()
+  // are untouched — they already drive `history`, which is all we sync against.
+  const browserDepthRef = useRef(0);
+
+  // Keep window.history depth in step with our stack depth. When the app stack
+  // grows (nav pushed a screen), push a matching dummy browser entry so there's
+  // something for the OS back button to pop. We never pop here; the browser pops
+  // itself on a back press, handled by the popstate listener below.
+  useEffect(() => {
+    while (browserDepthRef.current < history.length) {
+      window.history.pushState({ fbcDepth: browserDepthRef.current + 1 }, '');
+      browserDepthRef.current += 1;
+    }
+  }, [history.length]);
+
+  useEffect(() => {
+    const onPop = () => {
+      setHistory(h => {
+        if (h.length > 1) {
+          // Somewhere to go inside the app: re-push the entry the browser just
+          // popped so we stay one deep and keep intercepting the next press,
+          // then step our own stack back by one.
+          window.history.pushState({ fbcDepth: h.length }, '');
+          return h.slice(0, -1);
+        }
+        // At the app root: let the browser genuinely go back (exit the app /
+        // previous page). We don't re-push, so this press escapes.
+        window.history.back();
+        return h;
+      });
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
 // Compute a smart back label from the previous entry in the history stack
   const backInfo = useMemo(() => {
     if (history.length < 2) return null;

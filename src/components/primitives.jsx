@@ -219,7 +219,7 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
           sandbox=""
           onClick={e=>e.stopPropagation()}
           srcDoc={`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:;"><base target="_blank"><style>html,body{margin:0;padding:0;background:#fff;color:#111;font-family:sans-serif;font-size:14px;line-height:1.5;word-break:break-word}img{max-width:100%;height:auto}</style></head><body>${note.htmlBody}</body></html>`}
-          style={{width:'100%',minHeight:200,border:`1px solid ${C.border}`,borderRadius:6,background:'#fff'}} />
+          style={{width:'100%',minHeight:400,border:`1px solid ${C.border}`,borderRadius:6,background:'#fff'}} />
       ) : note.text ? (
         <div style={{color:textColor,fontSize:14,lineHeight:1.7,opacity:completed?0.75:1}}>{note.text}</div>
       ) : null}
