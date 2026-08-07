@@ -1723,13 +1723,17 @@ export function NoteForm({ personId, classId, kind='note', existing, onSave, onC
 
   const meta = INTERACTION_KINDS[activeKind] || INTERACTION_KINDS.note;
   const needsDirection = activeKind === 'call' || activeKind === 'email';
-  const needsSubject = activeKind === 'email';
+  // 'subject' is reused as the praise "value/quality" field (persistence,
+  // kindness, self-control…) so praise can be grouped by value over time.
+  const needsSubject = activeKind === 'email' || activeKind === 'praise';
+  const isPraise = activeKind === 'praise';
   const needsDuration = activeKind === 'call' || activeKind === 'meeting';
   const placeholder = {
     note:    'Add a note...',
     call:    'What did you discuss?',
     email:   'Email summary or body...',
     meeting: 'Meeting notes — what came up?',
+    praise:  'What did they do? Describe it — no "good"/"well done", just the specifics. e.g. "You put your shoes by the door without being asked."',
   }[activeKind] || 'Add a note...';
   const saveLabel = isEdit ? 'Save changes' : `Save ${meta.label.toLowerCase()}`;
 
@@ -1869,11 +1873,38 @@ export function NoteForm({ personId, classId, kind='note', existing, onSave, onC
         </div>
       )}
 
-      {/* Email subject */}
+      {/* Subject line. For email = the message subject; for praise = the
+          value/quality the behaviour points to (persistence, kindness…),
+          grouped-on later. The datalist offers common CEHP values but the
+          field stays free-text so you can name anything. */}
       {needsSubject && (
-        <input type="text" value={subject} onChange={e=>setSubject(e.target.value)}
-          placeholder="Subject"
-          style={{width:'100%',background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:14,padding:'8px 12px',fontFamily:"'Jost',sans-serif",outline:'none',marginBottom:8}} />
+        <>
+          {isPraise && (
+            <div style={{color:meta.color,fontSize:10,fontWeight:600,letterSpacing:'0.5px',marginBottom:4,textTransform:'uppercase'}}>
+              Value / quality
+            </div>
+          )}
+          <input type="text" value={subject} onChange={e=>setSubject(e.target.value)}
+            placeholder={isPraise ? 'e.g. persistence, kindness, self-control…' : 'Subject'}
+            list={isPraise ? 'praise-values' : undefined}
+            style={{width:'100%',background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:14,padding:'8px 12px',fontFamily:"'Jost',sans-serif",outline:'none',marginBottom:8}} />
+          {isPraise && (
+            <datalist id="praise-values">
+              <option value="persistence" />
+              <option value="kindness" />
+              <option value="self-control" />
+              <option value="honesty" />
+              <option value="effort" />
+              <option value="patience" />
+              <option value="courage" />
+              <option value="responsibility" />
+              <option value="cooperation" />
+              <option value="focus" />
+              <option value="generosity" />
+              <option value="independence" />
+            </datalist>
+          )}
+        </>
       )}
 
       {/* Direction picker (call/email) + duration (call/meeting), one compact row */}

@@ -177,6 +177,12 @@ export const INTERACTION_KINDS = {
   // rich per-Tibetan detail lives in the practice_logs table; this interaction
   // row is the summary that threads them into Comms and Recent Activity.
   practice:{ label:'Practice', icon:'🧘', color:'#8fc4a0', bg:'#13251b' },
+  // Descriptive praise (kind='praise'): a logged moment of Calmer-Easier-Happier
+  // "descriptive praise" for a person. `text` holds what they did + your wording;
+  // `subject` holds the value/quality it points to (persistence, kindness, etc.)
+  // so praise can be grouped by value over time. Hand-logged from PersonDetail's
+  // "+ Log" menu; surfaces as its own filter chip in Comms + Recent Activity.
+  praise:  { label:'Praise',   icon:'🌱', color:'#c9a84c', bg:'#22200f' },
 };
 
 // Household member relationship labels. Keys match the DB CHECK constraint on
