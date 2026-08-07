@@ -38,6 +38,7 @@ import {
   projectFromDb, projectToDb,
   fileFromDb, fileToDb,
   practiceLogFromDb,
+  linkFromDb, linkToDb,
 } from './mappers.js';;
 
 // Throw on any Supabase error so callers (and React error boundaries) see
@@ -106,6 +107,7 @@ export async function loadAll() {
     fileRows,
     roleParentRows,
     practiceLogRows,
+    linkRows,
   ] = await Promise.all([
     supabase.from('active_organisations').select('*').order('name').then(ok),
     // Ranged reads: these tables cross (or are near) PostgREST's 1000-row cap.
@@ -142,6 +144,9 @@ export async function loadAll() {
     // Practice logs (self-logged 5t's sessions). Read-only here; written by
     // the forms worker. RLS scopes to the owner. Newest first for the tab.
     supabase.from('practice_logs').select('*').order('logged_at', { ascending: false }).then(ok),
+    // Saved links (reference URLs on a person or org). RLS scopes to owner.
+    // Newest first for the tab. Small table — no ranged read needed.
+    supabase.from('links').select('*').order('created_at', { ascending: false }).then(ok),
   ]);
 
   // Group person_roles by person_id -> array of role keys
@@ -200,6 +205,7 @@ export async function loadAll() {
     packageTemplates: packageTemplateRows.map(packageTemplateFromDb),
     files: fileRows.map(fileFromDb),
     practiceLogs: practiceLogRows.map(practiceLogFromDb),
+    links: linkRows.map(linkFromDb),
   };
 }
 
@@ -1017,6 +1023,31 @@ export const contactDates = {
   },
   async delete(id) {
     await supabase.from('contact_dates').delete().eq('id', id).then(ok);
+  },
+};
+
+// ─── Links (saved URLs on a person OR an org) ────────────────────────────────
+// owner_id set DB-side via DEFAULT auth.uid() — never passed from the client.
+// linkToDb writes exactly one of person_id/org_id; the links_one_anchor CHECK
+// rejects zero or both. Hard delete — cheap to recreate, no audit need.
+export const links = {
+  async create(l) {
+    const row = await supabase.from('links').insert(linkToDb(l))
+      .select().single().then(ok);
+    return linkFromDb(row);
+  },
+  async update(id, l) {
+    const row = await supabase.from('links').update(linkToDb(l))
+      .eq('id', id).select().single().then(ok);
+    return linkFromDb(row);
+  },
+  async toggleStar(id, starred) {
+    const row = await supabase.from('links').update({ starred })
+      .eq('id', id).select().single().then(ok);
+    return linkFromDb(row);
+  },
+  async delete(id) {
+    await supabase.from('links').delete().eq('id', id).then(ok);
   },
 };
 

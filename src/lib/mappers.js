@@ -855,3 +855,33 @@ export const practiceLogFromDb = (row) => ({
   qualityNote: row.quality_note || '',
   createdAt: row.created_at,
 });
+
+// ─── Links (saved URLs attached to a person OR an org) ───────────────────────
+// A links row is reference material — a URL (often pulled out of an email)
+// you want to look up later, NOT a timeline event. Deliberately kept off
+// interactions so it never clutters derived activity. Exactly one anchor
+// (person_id XOR org_id), enforced by the links_one_anchor CHECK. owner_id is
+// set DB-side via DEFAULT auth.uid(), so the mapper never writes it (mirrors
+// contact_dates / files / projects). source_thread_id, when set, lets the UI
+// jump back to the email the link came from. Hard delete — cheap to recreate.
+export const linkFromDb = (row) => ({
+  id: row.id,
+  personId: row.person_id || null,
+  orgId: row.org_id || null,
+  url: row.url,
+  title: row.title || '',
+  sourceThreadId: row.source_thread_id || null,
+  starred: row.starred ?? false,
+  createdAt: row.created_at,
+});
+
+// Writes whichever anchor is set; the caller supplies exactly one of
+// personId / orgId and the DB CHECK guards it.
+export const linkToDb = (l) => ({
+  person_id: l.personId || null,
+  org_id: l.orgId || null,
+  url: (l.url || '').trim(),
+  title: l.title ? String(l.title).trim() || null : null,
+  source_thread_id: l.sourceThreadId || null,
+  starred: l.starred ?? false,
+});
