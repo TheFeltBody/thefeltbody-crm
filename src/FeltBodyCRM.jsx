@@ -717,6 +717,27 @@ export default function FeltBodyCRM() {
       }
     }
   };
+  // Standalone link CRUD (manual add/edit/delete from a PersonDetail/OrgDetail
+  // Links tab). addLink takes a fully-shaped link ({ personId|orgId, url, title,
+  // note, starred }); the data layer sets owner_id DB-side. Await the saved row
+  // (real UUID) before splicing, matching the other add handlers. toggleLinkStar
+  // and deleteLink are fast optimistic updates with no rollback.
+  const addLink = (l) => data.links.create(l)
+    .then(saved => { setLinks(p => [saved, ...p]); return saved; })
+    .catch(onError('Add link'));
+  const updateLink = (id, l) => data.links.update(id, l)
+    .then(saved => setLinks(p => p.map(x => x.id === id ? saved : x)))
+    .catch(onError('Update link'));
+  const deleteLink = (id) => {
+    setLinks(p => p.filter(x => x.id !== id));  // optimistic
+    data.links.delete(id).catch(onError('Delete link'));
+  };
+  const toggleLinkStar = (id) => {
+    const cur = links.find(x => x.id === id);
+    if (!cur) return;
+    setLinks(p => p.map(x => x.id === id ? { ...x, starred: !x.starred } : x));
+    data.links.toggleStar(id, !cur.starred).catch(onError('Star link'));
+  };
   // Soft-delete a whole thread. ids = every interaction row shown in the thread
   // (ThreadsView collects them, threaded or solo). Optimistic-local removal
   // first, then the bulk server soft-delete (stamps deleted_at). Recoverable in
@@ -1460,6 +1481,11 @@ export default function FeltBodyCRM() {
       case 'org_detail': {
         const org=orgs.find(o=>o.id===orgId); if(!org) return <Empty text="Not found" />;
         return <OrgDetail org={org} people={people} classes={classes} invoices={invoices} notes={notes} contactDates={contactDates} nav={nav} backInfo={backInfo}
+          links={links}
+          onAddLink={addLink}
+          onUpdateLink={updateLink}
+          onDeleteLink={deleteLink}
+          onToggleLinkStar={toggleLinkStar}
           onEdit={()=>setModal({type:'edit_org',org})}
           onAddPerson={()=>setModal({type:'add_person',orgId,personType:org.type==='care_home'?'resident':'website_student'})}
           onAddClass={()=>setModal({type:'add_class',orgId})}
@@ -1485,6 +1511,11 @@ export default function FeltBodyCRM() {
         return <PersonDetail person={person} org={org} pNotes={pn} pClasses={pc} attendance={attendance} packages={packages} classes={classes} notes={notes} forms={forms} orgs={orgs} nav={nav} backInfo={backInfo} highlightNoteId={highlightNoteId} emailTemplates={settings.email_templates?.templates || []} onSaveAsTemplate={saveDraftAsTemplate}
           people={people} households={households} householdMembers={householdMembers} contactDates={contactDates}
           practiceLogs={practiceLogs}
+          links={links}
+          onAddLink={addLink}
+          onUpdateLink={updateLink}
+          onDeleteLink={deleteLink}
+          onToggleLinkStar={toggleLinkStar}
           onCreateHousehold={createHousehold}
           onRenameHousehold={renameHousehold}
           onDeleteHousehold={deleteHousehold}

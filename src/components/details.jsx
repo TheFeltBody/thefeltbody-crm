@@ -338,7 +338,7 @@ export function SessionNoteRow({ c, notesList, open, onToggle, nav }) {
 
 // ─── ORG LIST / DETAIL ────────────────────────────────────────────────────────
 
-export function OrgDetail({ org, people, classes, invoices, notes=[], contactDates=[], nav, backInfo, onEdit, onAddPerson, onAddClass, onCreateInvoice, onEditInvoice, onUpdateInvoiceStatus, onAddToCalendar, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onAddContactDate, onUpdateContactDate, onRemoveContactDate }) {
+export function OrgDetail({ org, people, classes, invoices, notes=[], contactDates=[], nav, backInfo, onEdit, onAddPerson, onAddClass, onCreateInvoice, onEditInvoice, onUpdateInvoiceStatus, onAddToCalendar, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onAddContactDate, onUpdateContactDate, onRemoveContactDate, links=[], onAddLink, onUpdateLink, onDeleteLink, onToggleLinkStar }) {
   const isMobile = useIsMobile();
   const { orgTypes, personRoles } = useTypes();
   // Persisted so the org page reopens on the last-viewed tab (sticky, per-device).
@@ -642,6 +642,8 @@ export function OrgDetail({ org, people, classes, invoices, notes=[], contactDat
         </div>
         <ContactDatesCard anchor={{orgId: org.id}} contactDates={contactDates}
           onAdd={onAddContactDate} onUpdate={onUpdateContactDate} onRemove={onRemoveContactDate} />
+        <LinksCard anchor={{orgId: org.id}} links={links}
+          onAdd={onAddLink} onUpdate={onUpdateLink} onDelete={onDeleteLink} onToggleStar={onToggleLinkStar} />
         </div>
         <div>
           {isMobile ? (
@@ -1083,6 +1085,137 @@ function DateForm({ d, setD, onSave, onCancel, saveLabel }) {
   );
 }
 
+// ─── LINKS CARD ──────────────────────────────────────────────────────────────
+// Saved reference URLs for a person OR an org (the `links` table). Sits in the
+// left column of PersonDetail / OrgDetail beside ContactDatesCard, same anchor
+// pattern ({personId} XOR {orgId}). Links are added automatically from an email
+// thread (Threads "Save links") or manually here. Fields: url, title, note,
+// starred. Starred links float to the top. A link remembers the thread it came
+// from (sourceThreadId) but we don't render a jump-back yet — that's a later
+// pass once the value's proven.
+//
+// LinkForm is hoisted to module scope (never nested in LinksCard's render) so
+// its inputs keep focus/state across parent re-renders — the same lesson as
+// DateForm below.
+
+const blankLink = { url: '', title: '', note: '', starred: false };
+
+// Light URL sanity: accept anything that looks like it has a dot, prepend
+// https:// if the user omitted the scheme. Not validation — just a nudge so a
+// pasted "acme.co/x" becomes a working link. Returns '' for empty input.
+const normaliseUrl = (raw) => {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s)) return s;
+  return `https://${s}`;
+};
+
+function LinkForm({ d, setD, onSave, onCancel, saveLabel }) {
+  const canSave = String(d.url || '').trim().length > 2;
+  return (
+    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'12px 14px',marginBottom:12}}>
+      <FI label="URL" value={d.url} onChange={v=>setD({...d, url:v})} placeholder="https://…" />
+      <FI label="Title (optional)" value={d.title} onChange={v=>setD({...d, title:v})} placeholder="What is this?" />
+      <FI label="Note (optional)" value={d.note} onChange={v=>setD({...d, note:v})} rows={2} placeholder="Why it matters, context…" />
+      <label style={{display:'flex',alignItems:'center',gap:8,margin:'2px 0 12px',cursor:'pointer',color:C.text,fontSize:13}}>
+        <input type="checkbox" checked={!!d.starred} onChange={e=>setD({...d, starred:e.target.checked})}
+          style={{cursor:'pointer',accentColor:C.gold,width:15,height:15}} />
+        Star this link
+      </label>
+      <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+        <Btn small variant="ghost" onClick={onCancel}>Cancel</Btn>
+        <Btn small onClick={onSave} disabled={!canSave}>{saveLabel}</Btn>
+      </div>
+    </div>
+  );
+}
+
+export function LinksCard({ anchor, links, onAdd, onUpdate, onDelete, onToggleStar }) {
+  const mine = useMemo(() => {
+    const list = (links || []).filter(l =>
+      anchor.personId ? l.personId === anchor.personId : l.orgId === anchor.orgId);
+    // Starred first, then newest. createdAt is an ISO string so string compare
+    // is chronological; guard missing values so an old row can't wreck the sort.
+    return list.slice().sort((a, b) => {
+      if (!!b.starred !== !!a.starred) return (b.starred ? 1 : 0) - (a.starred ? 1 : 0);
+      return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    });
+  }, [links, anchor]);
+
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState(blankLink);
+  const [editId, setEditId] = useState(null);
+  const [editDraft, setEditDraft] = useState(blankLink);
+  const [busy, setBusy] = useState(false);
+
+  const saveNew = async () => {
+    const url = normaliseUrl(draft.url);
+    if (!url || busy) return;
+    setBusy(true);
+    try {
+      await onAdd({ ...anchor, url, title: draft.title.trim(), note: draft.note.trim(), starred: !!draft.starred });
+      setDraft(blankLink); setAdding(false);
+    } finally { setBusy(false); }
+  };
+  const startEdit = (l) => { setEditId(l.id); setEditDraft({ url: l.url, title: l.title || '', note: l.note || '', starred: !!l.starred }); };
+  const saveEdit = () => {
+    const url = normaliseUrl(editDraft.url);
+    if (!url) return;
+    onUpdate(editId, { ...anchor, url, title: editDraft.title.trim(), note: editDraft.note.trim(), starred: !!editDraft.starred });
+    setEditId(null);
+  };
+
+  // A readable label for the link row: title if set, else a tidied host+path.
+  const linkLabel = (l) => {
+    if (l.title) return l.title;
+    try {
+      const u = new URL(l.url);
+      return u.hostname.replace(/^www\./, '') + (u.pathname !== '/' ? u.pathname : '');
+    } catch { return l.url; }
+  };
+
+  return (
+    <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:12,padding:'16px 18px',marginBottom:14}}>
+      <div style={{display:'flex',alignItems:'center',marginBottom:12}}>
+        <div style={{color:C.muted,fontSize:11,letterSpacing:'1.5px',textTransform:'uppercase',flex:1}}>Links</div>
+        {!adding && <button onClick={()=>{ setAdding(true); setDraft(blankLink); }} style={{background:'none',border:'none',color:C.gold,cursor:'pointer',fontSize:12,fontFamily:"'Jost',sans-serif"}}>+ Add link</button>}
+      </div>
+
+      {adding && <LinkForm d={draft} setD={setDraft} onSave={saveNew} onCancel={()=>{ setAdding(false); setDraft(blankLink); }} saveLabel="Add" />}
+
+      {mine.length === 0 && !adding && (
+        <div style={{color:C.muted,fontSize:13,fontStyle:'italic',padding:'2px 0'}}>No links yet.</div>
+      )}
+
+      {mine.map(l => {
+        if (editId === l.id) return <LinkForm key={l.id} d={editDraft} setD={setEditDraft} onSave={saveEdit} onCancel={()=>setEditId(null)} saveLabel="Save" />;
+        return (
+          <div key={l.id} style={{display:'flex',alignItems:'flex-start',gap:10,padding:'9px 0',borderBottom:`1px solid ${C.border}44`}}>
+            <button onClick={()=>onToggleStar(l.id)} title={l.starred ? 'Unstar' : 'Star'}
+              style={{background:'none',border:'none',cursor:'pointer',fontSize:14,lineHeight:1,padding:'2px 0',flexShrink:0,color:l.starred?C.gold:C.muted,opacity:l.starred?1:0.5}}>
+              {l.starred ? '★' : '☆'}
+            </button>
+            <div style={{flex:1,minWidth:0}}>
+              <a href={l.url} target="_blank" rel="noopener noreferrer"
+                style={{color:C.text,fontSize:14,textDecoration:'none',display:'block',wordBreak:'break-word'}}
+                onMouseEnter={e=>e.currentTarget.style.color=C.gold}
+                onMouseLeave={e=>e.currentTarget.style.color=C.text}>
+                {linkLabel(l)} <span style={{color:C.muted,fontSize:11}}>↗</span>
+              </a>
+              {l.title && <div style={{color:C.blue,fontSize:11,marginTop:2,wordBreak:'break-all',opacity:0.75}}>{l.url}</div>}
+              {l.note && <div style={{color:C.muted,fontSize:12,marginTop:3,fontStyle:'italic'}}>{l.note}</div>}
+            </div>
+            <div style={{display:'flex',gap:6,flexShrink:0}}>
+              <button onClick={()=>startEdit(l)} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:4,fontSize:11,padding:'3px 8px',fontFamily:"'Jost',sans-serif"}}>Edit</button>
+              <ConfirmBtn idleLabel="Remove" onConfirm={()=>onDelete(l.id)} title="Remove this link" />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ContactDatesCard({ anchor, contactDates, onAdd, onUpdate, onRemove }) {
   const mine = useMemo(() => {
     const list = contactDates.filter(d =>
@@ -1168,7 +1301,7 @@ export function ContactDatesCard({ anchor, contactDates, onAdd, onUpdate, onRemo
 }
 
 
-export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], forms=[], orgs, nav, backInfo, highlightNoteId, emailTemplates=[], onSaveAsTemplate, people, households, householdMembers, contactDates=[], practiceLogs=[], onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onAddToCalendar, onSendEmail, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook }) {
+export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], forms=[], orgs, nav, backInfo, highlightNoteId, emailTemplates=[], onSaveAsTemplate, people, households, householdMembers, contactDates=[], practiceLogs=[], onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onAddToCalendar, onSendEmail, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook, links=[], onAddLink, onUpdateLink, onDeleteLink, onToggleLinkStar }) {
   const isMobile = useIsMobile();  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
@@ -1639,6 +1772,8 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
           </div>
           <ContactDatesCard anchor={{personId: person.id}} contactDates={contactDates}
             onAdd={onAddContactDate} onUpdate={onUpdateContactDate} onRemove={onRemoveContactDate} />
+          <LinksCard anchor={{personId: person.id}} links={links}
+            onAdd={onAddLink} onUpdate={onUpdateLink} onDelete={onDeleteLink} onToggleStar={onToggleLinkStar} />
           {/* Bookings now lives in the right-column tab row on both mobile and
               desktop (Comms · Bookings · Packages · Payments). The old desktop
               left-column card was removed to avoid duplication. */}

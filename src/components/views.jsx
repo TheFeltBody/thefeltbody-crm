@@ -1602,21 +1602,36 @@ const suggestTitle = (u) => {
 // always at least one). sourceThreadId is the thread's threadId (null for a
 // solo email — that's fine, the column is nullable).
 function SaveLinksModal({ candidates, personId, sourceThreadId, onSave, onClose }) {
-  // Row state: keyed by url → { checked, title }. Seeded from candidates.
+  // Row shape: { url, title, note, starred, checked, manual }. Auto-detected
+  // rows start UNCHECKED — the useful links in marketing mail are usually a
+  // minority, so opt-in beats opt-out. Manual rows (added via "+ Add a link")
+  // start checked, since the user typed them on purpose. Every saved row carries
+  // the four link fields plus the thread's person + sourceThreadId.
   const [rows, setRows] = useState(() =>
-    candidates.map(c => ({ url: c.url, checked: true, title: suggestTitle(c.url) })));
+    candidates.map(c => ({ url: c.url, title: suggestTitle(c.url), note: '', starred: false, checked: false, manual: false })));
   const [busy, setBusy] = useState(false);
 
-  const toggle = (i) => setRows(rs => rs.map((r, j) => j === i ? { ...r, checked: !r.checked } : r));
-  const setTitle = (i, title) => setRows(rs => rs.map((r, j) => j === i ? { ...r, title } : r));
-  const checkedCount = rows.filter(r => r.checked).length;
+  const patch = (i, p) => setRows(rs => rs.map((r, j) => j === i ? { ...r, ...p } : r));
+  const addManual = () => setRows(rs => [...rs, { url: '', title: '', note: '', starred: false, checked: true, manual: true }]);
+  const removeRow = (i) => setRows(rs => rs.filter((_, j) => j !== i));
+
+  // A row is saveable if checked and has a plausible URL. Manual rows may omit
+  // the scheme; normalise on save.
+  const normalise = (u) => {
+    const s = String(u || '').trim();
+    if (!s) return '';
+    return /^https?:\/\//i.test(s) ? s : `https://${s}`;
+  };
+  const saveable = rows.filter(r => r.checked && String(r.url || '').trim().length > 2);
 
   const save = async () => {
-    const items = rows.filter(r => r.checked).map(r => ({
+    const items = saveable.map(r => ({
       personId: personId || null,
       sourceThreadId: sourceThreadId || null,
-      url: r.url,
+      url: normalise(r.url),
       title: (r.title || '').trim() || null,
+      note: (r.note || '').trim() || null,
+      starred: !!r.starred,
     }));
     if (items.length === 0) { onClose(); return; }
     setBusy(true);
@@ -1624,58 +1639,86 @@ function SaveLinksModal({ candidates, personId, sourceThreadId, onSave, onClose 
     finally { setBusy(false); }
   };
 
+  const autoRows = rows.filter(r => !r.manual).length;
+
   return (
-    <Modal title="Save links from this thread" onClose={busy ? () => {} : onClose} wide>
-      {rows.length === 0 ? (
-        <div style={{ color: C.muted, fontSize: 14, padding: '8px 0 4px', lineHeight: 1.6 }}>
-          No links found in this thread's messages.
-        </div>
-      ) : (
-        <>
-          <div style={{ color: C.muted, fontSize: 12, marginBottom: 14, lineHeight: 1.5 }}>
-            Tick the links worth keeping and tidy the titles. Saved links attach to this
-            contact, and remember the thread they came from.
-          </div>
-          <div style={{ maxHeight: '52vh', overflowY: 'auto', border: `1px solid ${C.border}`, borderRadius: 8 }}>
-            {rows.map((r, i) => (
-              <div key={r.url} style={{
-                display: 'flex', gap: 11, padding: '12px 14px',
-                borderBottom: i < rows.length - 1 ? `1px solid ${C.border}` : 'none',
-                background: r.checked ? C.card : 'transparent', alignItems: 'flex-start',
-              }}>
-                <input type="checkbox" checked={r.checked} onChange={() => toggle(i)}
-                  style={{ marginTop: 4, cursor: 'pointer', accentColor: C.gold, width: 15, height: 15, flexShrink: 0 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <input value={r.title} onChange={e => setTitle(i, e.target.value)}
-                    disabled={!r.checked} placeholder="Title (optional)"
-                    style={{ width: '100%', background: C.surf, border: `1px solid ${C.border}`, borderRadius: 5,
-                      color: C.text, fontSize: 13, padding: '6px 9px', fontFamily: "'Jost',sans-serif",
-                      boxSizing: 'border-box', marginBottom: 5, opacity: r.checked ? 1 : 0.5 }} />
-                  <a href={r.url} target="_blank" rel="noreferrer"
-                    style={{ display: 'block', color: C.blue, fontSize: 11.5, wordBreak: 'break-all',
-                      textDecoration: 'none', opacity: r.checked ? 0.9 : 0.45, lineHeight: 1.45 }}
-                    title={r.url}>
-                    {r.url}
-                  </a>
-                </div>
+    <Modal title="Save links" onClose={busy ? () => {} : onClose} wide>
+      <div style={{ color: C.muted, fontSize: 12, marginBottom: 14, lineHeight: 1.55 }}>
+        {autoRows > 0
+          ? "Found these links in the thread — tick the ones worth keeping, or add your own below. Nothing's ticked to start."
+          : "No links detected in this thread. Add the ones you want to keep."}
+        {' '}Saved links attach to this contact.
+      </div>
+
+      <div style={{ maxHeight: '52vh', overflowY: 'auto', border: rows.length ? `1px solid ${C.border}` : 'none', borderRadius: 8 }}>
+        {rows.map((r, i) => (
+          <div key={i} style={{
+            display: 'flex', gap: 11, padding: '12px 14px',
+            borderBottom: i < rows.length - 1 ? `1px solid ${C.border}` : 'none',
+            background: r.checked ? C.card : 'transparent', alignItems: 'flex-start',
+          }}>
+            <input type="checkbox" checked={r.checked} onChange={() => patch(i, { checked: !r.checked })}
+              style={{ marginTop: 5, cursor: 'pointer', accentColor: C.gold, width: 15, height: 15, flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {r.manual ? (
+                <input value={r.url} onChange={e => patch(i, { url: e.target.value })}
+                  placeholder="https://…" autoFocus
+                  style={{ width: '100%', background: C.surf, border: `1px solid ${C.border}`, borderRadius: 5,
+                    color: C.text, fontSize: 12.5, padding: '6px 9px', fontFamily: "'Jost',sans-serif",
+                    boxSizing: 'border-box', marginBottom: 5 }} />
+              ) : (
+                <a href={r.url} target="_blank" rel="noreferrer"
+                  style={{ display: 'block', color: C.blue, fontSize: 11.5, wordBreak: 'break-all',
+                    textDecoration: 'none', opacity: r.checked ? 0.9 : 0.5, lineHeight: 1.45, marginBottom: 5 }}
+                  title={r.url}>
+                  {r.url}
+                </a>
+              )}
+              <input value={r.title} onChange={e => patch(i, { title: e.target.value })}
+                disabled={!r.checked} placeholder="Title (optional)"
+                style={{ width: '100%', background: C.surf, border: `1px solid ${C.border}`, borderRadius: 5,
+                  color: C.text, fontSize: 13, padding: '6px 9px', fontFamily: "'Jost',sans-serif",
+                  boxSizing: 'border-box', marginBottom: 5, opacity: r.checked ? 1 : 0.5 }} />
+              <input value={r.note} onChange={e => patch(i, { note: e.target.value })}
+                disabled={!r.checked} placeholder="Note (optional)"
+                style={{ width: '100%', background: C.surf, border: `1px solid ${C.border}`, borderRadius: 5,
+                  color: C.text, fontSize: 12.5, padding: '6px 9px', fontFamily: "'Jost',sans-serif",
+                  boxSizing: 'border-box', marginBottom: 5, opacity: r.checked ? 1 : 0.5 }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: r.checked ? 'pointer' : 'default', color: C.muted, fontSize: 12, opacity: r.checked ? 1 : 0.5 }}>
+                  <input type="checkbox" checked={!!r.starred} disabled={!r.checked} onChange={e => patch(i, { starred: e.target.checked })}
+                    style={{ cursor: 'pointer', accentColor: C.gold, width: 14, height: 14 }} />
+                  Star
+                </label>
+                {r.manual && (
+                  <button onClick={() => removeRow(i)}
+                    style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, fontFamily: "'Jost',sans-serif", opacity: 0.7 }}>
+                    Remove
+                  </button>
+                )}
               </div>
-            ))}
+            </div>
           </div>
-        </>
-      )}
+        ))}
+      </div>
+
+      <div style={{ marginTop: 12 }}>
+        <button onClick={addManual}
+          style={{ background: 'none', border: `1px dashed ${C.border}`, color: C.gold, cursor: 'pointer',
+            borderRadius: 6, fontSize: 12.5, padding: '8px 12px', fontFamily: "'Jost',sans-serif", width: '100%' }}>
+          + Add a link
+        </button>
+      </div>
+
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
         <Btn variant="ghost" onClick={onClose} disabled={busy}>Cancel</Btn>
-        {rows.length > 0 && (
-          <Btn onClick={save} disabled={busy || checkedCount === 0}>
-            {busy ? 'Saving…' : `Save ${checkedCount} link${checkedCount !== 1 ? 's' : ''}`}
-          </Btn>
-        )}
+        <Btn onClick={save} disabled={busy || saveable.length === 0}>
+          {busy ? 'Saving…' : `Save ${saveable.length} link${saveable.length !== 1 ? 's' : ''}`}
+        </Btn>
       </div>
     </Modal>
   );
 }
-
-
 
 // ─── THREADS ──────────────────────────────────────────────────────────────────
 // Communications hub for KNOWN contacts. Every email to/from someone already
@@ -2030,18 +2073,16 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
           <div style={{ color: C.muted, fontSize: 13 }}>
             {names} · {t.displayCount} message{t.displayCount !== 1 ? 's' : ''}
           </div>
-          {/* Thread actions: save links found in the conversation, and the
-              destructive permanent-delete. linkCount gates the Save-links
-              button so it only appears when there's something to save. */}
+          {/* Thread actions: save links from the conversation (always available
+              — opens the picker whether or not any were auto-detected, so links
+              can be added by hand), and the recoverable soft-delete. */}
           {(() => {
             const linkCount = extractThreadLinks(t.messages).length;
             return (
               <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-                {linkCount > 0 && (
-                  <Btn small variant="secondary" onClick={() => setSaveLinksFor(t)}>
-                    🔗 Save link{linkCount !== 1 ? 's' : ''} ({linkCount})
-                  </Btn>
-                )}
+                <Btn small variant="secondary" onClick={() => setSaveLinksFor(t)}>
+                  🔗 Save link{linkCount !== 1 ? 's' : ''}{linkCount > 0 ? ` (${linkCount})` : ''}
+                </Btn>
                 <ConfirmBtn
                   variant="ghost"
                   idleLabel="Delete thread"

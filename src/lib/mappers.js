@@ -872,6 +872,7 @@ export const linkFromDb = (row) => ({
   title: row.title || '',
   sourceThreadId: row.source_thread_id || null,
   starred: row.starred ?? false,
+  note: row.note || '',
   createdAt: row.created_at,
 });
 
@@ -884,4 +885,5 @@ export const linkToDb = (l) => ({
   title: l.title ? String(l.title).trim() || null : null,
   source_thread_id: l.sourceThreadId || null,
   starred: l.starred ?? false,
+  note: l.note ? String(l.note).trim() || null : null,
 });
