@@ -1511,6 +1511,172 @@ export function BirthdaysView({ people, orgs, nav }) {
   );
 }
 
+// ─── THREAD LINK EXTRACTION + SAVE ──────────────────────────────────────────
+// Pull candidate URLs out of a thread's messages so Jesse can tick which to
+// keep as saved links (the `links` table). Sources both the plaintext body
+// (m.text) and any captured HTML body (m.htmlBody). We deliberately keep this
+// dependency-free: a light HTML strip (drop tags, decode a few common
+// entities) feeds the same URL regex as the plaintext path, and we also mine
+// href="…" attributes so links whose visible text isn't the URL still surface.
+//
+// Junk filter: email bodies are full of noise URLs — tracking pixels,
+// one-click unsubscribe, list-management, mailto:/tel:. We drop the obvious
+// ones by host/scheme/extension so the pick-list is short and useful. It's a
+// filter, not a guarantee; anything that slips through is just an extra row
+// Jesse can leave unticked.
+
+const LINK_JUNK_HOSTS = [
+  'unsubscribe', 'list-manage', 'mailchi', 'sendgrid.net', 'sib', 'brevo',
+  'sendinblue', 'mailgun', 'click.', 'email.', 'track.', 'trk.', 'links.',
+  'ct.', 'r.', 'go.', 'beacon', 'pixel', 'open.', 'clicks.',
+];
+const LINK_JUNK_EXT = ['.png', '.gif', '.jpg', '.jpeg', '.webp', '.svg', '.ico', '.css'];
+
+// Decode the handful of HTML entities that actually show up inside URLs.
+const decodeEntities = (s) => String(s || '')
+  .replace(/&amp;/g, '&').replace(/&#38;/g, '&')
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ');
+
+// Strip tags to plaintext, but first lift href targets onto their own lines so
+// the URL regex catches them even when the anchor text is "click here".
+const htmlToLinkText = (html) => {
+  if (!html) return '';
+  const hrefs = [];
+  String(html).replace(/href\s*=\s*["']([^"']+)["']/gi, (_, u) => { hrefs.push(u); return ''; });
+  const stripped = String(html).replace(/<[^>]+>/g, ' ');
+  return decodeEntities([...hrefs, stripped].join(' \n '));
+};
+
+const URL_RE = /https?:\/\/[^\s<>"'\)\]]+/gi;
+
+// Trim trailing punctuation a URL regex tends to swallow from prose.
+const cleanUrl = (u) => decodeEntities(u).replace(/[.,;:!?)\]}'"]+$/, '').trim();
+
+const isJunkUrl = (u) => {
+  let host = '';
+  try { host = new URL(u).hostname.toLowerCase(); } catch { return false; }
+  const lower = u.toLowerCase();
+  if (LINK_JUNK_EXT.some(ext => lower.split('?')[0].endsWith(ext))) return true;
+  if (LINK_JUNK_HOSTS.some(h => host.includes(h))) return true;
+  return false;
+};
+
+// Extract deduped, cleaned, non-junk URLs across every message in a thread.
+// Returns [{ url, seen }] where `seen` is how many messages referenced it —
+// purely informational (not shown prominently). Order: first-appearance.
+const extractThreadLinks = (messages) => {
+  const order = [];
+  const map = new Map();
+  (messages || []).forEach(m => {
+    const hay = `${m.text || ''} \n ${htmlToLinkText(m.htmlBody)}`;
+    const found = hay.match(URL_RE) || [];
+    found.forEach(raw => {
+      const u = cleanUrl(raw);
+      if (!u || u.length < 8) return;
+      if (isJunkUrl(u)) return;
+      if (!map.has(u)) { map.set(u, { url: u, seen: 0 }); order.push(u); }
+      map.get(u).seen += 1;
+    });
+  });
+  return order.map(u => map.get(u));
+};
+
+// A sensible default title from a URL: host + first path segment, so
+// "https://acme.co/guides/intro?x=1" → "acme.co/guides". Jesse can edit it.
+const suggestTitle = (u) => {
+  try {
+    const { hostname, pathname } = new URL(u);
+    const seg = pathname.split('/').filter(Boolean)[0];
+    const host = hostname.replace(/^www\./, '');
+    return seg ? `${host}/${seg}` : host;
+  } catch { return ''; }
+};
+
+// Modal: pick which detected links to save. Hoisted to module scope (never
+// nested in a render body) so its internal state survives parent re-renders —
+// the per-row checkbox/title state must not remount mid-edit. Each saved item
+// is shaped for data.links.create: { personId, sourceThreadId, url, title }.
+// personId is the thread counterparty (may be null if the thread has no linked
+// person, though ThreadsView only shows threads for known contacts, so there's
+// always at least one). sourceThreadId is the thread's threadId (null for a
+// solo email — that's fine, the column is nullable).
+function SaveLinksModal({ candidates, personId, sourceThreadId, onSave, onClose }) {
+  // Row state: keyed by url → { checked, title }. Seeded from candidates.
+  const [rows, setRows] = useState(() =>
+    candidates.map(c => ({ url: c.url, checked: true, title: suggestTitle(c.url) })));
+  const [busy, setBusy] = useState(false);
+
+  const toggle = (i) => setRows(rs => rs.map((r, j) => j === i ? { ...r, checked: !r.checked } : r));
+  const setTitle = (i, title) => setRows(rs => rs.map((r, j) => j === i ? { ...r, title } : r));
+  const checkedCount = rows.filter(r => r.checked).length;
+
+  const save = async () => {
+    const items = rows.filter(r => r.checked).map(r => ({
+      personId: personId || null,
+      sourceThreadId: sourceThreadId || null,
+      url: r.url,
+      title: (r.title || '').trim() || null,
+    }));
+    if (items.length === 0) { onClose(); return; }
+    setBusy(true);
+    try { await onSave(items); onClose(); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal title="Save links from this thread" onClose={busy ? () => {} : onClose} wide>
+      {rows.length === 0 ? (
+        <div style={{ color: C.muted, fontSize: 14, padding: '8px 0 4px', lineHeight: 1.6 }}>
+          No links found in this thread's messages.
+        </div>
+      ) : (
+        <>
+          <div style={{ color: C.muted, fontSize: 12, marginBottom: 14, lineHeight: 1.5 }}>
+            Tick the links worth keeping and tidy the titles. Saved links attach to this
+            contact, and remember the thread they came from.
+          </div>
+          <div style={{ maxHeight: '52vh', overflowY: 'auto', border: `1px solid ${C.border}`, borderRadius: 8 }}>
+            {rows.map((r, i) => (
+              <div key={r.url} style={{
+                display: 'flex', gap: 11, padding: '12px 14px',
+                borderBottom: i < rows.length - 1 ? `1px solid ${C.border}` : 'none',
+                background: r.checked ? C.card : 'transparent', alignItems: 'flex-start',
+              }}>
+                <input type="checkbox" checked={r.checked} onChange={() => toggle(i)}
+                  style={{ marginTop: 4, cursor: 'pointer', accentColor: C.gold, width: 15, height: 15, flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <input value={r.title} onChange={e => setTitle(i, e.target.value)}
+                    disabled={!r.checked} placeholder="Title (optional)"
+                    style={{ width: '100%', background: C.surf, border: `1px solid ${C.border}`, borderRadius: 5,
+                      color: C.text, fontSize: 13, padding: '6px 9px', fontFamily: "'Jost',sans-serif",
+                      boxSizing: 'border-box', marginBottom: 5, opacity: r.checked ? 1 : 0.5 }} />
+                  <a href={r.url} target="_blank" rel="noreferrer"
+                    style={{ display: 'block', color: C.blue, fontSize: 11.5, wordBreak: 'break-all',
+                      textDecoration: 'none', opacity: r.checked ? 0.9 : 0.45, lineHeight: 1.45 }}
+                    title={r.url}>
+                    {r.url}
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+        <Btn variant="ghost" onClick={onClose} disabled={busy}>Cancel</Btn>
+        {rows.length > 0 && (
+          <Btn onClick={save} disabled={busy || checkedCount === 0}>
+            {busy ? 'Saving…' : `Save ${checkedCount} link${checkedCount !== 1 ? 's' : ''}`}
+          </Btn>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+
+
 // ─── THREADS ──────────────────────────────────────────────────────────────────
 // Communications hub for KNOWN contacts. Every email to/from someone already
 // in the CRM (kind='email', person_id IS NOT NULL) lands here, grouped into
@@ -1527,11 +1693,15 @@ export function BirthdaysView({ people, orgs, nav }) {
 // their own single-message pseudo-thread (key `solo:<id>`). Reads the shared
 // `notes` array (kept fresh by the 60s poll) — no extra fetching.
 
-export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey, onSendEmail, emailTemplates=[], onSaveAsTemplate }) {
+export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey, onSendEmail, emailTemplates=[], onSaveAsTemplate, onSaveLinks, onDeleteThread }) {
   const isMobile = useIsMobile();
   const [selectedKey, setSelectedKey] = useState(initialThreadKey || null);
   const [search, setSearch] = useState('');
   const [replyTo, setReplyTo] = useState(null); // { person, threadId, inReplyTo, initialSubject, draftKey } | null
+  // Which thread (if any) the Save-links modal / Delete-thread modal is open
+  // for. We store the thread object so the modals have its messages + subject
+  // without a lookup. null = closed.
+  const [saveLinksFor, setSaveLinksFor] = useState(null);
 
   const personById = useMemo(() => {
     const m = {};
@@ -1668,6 +1838,27 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
       draftKey={replyTo.draftKey}
     />
   );
+
+  // The single person a saved link should attach to: the thread's counterparty.
+  // Reuse buildReply's resolution (last inbound sender, else first participant)
+  // so a group thread still picks a sensible owner. Falls back to the first
+  // personId on the thread. Returns an id (or null).
+  const threadCounterpartyId = (t) => {
+    if (!t) return null;
+    const lastInbound = [...t.messages].reverse().find(m => m.direction === 'inbound' && m.personId);
+    return (lastInbound && lastInbound.personId) || [...t.personIds][0] || null;
+  };
+
+  const saveLinksModal = saveLinksFor && (
+    <SaveLinksModal
+      candidates={extractThreadLinks(saveLinksFor.messages)}
+      personId={threadCounterpartyId(saveLinksFor)}
+      sourceThreadId={saveLinksFor.threadId || null}
+      onSave={onSaveLinks}
+      onClose={() => setSaveLinksFor(null)}
+    />
+  );
+
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -1839,6 +2030,32 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
           <div style={{ color: C.muted, fontSize: 13 }}>
             {names} · {t.displayCount} message{t.displayCount !== 1 ? 's' : ''}
           </div>
+          {/* Thread actions: save links found in the conversation, and the
+              destructive permanent-delete. linkCount gates the Save-links
+              button so it only appears when there's something to save. */}
+          {(() => {
+            const linkCount = extractThreadLinks(t.messages).length;
+            return (
+              <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                {linkCount > 0 && (
+                  <Btn small variant="secondary" onClick={() => setSaveLinksFor(t)}>
+                    🔗 Save link{linkCount !== 1 ? 's' : ''} ({linkCount})
+                  </Btn>
+                )}
+                <ConfirmBtn
+                  variant="ghost"
+                  idleLabel="Delete thread"
+                  armedLabel="Delete?"
+                  title="Hide this thread (recoverable)"
+                  onConfirm={() => {
+                    const ids = t.messages.map(m => m.id);
+                    onDeleteThread(ids);
+                    if (selectedKey === t.key) setSelectedKey(null);
+                  }}
+                />
+              </div>
+            );
+          })()}
         </div>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: isMobile ? '14px' : '16px 4px' }}>
           {(() => {
@@ -1936,6 +2153,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
             : listEl}
         </div>
         {replyModal}
+        {saveLinksModal}
       </div>
     );
   }
@@ -1960,6 +2178,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
         </div>
       </div>
       {replyModal}
+      {saveLinksModal}
     </div>
   );
 }

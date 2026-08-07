@@ -82,6 +82,10 @@ export default function FeltBodyCRM() {
   // (written by the forms worker). Surfaced as a conditional 5T tab on
   // PersonDetail and, via their interaction rows, in Recent Activity.
   const [practiceLogs, setPracticeLogs] = useState([]);
+  // Saved links (the `links` table): reference URLs attached to a person or an
+  // org, often lifted out of an email thread. Read into state on load; mutated
+  // by the Threads "Save links" action and (later) a PersonDetail links tab.
+  const [links, setLinks] = useState([]);
   // Mobile nav state (Phase 1: basic hamburger button + modal nav for small screens)
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   // Mobile accordion expand/contract toggle, persisted per-device so the user's
@@ -135,6 +139,7 @@ export default function FeltBodyCRM() {
         setPackageTemplates(all.packageTemplates || []);
         setFiles(all.files || []);
         setPracticeLogs(all.practiceLogs || []);
+        setLinks(all.links || []);
         setLoadStatus('ready');
       } catch (e) {
         if (cancelled) return;
@@ -695,6 +700,34 @@ export default function FeltBodyCRM() {
       setNotes(p => p.map(n => n.id === soloId ? { ...n, readAt: stamp } : n));
       data.notes.markRead(soloId).catch(onError('Mark read'));
     }
+  };
+  // Save one or more links lifted from a thread. Each item is already shaped
+  // { personId, sourceThreadId, url, title } by ThreadsView (person = the
+  // thread counterparty, sourceThreadId = the thread's threadId or null for a
+  // solo email). Persist sequentially so a failure is attributable; splice each
+  // saved row into state as it lands. Errors surface via onError but don't abort
+  // the batch — a bad URL shouldn't lose the good ones.
+  const addLinksFromThread = async (items) => {
+    for (const item of (items || [])) {
+      try {
+        const saved = await data.links.create(item);
+        setLinks(p => [saved, ...p]);
+      } catch (e) {
+        onError('Save link')(e);
+      }
+    }
+  };
+  // Soft-delete a whole thread. ids = every interaction row shown in the thread
+  // (ThreadsView collects them, threaded or solo). Optimistic-local removal
+  // first, then the bulk server soft-delete (stamps deleted_at). Recoverable in
+  // Supabase if the wrong thread goes; the next loadAll() reconciles either way.
+  // Mainly for clearing marketing email off a contact. ConfirmBtn in ThreadsView
+  // is the guard (two-tap arm/confirm — no typing).
+  const deleteThread = (ids) => {
+    if (!ids || ids.length === 0) return;
+    const idSet = new Set(ids);
+    setNotes(p => p.filter(n => !idSet.has(n.id)));  // optimistic
+    data.notes.softDeleteThread(ids).catch(onError('Delete thread'));
   };
   // Web Activity read-state. Mirrors markThreadRead: optimistic-local +
   // fire-and-forget. markWebEventRead stamps one row (row clicked); the bulk
@@ -1420,7 +1453,7 @@ export default function FeltBodyCRM() {
           onSetStatus={setProjectStatus}
           onUpdateProject={updateProject} />;
       }
-      case 'threads': return <ThreadsView notes={notes} people={people} nav={nav} onMarkThreadRead={markThreadRead} initialThreadKey={view.threadKey} onSendEmail={sendEmail} emailTemplates={settings.email_templates?.templates || []} onSaveAsTemplate={saveDraftAsTemplate} />;
+      case 'threads': return <ThreadsView notes={notes} people={people} nav={nav} onMarkThreadRead={markThreadRead} initialThreadKey={view.threadKey} onSendEmail={sendEmail} emailTemplates={settings.email_templates?.templates || []} onSaveAsTemplate={saveDraftAsTemplate} onSaveLinks={addLinksFromThread} onDeleteThread={deleteThread} />;
       case 'birthdays': return <BirthdaysView people={people} orgs={orgs} nav={nav} />;
       case 'households': return <HouseholdsList households={households} householdMembers={householdMembers} people={people} nav={nav} onEditHousehold={(id)=>setModal({type:'household_manage',householdId:id})} />;
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;

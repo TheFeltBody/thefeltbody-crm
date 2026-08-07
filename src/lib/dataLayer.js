@@ -567,6 +567,21 @@ export const notes = {
       .eq('diary_group', groupId).then(ok);
   },
 
+  // Bulk SOFT-delete a whole thread — stamp deleted_at on every interaction row
+  // whose id is passed in. Recoverable (the rows stay in the table; loadAll and
+  // the inbox poller both filter deleted_at IS NULL, so they simply vanish from
+  // Threads, the person's timeline, and derived activity). Used by the Threads
+  // "Delete thread" action, mainly for clearing marketing email that lands on a
+  // contact. Takes an explicit id list (not a thread_id) so it covers threaded
+  // AND solo/unthreaded emails and can never over-match — only the exact rows
+  // the UI showed. No-op on an empty list. Mirrors deleteGroup's bulk update.
+  async softDeleteThread(ids) {
+    if (!ids || ids.length === 0) return;
+    await supabase.from('interactions')
+      .update({ deleted_at: new Date().toISOString() })
+      .in('id', ids).then(ok);
+  },
+
   // Mark every unread message in a thread as read. Called when a thread is
   // opened in ThreadsView. Single bulk update keyed on thread_id; only stamps
   // rows that aren't already read (idempotent, avoids needless writes). No
