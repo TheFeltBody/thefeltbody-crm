@@ -1110,6 +1110,68 @@ const normaliseUrl = (raw) => {
   return `https://${s}`;
 };
 
+// ─── ROW ACTIONS (subtle hover menu) ─────────────────────────────────────────
+// A quiet "⋯" affordance for row-level edit/remove, so cards like Links and
+// Dates & anniversaries don't carry heavy Edit/Remove buttons on every row.
+// Resting state is a single low-opacity dot cluster; hovering the row (or
+// focusing the button) reveals it, and clicking opens a tiny popover with the
+// real actions. Remove uses a two-tap arm (like ConfirmBtn) so a mis-click
+// doesn't delete. Hoisted to module scope so its open/armed state survives
+// parent re-renders. `hovered` is driven by the parent row via the render prop
+// pattern below — we keep it self-contained instead to avoid prop-drilling
+// re-renders. The trigger sits quietly at muted colour and opens a small
+// popover with the real actions on click.
+function RowActions({ onEdit, onRemove, removeTitle }) {
+  const [open, setOpen] = useState(false);
+  const [armed, setArmed] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) { setArmed(false); return; }
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onEsc = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onEsc);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onEsc); };
+  }, [open]);
+  return (
+    <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
+      <button onClick={() => setOpen(v => !v)} title="Actions" aria-label="Row actions"
+        style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer',
+          fontSize: 16, lineHeight: 1, padding: '2px 6px', borderRadius: 4, fontFamily: "'Jost',sans-serif" }}>
+        ⋯
+      </button>
+      {open && (
+        <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 20,
+          background: C.surf, border: `1px solid ${C.border}`, borderRadius: 8, padding: 4,
+          minWidth: 130, boxShadow: '0 6px 20px rgba(0,0,0,0.4)' }}>
+          <button onClick={() => { setOpen(false); onEdit(); }}
+            style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
+              color: C.text, cursor: 'pointer', fontSize: 13, padding: '7px 10px', borderRadius: 5, fontFamily: "'Jost',sans-serif" }}
+            onMouseEnter={e => e.currentTarget.style.background = C.active}
+            onMouseLeave={e => e.currentTarget.style.background = 'none'}>
+            Edit
+          </button>
+          {!armed ? (
+            <button onClick={() => setArmed(true)} title={removeTitle}
+              style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
+                color: C.red, cursor: 'pointer', fontSize: 13, padding: '7px 10px', borderRadius: 5, fontFamily: "'Jost',sans-serif" }}
+              onMouseEnter={e => e.currentTarget.style.background = C.active}
+              onMouseLeave={e => e.currentTarget.style.background = 'none'}>
+              Remove
+            </button>
+          ) : (
+            <button onClick={() => { setOpen(false); onRemove(); }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', background: '#2a1313', border: `1px solid ${C.red}44`,
+                color: C.red, cursor: 'pointer', fontSize: 13, padding: '7px 10px', borderRadius: 5, fontFamily: "'Jost',sans-serif" }}>
+              Really remove?
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LinkForm({ d, setD, onSave, onCancel, saveLabel }) {
   const canSave = String(d.url || '').trim().length > 2;
   return (
@@ -1190,7 +1252,8 @@ export function LinksCard({ anchor, links, onAdd, onUpdate, onDelete, onToggleSt
       {mine.map(l => {
         if (editId === l.id) return <LinkForm key={l.id} d={editDraft} setD={setEditDraft} onSave={saveEdit} onCancel={()=>setEditId(null)} saveLabel="Save" />;
         return (
-          <div key={l.id} style={{display:'flex',alignItems:'flex-start',gap:10,padding:'9px 0',borderBottom:`1px solid ${C.border}44`}}>
+          <div key={l.id}
+            style={{display:'flex',alignItems:'flex-start',gap:8,padding:'9px 0',borderBottom:`1px solid ${C.border}44`}}>
             <button onClick={()=>onToggleStar(l.id)} title={l.starred ? 'Unstar' : 'Star'}
               style={{background:'none',border:'none',cursor:'pointer',fontSize:14,lineHeight:1,padding:'2px 0',flexShrink:0,color:l.starred?C.gold:C.muted,opacity:l.starred?1:0.5}}>
               {l.starred ? '★' : '☆'}
@@ -1202,13 +1265,13 @@ export function LinksCard({ anchor, links, onAdd, onUpdate, onDelete, onToggleSt
                 onMouseLeave={e=>e.currentTarget.style.color=C.text}>
                 {linkLabel(l)} <span style={{color:C.muted,fontSize:11}}>↗</span>
               </a>
-              {l.title && <div style={{color:C.blue,fontSize:11,marginTop:2,wordBreak:'break-all',opacity:0.75}}>{l.url}</div>}
+              {/* No raw-URL line: linkLabel() already shows a readable label
+                  (title, or a tidied host/path) and it's the clickable link, so
+                  a second URL line would just eat space — these list-manage URLs
+                  are enormous. */}
               {l.note && <div style={{color:C.muted,fontSize:12,marginTop:3,fontStyle:'italic'}}>{l.note}</div>}
             </div>
-            <div style={{display:'flex',gap:6,flexShrink:0}}>
-              <button onClick={()=>startEdit(l)} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:4,fontSize:11,padding:'3px 8px',fontFamily:"'Jost',sans-serif"}}>Edit</button>
-              <ConfirmBtn idleLabel="Remove" onConfirm={()=>onDelete(l.id)} title="Remove this link" />
-            </div>
+            <RowActions onEdit={()=>startEdit(l)} onRemove={()=>onDelete(l.id)} removeTitle="Remove this link" />
           </div>
         );
       })}
@@ -1278,7 +1341,7 @@ export function ContactDatesCard({ anchor, contactDates, onAdd, onUpdate, onRemo
           else when = info.days > 0 ? `in ${info.days} ${info.days===1?'day':'days'}` : `${Math.abs(info.days)} ${Math.abs(info.days)===1?'day':'days'} ago`;
         }
         return (
-          <div key={d.id} style={{display:'flex',alignItems:'flex-start',gap:10,padding:'9px 0',borderBottom:`1px solid ${C.border}44`}}>
+          <div key={d.id} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'9px 0',borderBottom:`1px solid ${C.border}44`}}>
             <div style={{flex:1,minWidth:0}}>
               <div style={{color:C.text,fontSize:14}}>
                 {d.recurring ? '↻ ' : ''}{d.label}
@@ -1289,10 +1352,7 @@ export function ContactDatesCard({ anchor, contactDates, onAdd, onUpdate, onRemo
               </div>
               {d.note && <div style={{color:C.muted,fontSize:12,marginTop:3,fontStyle:'italic'}}>{d.note}</div>}
             </div>
-            <div style={{display:'flex',gap:6,flexShrink:0}}>
-              <button onClick={()=>startEdit(d)} style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:4,fontSize:11,padding:'3px 8px',fontFamily:"'Jost',sans-serif"}}>Edit</button>
-              <ConfirmBtn idleLabel="Remove" onConfirm={()=>onRemove(d.id)} title="Remove this date" />
-            </div>
+            <RowActions onEdit={()=>startEdit(d)} onRemove={()=>onRemove(d.id)} removeTitle="Remove this date" />
           </div>
         );
       })}
