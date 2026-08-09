@@ -1870,7 +1870,7 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
                   // live in their own list (Phase 7), so they're excluded here.
                   // We also hide any chip with zero items so the bar stays short:
                   // only 'All' plus kinds actually present on this contact show.
-                  const COMMS_KINDS = ['note','call','email','meeting','form'];
+                  const COMMS_KINDS = ['note','call','email','meeting','form','praise'];
                   const chips = ['all', ...COMMS_KINDS.filter(k => commsNotes.some(n => (n.kind||'note')===k))];
                   // Diary chip appended last, only when diary entries exist. It's
                   // sourced from diaryNotes (excluded from commsNotes), so 'All'
