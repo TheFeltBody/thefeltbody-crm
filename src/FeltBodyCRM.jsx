@@ -242,7 +242,7 @@ export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, de
           if (parentsWithRoles.length === 0) return null;
           const chip = (active, label, onClick) => (
             <button key={label} onClick={onClick}
-              style={{background:active?C.gold+'22':'transparent',border:`1px solid ${active?C.gold:C.border}`,color:active?C.gold:C.muted,cursor:'pointer',borderRadius:4,fontSize:9,fontWeight:600,padding:'2px 8px',letterSpacing:'0.5px',textTransform:'uppercase',fontFamily:"'Jost',sans-serif"}}>
+              style={{background:active?C.gold+'22':'transparent',border:`1px solid ${active?C.gold:C.border}`,color:active?C.gold:C.muted,cursor:'pointer',borderRadius:14,fontSize:10,fontWeight:600,padding:'3px 10px',letterSpacing:'0.4px',textTransform:'uppercase',fontFamily:"'Jost',sans-serif"}}>
               {label}
             </button>
           );
@@ -255,14 +255,26 @@ export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, de
           );
         })()}
         <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-          {Object.entries(personRoles).filter(([r,m])=>{
-            if (roles.includes(r)) return true; // always show selected roles
-            if (roleFilter === null) return true;
-            if (roleFilter === '__none__') return !m.parentKey;
-            return (m.parentKey||null) === roleFilter;
-          }).map(([r,m])=>(
-            <button key={r} onClick={()=>toggleRole(r)} style={{background:roles.includes(r)?m.bg:C.surf,border:`1px solid ${roles.includes(r)?m.color:C.border}`,color:roles.includes(r)?m.color:C.muted,cursor:'pointer',borderRadius:20,fontSize:11,fontWeight:600,padding:'4px 12px',textTransform:'uppercase',fontFamily:"'Jost',sans-serif"}}>{m.label}</button>
-          ))}
+          {(() => {
+            // A role is a "parent" if its key is used as another role's parentKey,
+            // or if it appears as a roleParents category key. Parent tabs get square
+            // corners + a subtle weight bump to read as headers, not leaf roles.
+            const parentRoleKeys = new Set([
+              ...Object.values(personRoles).map(m => m.parentKey).filter(Boolean),
+              ...roleParents.map(p => p.key),
+            ]);
+            return Object.entries(personRoles).filter(([r,m])=>{
+              if (roles.includes(r)) return true; // always show selected roles
+              if (roleFilter === null) return true;
+              if (roleFilter === '__none__') return !m.parentKey;
+              return (m.parentKey||null) === roleFilter;
+            }).map(([r,m])=>{
+              const isParent = parentRoleKeys.has(r);
+              return (
+                <button key={r} onClick={()=>toggleRole(r)} style={{background:roles.includes(r)?m.bg:C.surf,border:`1px solid ${roles.includes(r)?m.color:C.border}`,color:roles.includes(r)?m.color:C.muted,cursor:'pointer',borderRadius:isParent?4:20,fontSize:11,fontWeight:isParent?700:600,padding:'4px 12px',letterSpacing:isParent?'0.6px':'normal',textTransform:'uppercase',fontFamily:"'Jost',sans-serif"}}>{m.label}</button>
+              );
+            });
+          })()}
         </div>
         {roles.length===0&&<div style={{color:C.red,fontSize:11,marginTop:6}}>Select at least one role</div>}
       </div>
