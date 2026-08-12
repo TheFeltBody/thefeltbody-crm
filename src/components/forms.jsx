@@ -242,7 +242,7 @@ export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, de
           if (parentsWithRoles.length === 0) return null;
           const chip = (active, label, onClick) => (
             <button key={label} onClick={onClick}
-              style={{background:active?C.gold+'22':'transparent',border:`1px solid ${active?C.gold:C.border}`,color:active?C.gold:C.muted,cursor:'pointer',borderRadius:14,fontSize:10,fontWeight:600,padding:'3px 10px',letterSpacing:'0.4px',textTransform:'uppercase',fontFamily:"'Jost',sans-serif"}}>
+              style={{background:active?C.gold+'22':'transparent',border:`1px solid ${active?C.gold:C.border}`,color:active?C.gold:C.muted,cursor:'pointer',borderRadius:3,fontSize:8.5,fontWeight:600,padding:'2px 7px',letterSpacing:'0.5px',textTransform:'uppercase',fontFamily:"'Jost',sans-serif"}}>
               {label}
             </button>
           );
