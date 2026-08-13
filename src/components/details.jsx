@@ -2246,6 +2246,7 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
         threadId={replyCtx.threadId}
         inReplyTo={replyCtx.inReplyTo}
         draftKey={replyCtx.draftKey}
+        nav={nav}
         onClose={()=>setReplyCtx(null)}
       />
     )}
@@ -2258,6 +2259,7 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
         onSaveAsTemplate={onSaveAsTemplate}
         onSend={onSendEmail}
         draftKey={`felt.compose.draft.${person.id}`}
+        nav={nav}
         onClose={()=>setComposeOpen(false)}
       />
     )}

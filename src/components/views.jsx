@@ -1879,6 +1879,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
       threadId={replyTo.threadId}
       inReplyTo={replyTo.inReplyTo}
       draftKey={replyTo.draftKey}
+      nav={nav}
     />
   );
 

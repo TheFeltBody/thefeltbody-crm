@@ -2431,7 +2431,7 @@ export function PickPersonModal({ people, attendance, classes, onPick, onSkip, o
 // and returned to the caller via onSend, which is expected to splice it into
 // the parent's notes state so it appears on PersonDetail immediately.
 
-export function SendEmailModal({ person, org, people = [], initialRecipients = null, templates = [], onSend, onClose, onSaveAsTemplate, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey, initialAttachments = null }) {
+export function SendEmailModal({ person, org, people = [], initialRecipients = null, templates = [], onSend, onClose, onSaveAsTemplate, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey, initialAttachments = null, nav = null }) {
   // Draft persistence: if a draftKey is supplied, the in-progress subject AND
   // body survive closing/reopening the modal (and navigating away) via
   // localStorage. Stored as a single JSON blob {subject, body}. Falls back to
@@ -2495,10 +2495,11 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
     prev.map((r, x) => x === i ? { ...r, role: r.role === 'cc' ? 'to' : 'cc' } : r));
   const removeRecip = (i) => setRecips(prev => prev.filter((_, x) => x !== i));
   // A CRM contact with no primary email fails the whole send server-side —
-  // catch it here with the name attached instead. Raw addresses always pass.
-  const noEmailNames = recips
+  // catch it here with the name AND id attached instead, so we can offer a
+  // jump-to-contact link (to star/add a primary email). Raw addresses always pass.
+  const noEmail = recips
     .filter(r => r.personId && !(r.email || people.find(p => p.id === r.personId)?.email))
-    .map(recipLabel);
+    .map(r => ({ personId: r.personId, label: recipLabel(r) }));
   const hasTo = recips.some(r => r.role === 'to');
 
   // Attachments. Chips hold the picked File objects; bytes upload at send
@@ -2541,7 +2542,7 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
   }, [subject, body, draftKey]);
 
   const canSend = !busy && recips.length > 0 && recips.length <= MAX_RECIPIENTS
-    && hasTo && noEmailNames.length === 0
+    && hasTo && noEmail.length === 0
     && subject.trim() && body.trim() && !overBudget;
 
   // Template picker. Show ALL templates, with the most relevant for this
@@ -2651,9 +2652,23 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
             {adding ? '× Close' : '+ Add'}
           </button>
         </div>
-        {noEmailNames.length > 0 && (
+        {noEmail.length > 0 && (
           <div style={{color:C.gold,fontSize:11,marginTop:6}}>
-            ⚠ No primary email: {noEmailNames.join(', ')} — set one on the contact, or remove them here
+            ⚠ No primary email:{' '}
+            {noEmail.map((n, i) => (
+              <span key={n.personId}>
+                {i > 0 && ', '}
+                {nav ? (
+                  <span
+                    onClick={() => { onClose(); nav('person_detail', { personId: n.personId }); }}
+                    title="Open this contact to star an email as primary"
+                    style={{color:C.gold,cursor:'pointer',textDecoration:'underline'}}>
+                    {n.label} →
+                  </span>
+                ) : n.label}
+              </span>
+            ))}
+            {' '}— set one on the contact{nav ? '' : ', or remove them here'}
           </div>
         )}
         {recips.length > 0 && !hasTo && (
