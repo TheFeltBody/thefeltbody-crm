@@ -550,6 +550,17 @@ export default function FeltBodyCRM() {
       }));
     } catch (e) { onError('Set primary email')(e); }
   };
+  // Address-based primary setter for the send modal, which knows a contact's
+  // email STRING (from people[].emails) but not the row id. Resolves the id
+  // from local state and delegates to the id-based handler. Used to fix a
+  // "has emails but none starred" contact inline without leaving the modal.
+  const setPrimaryEmailByAddress = async (personId, address) => {
+    const p = people.find(x => x.id === personId);
+    const norm = String(address || '').trim().toLowerCase();
+    const hit = p?.emails?.find(e => String(e.email || '').trim().toLowerCase() === norm);
+    if (!hit) { onError('Set primary email')(new Error('Email not found on contact')); return; }
+    await setPersonPrimaryEmail(hit.id, personId);
+  };
   const deletePersonEmail = async (emailId, personId) => {
     try {
       await data.peopleEmails.delete(emailId, personId);
@@ -1474,7 +1485,7 @@ export default function FeltBodyCRM() {
           onSetStatus={setProjectStatus}
           onUpdateProject={updateProject} />;
       }
-      case 'threads': return <ThreadsView notes={notes} people={people} nav={nav} onMarkThreadRead={markThreadRead} initialThreadKey={view.threadKey} onSendEmail={sendEmail} emailTemplates={settings.email_templates?.templates || []} onSaveAsTemplate={saveDraftAsTemplate} onSaveLinks={addLinksFromThread} onDeleteThread={deleteThread} />;
+      case 'threads': return <ThreadsView notes={notes} people={people} nav={nav} onMarkThreadRead={markThreadRead} initialThreadKey={view.threadKey} onSendEmail={sendEmail} onSetPrimaryEmail={setPrimaryEmailByAddress} emailTemplates={settings.email_templates?.templates || []} onSaveAsTemplate={saveDraftAsTemplate} onSaveLinks={addLinksFromThread} onDeleteThread={deleteThread} />;
       case 'birthdays': return <BirthdaysView people={people} orgs={orgs} nav={nav} />;
       case 'households': return <HouseholdsList households={households} householdMembers={householdMembers} people={people} nav={nav} onEditHousehold={(id)=>setModal({type:'household_manage',householdId:id})} />;
       case 'org_list': return <OrgList orgs={orgs} people={people} classes={classes} orgType={orgType} nav={nav} onAdd={()=>setModal({type:'add_org',orgType})} />;
@@ -1529,7 +1540,7 @@ export default function FeltBodyCRM() {
           onAddNote={addNote}
           onAddToCalendar={handleNoteToCalendar}
           onSendEmail={sendEmail}
-          onToggleImportant={toggleNoteImportant}
+          onSetPrimaryEmail={setPrimaryEmailByAddress}
           onClearAction={clearNoteAction}
           onReopenNote={reopenNote}
           onDeleteNote={deleteNote}

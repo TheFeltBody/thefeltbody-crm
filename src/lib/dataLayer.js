@@ -684,10 +684,16 @@ export const notes = {
       return { note, addedEmail: null };
     }
 
-    // Add it as non-primary, source='import' so it's distinguishable from
-    // manually-typed addresses in the future (auditable provenance).
+    // Add it. Provenance source='import' distinguishes an inbox-assigned
+    // address from a manually-typed one. Make it primary when the person has
+    // no primary email yet (which includes the no-emails-at-all case) — an
+    // assigned inbound address is a real, deliverable contact point, and
+    // leaving it unstarred silently blocks every later send (the send path
+    // requires a primary). `existing` was already fetched above, so this is
+    // free. If they already have a primary, respect it and add as non-primary.
+    const wantPrimary = !existing.some(r => r.is_primary);
     const emailRow = await supabase.from('people_emails')
-      .insert(emailToDb({ personId, email: candidate.trim(), isPrimary: false, source: 'import' }))
+      .insert(emailToDb({ personId, email: candidate.trim(), isPrimary: wantPrimary, source: 'import' }))
       .select().single().then(ok);
 
     return { note, addedEmail: emailFromDb(emailRow) };

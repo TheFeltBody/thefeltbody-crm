@@ -2431,7 +2431,7 @@ export function PickPersonModal({ people, attendance, classes, onPick, onSkip, o
 // and returned to the caller via onSend, which is expected to splice it into
 // the parent's notes state so it appears on PersonDetail immediately.
 
-export function SendEmailModal({ person, org, people = [], initialRecipients = null, templates = [], onSend, onClose, onSaveAsTemplate, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey, initialAttachments = null, nav = null }) {
+export function SendEmailModal({ person, org, people = [], initialRecipients = null, templates = [], onSend, onClose, onSaveAsTemplate, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey, initialAttachments = null, nav = null, onSetPrimaryEmail = null }) {
   // Draft persistence: if a draftKey is supplied, the in-progress subject AND
   // body survive closing/reopening the modal (and navigating away) via
   // localStorage. Stored as a single JSON blob {subject, body}. Falls back to
@@ -2494,12 +2494,61 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
   const toggleRole = (i) => setRecips(prev =>
     prev.map((r, x) => x === i ? { ...r, role: r.role === 'cc' ? 'to' : 'cc' } : r));
   const removeRecip = (i) => setRecips(prev => prev.filter((_, x) => x !== i));
-  // A CRM contact with no primary email fails the whole send server-side —
-  // catch it here with the name AND id attached instead, so we can offer a
-  // jump-to-contact link (to star/add a primary email). Raw addresses always pass.
+
+  // Per-recipient email status. The worker only sends to a CRM contact's
+  // PRIMARY email (people_emails.is_primary=true) and rejects the whole send
+  // if a personId recipient has none — even when person.email is populated,
+  // because the mapper derives person.email as "primary OR first", so a
+  // contact with an unstarred address looks sendable here but isn't.
+  //
+  // We mirror the worker precisely: look at the real emails[] array and find
+  // the primary. Three cases per personId recipient:
+  //   - has a primary            → fine, sends normally
+  //   - has emails, none primary → blocked, but fixable (star one) or
+  //                                overridable (send once, unlinked)
+  //   - has no emails at all      → blocked; only remedy is to add one on the
+  //                                contact (jump link), nothing to override
+  // A recipient the user has flipped to `sendOnce` carries an explicit
+  // `email` and is sent as a RAW address — it goes out but lands in the Inbox
+  // unlinked (the worker overwrites/looks-up email only for personId entries).
+  const emailsOf = (pid) => (people.find(p => p.id === pid)?.emails) || [];
+  const primaryOf = (pid) => emailsOf(pid).find(e => e.isPrimary)?.email || null;
+  const recipStatus = (r) => {
+    if (!r.personId) return 'raw';           // raw address — always ok
+    if (r.sendOnce && r.email) return 'once'; // overridden this send
+    if (primaryOf(r.personId)) return 'ok';
+    return emailsOf(r.personId).length ? 'nostar' : 'noemail';
+  };
+  // Recipients with emails but none starred — offer star-as-primary / send-once.
+  const nostar = recips
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => recipStatus(r) === 'nostar')
+    .map(({ r, i }) => ({
+      i, personId: r.personId, label: recipLabel(r),
+      candidate: emailsOf(r.personId)[0]?.email || null,   // the address we'd use
+    }));
+  // Recipients with no email at all — jump to the contact to add one.
   const noEmail = recips
-    .filter(r => r.personId && !(r.email || people.find(p => p.id === r.personId)?.email))
+    .filter(r => recipStatus(r) === 'noemail')
     .map(r => ({ personId: r.personId, label: recipLabel(r) }));
+  const [primarising, setPrimarising] = useState(null); // personId mid-star
+  const makePrimary = async (personId, candidate) => {
+    if (!onSetPrimaryEmail || !candidate) return;
+    setPrimarising(personId);
+    try {
+      await onSetPrimaryEmail(personId, candidate);
+      // Reflect immediately so the guard clears without waiting for a people
+      // refetch: mark this recipient sendable via its now-primary address.
+      setRecips(prev => prev.map(r =>
+        r.personId === personId ? { ...r, email: candidate, sendOnce: false } : r));
+    } catch (e) {
+      setErr(e.message || String(e));
+    } finally {
+      setPrimarising(null);
+    }
+  };
+  const sendOnceToggle = (i, candidate) => setRecips(prev =>
+    prev.map((r, x) => x === i ? { ...r, sendOnce: true, email: candidate } : r));
   const hasTo = recips.some(r => r.role === 'to');
 
   // Attachments. Chips hold the picked File objects; bytes upload at send
@@ -2542,7 +2591,7 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
   }, [subject, body, draftKey]);
 
   const canSend = !busy && recips.length > 0 && recips.length <= MAX_RECIPIENTS
-    && hasTo && noEmail.length === 0
+    && hasTo && noEmail.length === 0 && nostar.length === 0
     && subject.trim() && body.trim() && !overBudget;
 
   // Template picker. Show ALL templates, with the most relevant for this
@@ -2600,7 +2649,11 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
       setUploadingName(null);
       const res = await onSend({
         personId: person?.id,  // legacy field; worker prefers recipients[]
-        recipients: recips.map(r => r.personId
+        // A `sendOnce` recipient goes as a RAW address: the worker only sends
+        // to a personId's PRIMARY email, so to deliver to a non-primary one we
+        // drop the person link for this send. Trade-off: it lands in the Inbox
+        // unlinked rather than auto-threading to the contact.
+        recipients: recips.map(r => (r.personId && !r.sendOnce)
           ? { personId: r.personId, role: r.role }
           : { email: r.email, role: r.role }),
         subject: subject.trim(),
@@ -2636,6 +2689,12 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
                 {r.role === 'cc' ? 'CC' : 'TO'}
               </span>
               <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{recipLabel(r)}</span>
+              {r.personId && r.sendOnce && (
+                <span title="Sending to a non-primary address this once — won't link to the contact"
+                  style={{color:C.muted,fontSize:9,fontWeight:700,letterSpacing:'0.5px',flexShrink:0}}>
+                  1× UNLINKED
+                </span>
+              )}
               {!busy && (
                 <span onClick={() => removeRecip(i)} title="Remove"
                   style={{color:C.muted,cursor:'pointer',fontSize:13,lineHeight:1,flexShrink:0}}>×</span>
@@ -2671,6 +2730,45 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
             {' '}— set one on the contact{nav ? '' : ', or remove them here'}
           </div>
         )}
+        {nostar.map((n) => (
+          <div key={n.personId} style={{marginTop:6,fontSize:11,color:C.gold,
+            display:'flex',flexWrap:'wrap',alignItems:'center',gap:8}}>
+            <span>
+              ⚠ <strong>{n.label}</strong> has an email but none is starred as primary
+              {n.candidate && <> (<span style={{color:C.muted}}>{n.candidate}</span>)</>}
+            </span>
+            {onSetPrimaryEmail && n.candidate && (
+              <button
+                onClick={() => makePrimary(n.personId, n.candidate)}
+                disabled={busy || primarising === n.personId}
+                title="Star this address as the contact's primary email — fixes it for future sends too"
+                style={{background:'none',border:`1px solid ${C.gold}`,color:C.gold,
+                  cursor:(busy || primarising === n.personId) ? 'default' : 'pointer',
+                  borderRadius:12,fontSize:10.5,padding:'2px 10px',fontFamily:"'Jost',sans-serif"}}>
+                {primarising === n.personId ? 'Starring…' : '★ Make primary'}
+              </button>
+            )}
+            {n.candidate && (
+              <button
+                onClick={() => sendOnceToggle(n.i, n.candidate)}
+                disabled={busy}
+                title="Send to this address just this once, without starring it — this message won't link to the contact"
+                style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,
+                  cursor:busy ? 'default' : 'pointer',
+                  borderRadius:12,fontSize:10.5,padding:'2px 10px',fontFamily:"'Jost',sans-serif"}}>
+                Send once (unlinked)
+              </button>
+            )}
+            {nav && (
+              <span
+                onClick={() => { onClose(); nav('person_detail', { personId: n.personId }); }}
+                title="Open the contact"
+                style={{color:C.muted,cursor:'pointer',textDecoration:'underline'}}>
+                open contact →
+              </span>
+            )}
+          </div>
+        ))}
         {recips.length > 0 && !hasTo && (
           <div style={{color:C.gold,fontSize:11,marginTop:6}}>⚠ At least one recipient must be To (not just Cc)</div>
         )}

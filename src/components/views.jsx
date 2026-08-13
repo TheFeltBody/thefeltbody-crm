@@ -1736,7 +1736,7 @@ function SaveLinksModal({ candidates, personId, sourceThreadId, onSave, onClose 
 // their own single-message pseudo-thread (key `solo:<id>`). Reads the shared
 // `notes` array (kept fresh by the 60s poll) — no extra fetching.
 
-export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey, onSendEmail, emailTemplates=[], onSaveAsTemplate, onSaveLinks, onDeleteThread }) {
+export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey, onSendEmail, onSetPrimaryEmail = null, emailTemplates=[], onSaveAsTemplate, onSaveLinks, onDeleteThread }) {
   const isMobile = useIsMobile();
   const [selectedKey, setSelectedKey] = useState(initialThreadKey || null);
   const [search, setSearch] = useState('');
@@ -1880,6 +1880,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
       inReplyTo={replyTo.inReplyTo}
       draftKey={replyTo.draftKey}
       nav={nav}
+      onSetPrimaryEmail={onSetPrimaryEmail}
     />
   );
 

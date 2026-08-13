@@ -1361,7 +1361,7 @@ export function ContactDatesCard({ anchor, contactDates, onAdd, onUpdate, onRemo
 }
 
 
-export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], forms=[], orgs, nav, backInfo, highlightNoteId, emailTemplates=[], onSaveAsTemplate, people, households, householdMembers, contactDates=[], practiceLogs=[], onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onAddToCalendar, onSendEmail, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook, links=[], onAddLink, onUpdateLink, onDeleteLink, onToggleLinkStar }) {
+export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], forms=[], orgs, nav, backInfo, highlightNoteId, emailTemplates=[], onSaveAsTemplate, people, households, householdMembers, contactDates=[], practiceLogs=[], onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onAddToCalendar, onSendEmail, onSetPrimaryEmail = null, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook, links=[], onAddLink, onUpdateLink, onDeleteLink, onToggleLinkStar }) {
   const isMobile = useIsMobile();  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
@@ -2247,6 +2247,7 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
         inReplyTo={replyCtx.inReplyTo}
         draftKey={replyCtx.draftKey}
         nav={nav}
+        onSetPrimaryEmail={onSetPrimaryEmail}
         onClose={()=>setReplyCtx(null)}
       />
     )}
@@ -2260,6 +2261,7 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
         onSend={onSendEmail}
         draftKey={`felt.compose.draft.${person.id}`}
         nav={nav}
+        onSetPrimaryEmail={onSetPrimaryEmail}
         onClose={()=>setComposeOpen(false)}
       />
     )}
