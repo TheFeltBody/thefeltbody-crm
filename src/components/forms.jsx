@@ -2075,17 +2075,23 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
   // "Repeat ×N" — only offered when creating (not editing). Creates N
   // entries at a chosen frequency, sharing one diary_group so they delete as a
   // group. Off by default; count is the TOTAL number of occurrences (incl. the
-  // first). `repeatFreq` picks the step between occurrences.
+  // first). `repeatFreq` picks the base unit, `repeatEvery` the interval between
+  // occurrences (every 1/2/3… of that unit — so weekly+every 2 = fortnightly).
   const [repeat, setRepeat] = useState(false);
   const [repeatFreq, setRepeatFreq] = useState('daily');
+  const [repeatEvery, setRepeatEvery] = useState(1);
   const [repeatCount, setRepeatCount] = useState(3);
+  // `last_day` ignores the start day-of-month and always lands on the month end,
+  // stepping by `repeatEvery` months — so last_day + every 3 = quarterly month-ends.
+  // Fortnightly is intentionally absent: it's weekly + every 2.
   const REPEAT_FREQS = [
-    { v:'daily',       l:'Daily',       unit:'day'   },
-    { v:'weekly',      l:'Weekly',      unit:'week'  },
-    { v:'fortnightly', l:'Fortnightly', unit:'fortnight' },
-    { v:'monthly',     l:'Monthly',     unit:'month' },
-    { v:'annually',    l:'Annually',    unit:'year'  },
+    { v:'daily',    l:'Daily',             unit:'day'   },
+    { v:'weekly',   l:'Weekly',            unit:'week'  },
+    { v:'monthly',  l:'Monthly',           unit:'month' },
+    { v:'last_day', l:'Last day of month', unit:'month', fixedEvery:true },
+    { v:'annually', l:'Annually',          unit:'year'  },
   ];
+  const curFreq = REPEAT_FREQS.find(x=>x.v===repeatFreq) || REPEAT_FREQS[0];
 
   // Resolve the duration field (value + unit) down to stored minutes.
   const durationToMins = () => {
@@ -2100,19 +2106,21 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
     dt.setUTCDate(dt.getUTCDate() + n);
     return dt.toISOString().slice(0,10);
   };
-  // Step a YYYY-MM-DD string forward by `i` occurrences of a recurrence frequency.
-  // Day/week/fortnight are fixed-length day maths; month/year use UTC calendar
-  // add and clamp to month length (31 Jan +1mo → 28/29 Feb) so we never overflow.
-  const stepDateStr = (iso, freq, i) => {
-    if (freq === 'daily')       return addDaysStr(iso, i);
-    if (freq === 'weekly')      return addDaysStr(iso, i * 7);
-    if (freq === 'fortnightly') return addDaysStr(iso, i * 14);
+  // Step a YYYY-MM-DD string forward by occurrence index `i`, given a base
+  // frequency and an interval `every` (every N units). Day/week are fixed-length
+  // day maths; month/last_day/annually use UTC calendar add and clamp to month
+  // length (31 Jan +1mo → 28/29 Feb) so we never overflow. `last_day` ignores the
+  // start day and snaps to the final day of the resolved month.
+  const stepDateStr = (iso, freq, i, every=1) => {
+    const step = Math.max(1, parseInt(every) || 1);
+    if (freq === 'daily')  return addDaysStr(iso, i * step);
+    if (freq === 'weekly') return addDaysStr(iso, i * step * 7);
     const [y,m,d] = iso.split('-').map(Number);
-    const months = freq === 'annually' ? i * 12 : i;
+    const months = (freq === 'annually' ? 12 : 1) * step * i;
     const dt = new Date(Date.UTC(y, m-1, 1));
     dt.setUTCMonth(dt.getUTCMonth() + months);
     const lastDay = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth()+1, 0)).getUTCDate();
-    dt.setUTCDate(Math.min(d, lastDay));
+    dt.setUTCDate(freq === 'last_day' ? lastDay : Math.min(d, lastDay));
     return dt.toISOString().slice(0,10);
   };
 
@@ -2148,7 +2156,7 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
       const group = crypto.randomUUID();
       const entries = Array.from({length:n}, (_,i) => ({
         ...base,
-        date: stepDateStr(f.date, repeatFreq, i),
+        date: stepDateStr(f.date, repeatFreq, i, repeatEvery),
         diaryGroup: group,
       }));
       onSaveMany(entries);
@@ -2274,7 +2282,7 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
                 {REPEAT_FREQS.map(fq=>{
                   const on = repeatFreq===fq.v;
                   return (
-                    <button key={fq.v} onClick={()=>setRepeatFreq(fq.v)}
+                    <button key={fq.v} onClick={()=>{ setRepeatFreq(fq.v); if(fq.fixedEvery) setRepeatEvery(1); }}
                       style={{padding:'7px 12px',borderRadius:6,cursor:'pointer',fontSize:12,
                         fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',
                         background: on ? C.gold+'22' : C.card,
@@ -2285,6 +2293,19 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
                   );
                 })}
               </div>
+              {/* Interval — "every N units". last_day still steps by N *months*
+                  (day-of-month is fixed to the end), so its unit label is 'month'. */}
+              <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+                <span style={{color:C.muted,fontSize:12}}>every</span>
+                <input type="number" min="1" max="52" value={repeatEvery}
+                  onChange={e=>setRepeatEvery(Math.max(1,parseInt(e.target.value)||1))}
+                  style={{width:64,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,
+                    color:C.text,fontSize:14,padding:'7px 10px',fontFamily:"'Jost',sans-serif"}} />
+                <span style={{color:C.muted,fontSize:12}}>
+                  {curFreq.unit}{(parseInt(repeatEvery)||1) === 1 ? '' : 's'}
+                  {repeatFreq==='last_day' && ' (on the last day)'}
+                </span>
+              </div>
               {/* Occurrence count + resolved end date */}
               <div style={{display:'flex',alignItems:'center',gap:8}}>
                 <span style={{color:C.muted,fontSize:12}}>for</span>
@@ -2293,7 +2314,7 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
                   style={{width:64,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,
                     color:C.text,fontSize:14,padding:'7px 10px',fontFamily:"'Jost',sans-serif"}} />
                 <span style={{color:C.muted,fontSize:12}}>
-                  {(REPEAT_FREQS.find(x=>x.v===repeatFreq)||{}).unit || 'day'}s — {f.date} to {stepDateStr(f.date, repeatFreq, Math.max(2,Math.min(60,parseInt(repeatCount)||2))-1)}
+                  times — {stepDateStr(f.date, repeatFreq, 0, repeatEvery)} to {stepDateStr(f.date, repeatFreq, Math.max(2,Math.min(60,parseInt(repeatCount)||2))-1, repeatEvery)}
                 </span>
               </div>
             </div>
