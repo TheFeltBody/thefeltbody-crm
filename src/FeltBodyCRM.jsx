@@ -1269,8 +1269,10 @@ export default function FeltBodyCRM() {
           onSave={(t)=>editPersonRole(t.key, { label:t.label, color:t.color, bg:t.bg, parentKey:t.parentKey })}
           onClose={close} />;
       }
-      case 'add_class': return <AddClassForm orgs={orgs} defaultOrgId={modal.orgId} defaultDate={modal.date} defaultPaymentModel={modal.paymentModel} onSave={handleAddClass} onClose={close} />;
-      case 'add_diary': return <DiaryModal people={people} projects={projects} selfPersonId={SELF_PERSON_ID} existing={modal.entry || null} prefill={modal.prefill || null} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={modal.entry ? handleEditDiary : handleAddDiary} onSaveMany={handleAddDiaryMany} onCopy={handleAddDiary} onDelete={deleteNote} onDeleteGroup={deleteNoteGroup} onClose={close} nav={nav} />;
+      case 'add_class': return <AddClassForm orgs={orgs} defaultOrgId={modal.orgId} defaultDate={modal.date} defaultTime={modal.time} defaultPaymentModel={modal.paymentModel} onSave={handleAddClass} onClose={close} />;
+      case 'add_diary': return <DiaryModal people={people} projects={projects} selfPersonId={SELF_PERSON_ID} existing={modal.entry || null} prefill={modal.prefill || null} defaultDate={modal.date} defaultTime={modal.time} defaultPersonal={modal.personal} onSave={modal.entry ? handleEditDiary : handleAddDiary} onSaveMany={handleAddDiaryMany} onCopy={handleAddDiary} onDelete={deleteNote} onDeleteGroup={deleteNoteGroup} onClose={close} nav={nav}
+        onSwitchToPrivate={(date,time)=>setModal({type:'pick_person_for_ps', date, time})}
+        onSwitchToClass={(date,time)=>setModal({type:'add_class', date, time})} />;
       case 'edit_class': {
         const cls=modal.cls;
         if(cls.seriesId) {
@@ -1361,8 +1363,8 @@ export default function FeltBodyCRM() {
         people={people}
         attendance={attendance}
         classes={classes}
-        onPick={(person)=>setModal({ type:'book_create_private', personId: person.id, defaultDate: modal.date })}
-        onSkip={()=>setModal({ type:'add_class', date: modal.date, paymentModel:'private' })}
+        onPick={(person)=>setModal({ type:'book_create_private', personId: person.id, defaultDate: modal.date, defaultTime: modal.time })}
+        onSkip={()=>setModal({ type:'add_class', date: modal.date, time: modal.time, paymentModel:'private' })}
         onClose={close} />;
       case 'book_create_private': {
         const person = people.find(p => p.id === modal.personId);
@@ -1372,6 +1374,7 @@ export default function FeltBodyCRM() {
           packages={packages}
           allAttendance={attendance}
           defaultDate={modal.defaultDate}
+          defaultTime={modal.defaultTime}
           bookingFor={{ personId: person.id, name: person.name, defaultSessionRate: person.defaultSessionRate }}
           defaultPaymentModel="private"
           onSave={async (f) => {

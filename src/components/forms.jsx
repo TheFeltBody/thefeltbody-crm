@@ -416,13 +416,13 @@ export function AddTypeForm({ kind, onSave, onClose, existingKeys=[], existing=n
 }
 
 
-export function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDate, bookingFor, defaultPaymentModel, packages, allAttendance }) {
+export function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, defaultDate, defaultTime, bookingFor, defaultPaymentModel, packages, allAttendance }) {
   const [f, setF] = useState(existing
     ? { ...existing, time: existing.time || '', duration: existing.duration || 60, recurrence: existing.seriesId ? 'linked' : 'one_off' }
     : {
         name: bookingFor && defaultPaymentModel==='private' ? `Private Session — ${bookingFor.name}` : '',
         date: defaultDate || today(),
-        time: currentHourTime(),
+        time: defaultTime || currentHourTime(),
         duration: 60,
         location: '',
         orgId: defaultOrgId || '',
@@ -2045,7 +2045,7 @@ export function EditNoteForm({ note, onSave, onClose }) {
 // record (selfPersonId) so interactions_anchored is always satisfied. The little
 // "open ↗" links jump to the linked record without making the block-click itself
 // navigate away.
-export function DiaryModal({ people, projects=[], selfPersonId, existing=null, prefill=null, defaultDate, defaultTime, defaultPersonal=false, onSave, onSaveMany, onCopy, onDelete, onDeleteGroup, onClose, nav }) {
+export function DiaryModal({ people, projects=[], selfPersonId, existing=null, prefill=null, defaultDate, defaultTime, defaultPersonal=false, onSave, onSaveMany, onCopy, onDelete, onDeleteGroup, onClose, nav, onSwitchToPrivate, onSwitchToClass }) {
   const isEdit = !!existing;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [f, setF] = useState({
@@ -2072,11 +2072,20 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
     projectId: existing?.projectId || prefill?.projectId || '',
   });
   const s = k => v => setF(x=>({...x,[k]:v}));
-  // "Repeat daily ×N" — only offered when creating (not editing). Creates N
-  // consecutive single-day entries sharing one diary_group so they delete as a
-  // group. Off by default; count is the TOTAL number of days (incl. the first).
+  // "Repeat ×N" — only offered when creating (not editing). Creates N
+  // entries at a chosen frequency, sharing one diary_group so they delete as a
+  // group. Off by default; count is the TOTAL number of occurrences (incl. the
+  // first). `repeatFreq` picks the step between occurrences.
   const [repeat, setRepeat] = useState(false);
-  const [repeatDays, setRepeatDays] = useState(3);
+  const [repeatFreq, setRepeatFreq] = useState('daily');
+  const [repeatCount, setRepeatCount] = useState(3);
+  const REPEAT_FREQS = [
+    { v:'daily',       l:'Daily',       unit:'day'   },
+    { v:'weekly',      l:'Weekly',      unit:'week'  },
+    { v:'fortnightly', l:'Fortnightly', unit:'fortnight' },
+    { v:'monthly',     l:'Monthly',     unit:'month' },
+    { v:'annually',    l:'Annually',    unit:'year'  },
+  ];
 
   // Resolve the duration field (value + unit) down to stored minutes.
   const durationToMins = () => {
@@ -2089,6 +2098,21 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
     const [y,m,d] = iso.split('-').map(Number);
     const dt = new Date(Date.UTC(y, m-1, d));
     dt.setUTCDate(dt.getUTCDate() + n);
+    return dt.toISOString().slice(0,10);
+  };
+  // Step a YYYY-MM-DD string forward by `i` occurrences of a recurrence frequency.
+  // Day/week/fortnight are fixed-length day maths; month/year use UTC calendar
+  // add and clamp to month length (31 Jan +1mo → 28/29 Feb) so we never overflow.
+  const stepDateStr = (iso, freq, i) => {
+    if (freq === 'daily')       return addDaysStr(iso, i);
+    if (freq === 'weekly')      return addDaysStr(iso, i * 7);
+    if (freq === 'fortnightly') return addDaysStr(iso, i * 14);
+    const [y,m,d] = iso.split('-').map(Number);
+    const months = freq === 'annually' ? i * 12 : i;
+    const dt = new Date(Date.UTC(y, m-1, 1));
+    dt.setUTCMonth(dt.getUTCMonth() + months);
+    const lastDay = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth()+1, 0)).getUTCDate();
+    dt.setUTCDate(Math.min(d, lastDay));
     return dt.toISOString().slice(0,10);
   };
 
@@ -2116,15 +2140,15 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
       projectId,
       calendar: f.calendar || 'mine',
     };
-    // Repeat daily ×N (create-only): N consecutive single-day entries sharing one
+    // Repeat ×N (create-only): N occurrences at the chosen frequency sharing one
     // diary_group so they can be deleted together. Guard the count to a sane
     // range. When off (or editing), behave exactly as before — one entry.
     if (!isEdit && repeat && onSaveMany) {
-      const n = Math.max(2, Math.min(60, parseInt(repeatDays) || 2));
+      const n = Math.max(2, Math.min(60, parseInt(repeatCount) || 2));
       const group = crypto.randomUUID();
       const entries = Array.from({length:n}, (_,i) => ({
         ...base,
-        date: addDaysStr(f.date, i),
+        date: stepDateStr(f.date, repeatFreq, i),
         diaryGroup: group,
       }));
       onSaveMany(entries);
@@ -2172,7 +2196,30 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
   const linkBtn = { background:'none', border:'none', color:C.gold, cursor:'pointer', fontSize:11, padding:0, fontFamily:"'Jost',sans-serif", textDecoration:'underline', marginLeft:8 };
 
   return (
-    <Modal title={isEdit ? 'Edit diary entry' : 'New diary entry'} onClose={onClose}>
+    <Modal title={isEdit ? 'Edit diary entry' : 'New calendar entry'} onClose={onClose}>
+      {/* Entry-type switcher — only when creating from a calendar slot. Lets the
+          same click that opened the diary form hop straight to the private-session
+          or class flows, carrying the clicked date/time across. Hidden when editing
+          (an existing diary entry can't morph into a class). The Diary tab is the
+          active one here; the others hand off via the parent's modal router. */}
+      {!isEdit && (onSwitchToPrivate || onSwitchToClass) && (
+        <div style={{display:'flex',gap:0,borderRadius:8,overflow:'hidden',border:`1px solid ${C.border}`,marginBottom:16}}>
+          {[
+            { key:'diary',   label:'Diary',           active:true,  onClick:null },
+            onSwitchToPrivate && { key:'ps', label:'Private Session', active:false, onClick:()=>{ onClose(); onSwitchToPrivate(f.date, f.time); } },
+            onSwitchToClass   && { key:'class', label:'Class',        active:false, onClick:()=>{ onClose(); onSwitchToClass(f.date, f.time); } },
+          ].filter(Boolean).map(tab=>(
+            <button key={tab.key} onClick={tab.onClick||undefined} disabled={tab.active}
+              style={{flex:1,padding:'9px 12px',cursor:tab.active?'default':'pointer',fontSize:13,
+                fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',border:'none',
+                borderRight: tab.key!=='class' ? `1px solid ${C.border}` : 'none',
+                background: tab.active ? C.gold+'22' : C.card,
+                color: tab.active ? C.gold : C.muted}}>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      )}
       <FI label="TITLE" value={f.title} onChange={s('title')} placeholder="e.g. Dentist, Erica's birthday, Supervision" />
       <FI label="NOTE (optional)" value={f.text} onChange={s('text')} rows={3} placeholder="Longer detail — shows on hover and here when you reopen." />
       <div style={{display:'flex',gap:12}}>
@@ -2210,25 +2257,45 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
         </div>
       </div>
 
-      {/* Repeat daily ×N — create-only. Makes N consecutive single-day entries
+      {/* Repeat ×N — create-only. Makes N occurrences at the chosen frequency
           sharing a group so they delete together. Useful for a multi-day course,
-          holiday, or block of cover. Editing an existing entry hides this. */}
+          a weekly commitment, a monthly review, a birthday. Editing an existing
+          entry hides this. */}
       {!isEdit && onSaveMany && (
         <div style={{marginTop:4}}>
           <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',color:C.muted,fontSize:12}}>
             <input type="checkbox" checked={repeat} onChange={e=>setRepeat(e.target.checked)} />
-            Repeat daily
+            Repeat
           </label>
           {repeat && (
-            <div style={{display:'flex',alignItems:'center',gap:8,marginTop:8}}>
-              <span style={{color:C.muted,fontSize:12}}>for</span>
-              <input type="number" min="2" max="60" value={repeatDays}
-                onChange={e=>setRepeatDays(parseInt(e.target.value)||2)}
-                style={{width:64,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,
-                  color:C.text,fontSize:14,padding:'7px 10px',fontFamily:"'Jost',sans-serif"}} />
-              <span style={{color:C.muted,fontSize:12}}>
-                days — {f.date} to {addDaysStr(f.date, Math.max(2,Math.min(60,parseInt(repeatDays)||2))-1)}
-              </span>
+            <div style={{marginTop:8}}>
+              {/* Frequency chips */}
+              <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+                {REPEAT_FREQS.map(fq=>{
+                  const on = repeatFreq===fq.v;
+                  return (
+                    <button key={fq.v} onClick={()=>setRepeatFreq(fq.v)}
+                      style={{padding:'7px 12px',borderRadius:6,cursor:'pointer',fontSize:12,
+                        fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',
+                        background: on ? C.gold+'22' : C.card,
+                        border:`1px solid ${on ? C.gold : C.border}`,
+                        color: on ? C.gold : C.muted}}>
+                      {fq.l}
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Occurrence count + resolved end date */}
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <span style={{color:C.muted,fontSize:12}}>for</span>
+                <input type="number" min="2" max="60" value={repeatCount}
+                  onChange={e=>setRepeatCount(parseInt(e.target.value)||2)}
+                  style={{width:64,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,
+                    color:C.text,fontSize:14,padding:'7px 10px',fontFamily:"'Jost',sans-serif"}} />
+                <span style={{color:C.muted,fontSize:12}}>
+                  {(REPEAT_FREQS.find(x=>x.v===repeatFreq)||{}).unit || 'day'}s — {f.date} to {stepDateStr(f.date, repeatFreq, Math.max(2,Math.min(60,parseInt(repeatCount)||2))-1)}
+                </span>
+              </div>
             </div>
           )}
         </div>
