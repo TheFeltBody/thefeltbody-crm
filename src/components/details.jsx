@@ -1380,6 +1380,32 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
       draftKey: `felt.compose.reply.${n.threadId || n.id}`,
     });
   };
+  // Forward-from-record: opens the compose modal seeded with a quoted copy of
+  // this email, addressed to nobody (you pick the new recipient). Deliberately
+  // NOT a reply — threadId/inReplyTo are left undefined so the worker mints a
+  // fresh thread rather than grafting the forward onto the original
+  // conversation. Body is text-only for now (source is the stored `text`,
+  // which is truncated to 5000 chars on very long inbound mail — acceptable
+  // for v1; html_body carry-over is a later pass). Fresh draftKey per source
+  // message so a half-typed forward doesn't collide with a reply draft.
+  const startForward = (n) => {
+    const base = (n.subject || '').replace(/^\s*((re|fwd?):\s*)+/i, '').trim();
+    const hdr = [
+      '---------- Forwarded message ----------',
+      n.fromEmail ? `From: ${n.fromEmail}` : null,
+      n.date ? `Date: ${fmt(n.date)}` : null,
+      n.subject ? `Subject: ${n.subject}` : null,
+      n.toEmail ? `To: ${n.toEmail}` : null,
+    ].filter(Boolean).join('\n');
+    setReplyCtx({
+      initialSubject: base ? `Fwd: ${base}` : 'Fwd:',
+      initialBody: `\n\n${hdr}\n\n${n.text || ''}`,
+      threadId: undefined,
+      inReplyTo: undefined,
+      forwardBlank: true,  // start with NO recipient — a forward goes to someone new
+      draftKey: `felt.compose.fwd.${n.id}`,
+    });
+  };
   // Deep-link into ThreadsView with the conversation pre-selected. Gated:
   // ThreadsView only lists threads with at least one inbound message, so the
   // button appears only when the FULL notes array (not just this person's
@@ -1956,8 +1982,8 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
               )}
             </div>
             {addKind&&<NoteForm personId={person.id} classId={null} kind={addKind} onSave={n=>{onAddNote(n);setAddKind(null);}} onCancel={()=>setAddKind(null)} />}
-            {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} onReply={n.kind==='email'?startReply:undefined} onReplyAll={canReplyAll(n)?startReplyAll:undefined} onOpenThread={canOpenThread(n)?openThread:undefined} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
-            {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} onReply={n.kind==='email'?startReply:undefined} onReplyAll={canReplyAll(n)?startReplyAll:undefined} onOpenThread={canOpenThread(n)?openThread:undefined} highlight={flashId===n.id} />)}
+            {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} onReply={n.kind==='email'?startReply:undefined} onReplyAll={canReplyAll(n)?startReplyAll:undefined} onForward={n.kind==='email'?startForward:undefined} onOpenThread={canOpenThread(n)?openThread:undefined} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
+            {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} onReply={n.kind==='email'?startReply:undefined} onReplyAll={canReplyAll(n)?startReplyAll:undefined} onForward={n.kind==='email'?startForward:undefined} onOpenThread={canOpenThread(n)?openThread:undefined} highlight={flashId===n.id} />)}
             {visibleNotes.length===0&&!addKind&&<Empty text={effectiveFilter==='all' ? 'No comms yet' : effectiveFilter==='diary' ? 'No diary entries' : `No ${INTERACTION_KINDS[effectiveFilter].label.toLowerCase()}s logged yet`} />}
           </>}
           {tab==='packages'&&<>
@@ -2242,7 +2268,9 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
         onSaveAsTemplate={onSaveAsTemplate}
         onSend={onSendEmail}
         initialSubject={replyCtx.initialSubject}
+        initialBody={replyCtx.initialBody || ''}
         initialRecipients={replyCtx.recipients || null}
+        forwardBlank={replyCtx.forwardBlank || false}
         threadId={replyCtx.threadId}
         inReplyTo={replyCtx.inReplyTo}
         draftKey={replyCtx.draftKey}

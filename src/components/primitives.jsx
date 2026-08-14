@@ -90,7 +90,7 @@ export const Avatar = ({ name, size=36, role }) => {
   return <div style={{width:size,height:size,borderRadius:'50%',background:bg,border:`1.5px solid ${color}`,display:'flex',alignItems:'center',justifyContent:'center',color,fontSize:size*0.36,fontWeight:600,flexShrink:0}}>{initials(name)}</div>;
 };
 
-export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote, onUpdateActionDate, onDelete, onClick, onAddToCalendar, onReply, onReplyAll, onOpenThread, highlight, dimReason }) => {
+export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote, onUpdateActionDate, onDelete, onClick, onAddToCalendar, onReply, onReplyAll, onForward, onOpenThread, highlight, dimReason }) => {
   const [editingDate, setEditingDate] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // HTML-view toggle for logged emails. Default false = plaintext (note.text),
@@ -296,6 +296,14 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
               onMouseEnter={e=>{e.currentTarget.style.color=C.gold;e.currentTarget.style.borderColor=C.gold+'88';}}
               onMouseLeave={e=>{e.currentTarget.style.color=C.muted;e.currentTarget.style.borderColor=C.border;}}>
               ↩ Reply all
+            </button>
+          )}
+          {isEmail && onForward && (
+            <button onClick={() => onForward(note)} title="Forward this message to someone else"
+              style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:4,fontSize:11,padding:'2px 9px',fontFamily:"'Jost',sans-serif"}}
+              onMouseEnter={e=>{e.currentTarget.style.color=C.gold;e.currentTarget.style.borderColor=C.gold+'88';}}
+              onMouseLeave={e=>{e.currentTarget.style.color=C.muted;e.currentTarget.style.borderColor=C.border;}}>
+              ➦ Forward
             </button>
           )}
           {isEmail && onOpenThread && (

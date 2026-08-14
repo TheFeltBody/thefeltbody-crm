@@ -2519,7 +2519,7 @@ export function PickPersonModal({ people, attendance, classes, onPick, onSkip, o
 // and returned to the caller via onSend, which is expected to splice it into
 // the parent's notes state so it appears on PersonDetail immediately.
 
-export function SendEmailModal({ person, org, people = [], initialRecipients = null, templates = [], onSend, onClose, onSaveAsTemplate, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey, initialAttachments = null, nav = null, onSetPrimaryEmail = null }) {
+export function SendEmailModal({ person, org, people = [], initialRecipients = null, templates = [], onSend, onClose, onSaveAsTemplate, initialSubject = '', initialBody = '', threadId, inReplyTo, draftKey, initialAttachments = null, nav = null, onSetPrimaryEmail = null, forwardBlank = false }) {
   // Draft persistence: if a draftKey is supplied, the in-progress subject AND
   // body survive closing/reopening the modal (and navigating away) via
   // localStorage. Stored as a single JSON blob {subject, body}. Falls back to
@@ -2556,6 +2556,10 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
     if (Array.isArray(initialRecipients) && initialRecipients.length) {
       return initialRecipients.map(r => ({ ...r, role: r.role === 'cc' ? 'cc' : 'to' }));
     }
+    // Forward: deliberately NO seeded recipient. Without this, the empty-list
+    // fallback below would seed the current record's person — i.e. forward the
+    // email back to the contact whose page you're on, which is never intended.
+    if (forwardBlank) return [];
     return person?.id
       ? [{ personId: person.id, name: person.name || null, email: person.email || '', role: 'to' }]
       : [];
@@ -2763,7 +2767,7 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
   };
 
   return (
-    <Modal title={recips.length === 1 ? `Email ${recipLabel(recips[0])}` : `Email ${recips.length} recipients`} onClose={busy ? ()=>{} : onClose} wide>
+    <Modal title={recips.length === 0 ? 'Forward email' : recips.length === 1 ? `Email ${recipLabel(recips[0])}` : `Email ${recips.length} recipients`} onClose={busy ? ()=>{} : onClose} wide>
       {/* Recipient chips: tap the To/Cc tag to toggle, × to remove. */}
       <div style={{marginBottom:14}}>
         <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center'}}>
