@@ -805,6 +805,7 @@ export function OrgDetail({ org, people, classes, invoices, notes=[], contactDat
 // ─── PEOPLE LIST / DETAIL ────────────────────────────────────────────────────
 
 export function HouseholdModal({ person, household, roster, allPeople, households, householdMembers, orgs, onClose, onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, nav }) {
+  const isMobile = useIsMobile();
   const [name, setName] = useState(household?.name || `${person.name.split(' ').slice(-1)[0]} Household`);
   const [founderRel, setFounderRel] = useState('adult');
   const [busy, setBusy] = useState(false);
@@ -996,13 +997,13 @@ export function HouseholdModal({ person, household, roster, allPeople, household
       <div style={{marginBottom:18,borderTop:`1px solid ${C.border}`,paddingTop:16}}>
         <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:8}}>ADD A MEMBER</div>
         {addable.length > 0 && (
-          <div style={{display:'flex',gap:8,alignItems:'flex-end',flexWrap:'wrap',marginBottom:10}}>
-            <div style={{flex:'2 1 200px',minWidth:0}}>
+          <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:isMobile?10:8,alignItems:isMobile?'stretch':'flex-end',flexWrap:'wrap',marginBottom:10}}>
+            <div style={{flex:isMobile?'1 1 auto':'2 1 200px',minWidth:0}}>
               <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>EXISTING CONTACT</label>
               <input value={addQuery} onChange={e=>setAddQuery(e.target.value)} placeholder="Search by name or email…"
-                style={{width:'100%',background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif",marginBottom:6}} />
+                style={{width:'100%',background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:isMobile?16:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif",marginBottom:6,boxSizing:'border-box'}} />
               <select value={addPersonId} onChange={e=>setAddPersonId(e.target.value)} size={addQuery.trim() ? Math.min(6, addableFiltered.length + 1) : 1}
-                style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}}>
+                style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:isMobile?16:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif",boxSizing:'border-box'}}>
                 <option value="">— select contact —</option>
                 {addableFiltered.map(p=><option key={p.id} value={p.id}>{p.name}{p.email?` · ${p.email}`:''}</option>)}
               </select>
@@ -1010,14 +1011,16 @@ export function HouseholdModal({ person, household, roster, allPeople, household
                 <div style={{color:C.muted,fontSize:11,marginTop:4,fontStyle:'italic'}}>No contacts match “{addQuery.trim()}”.</div>
               )}
             </div>
-            <div style={{flex:'1 1 120px'}}>
+            <div style={{flex:isMobile?'1 1 auto':'1 1 120px'}}>
               <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>RELATIONSHIP</label>
               <select value={addRel} onChange={e=>setAddRel(e.target.value)}
-                style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}}>
+                style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:isMobile?16:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif",boxSizing:'border-box'}}>
                 {relOpts.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
               </select>
             </div>
-            <Btn onClick={doAddMember} disabled={!addPersonId || addBusy}>{addBusy?'Adding…':'Add'}</Btn>
+            <div style={isMobile?{width:'100%',display:'flex'}:undefined}>
+              <Btn onClick={doAddMember} disabled={!addPersonId || addBusy}>{addBusy?'Adding…':'Add'}</Btn>
+            </div>
           </div>
         )}
         {/* Add a brand-new contact straight into this household. Always
