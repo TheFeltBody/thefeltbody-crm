@@ -456,6 +456,15 @@ export default function FeltBodyCRM() {
       setHouseholds(prev => prev.map(h => h.id === id ? saved : h));
     } catch (e) { onError('Rename household')(e); }
   };
+  // Set/clear the greater ("parent") household this one belongs to. Server-
+  // confirmed (the DB cycle-guard can reject the change), so we await the saved
+  // row before updating local state rather than optimistic-patching.
+  const setHouseholdParent = async (id, parentId) => {
+    try {
+      const saved = await data.households.setParent(id, parentId || null);
+      setHouseholds(prev => prev.map(h => h.id === id ? saved : h));
+    } catch (e) { onError('Set greater household')(e); }
+  };
   // Hard delete. Cascade clears member rows server-side; mirror that locally.
   const deleteHousehold = async (id) => {
     try {
@@ -1427,6 +1436,7 @@ export default function FeltBodyCRM() {
           onClose={close}
           onCreateHousehold={createHousehold}
           onRenameHousehold={renameHousehold}
+          onSetHouseholdParent={setHouseholdParent}
           onDeleteHousehold={deleteHousehold}
           onAddHouseholdMember={addHouseholdMember}
           onCreatePersonForHousehold={createPersonForHousehold}
@@ -1532,6 +1542,7 @@ export default function FeltBodyCRM() {
           onToggleLinkStar={toggleLinkStar}
           onCreateHousehold={createHousehold}
           onRenameHousehold={renameHousehold}
+          onSetHouseholdParent={setHouseholdParent}
           onDeleteHousehold={deleteHousehold}
           onAddHouseholdMember={addHouseholdMember}
           onCreatePersonForHousehold={createPersonForHousehold}

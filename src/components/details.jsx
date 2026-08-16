@@ -804,7 +804,7 @@ export function OrgDetail({ org, people, classes, invoices, notes=[], contactDat
 
 // ─── PEOPLE LIST / DETAIL ────────────────────────────────────────────────────
 
-export function HouseholdModal({ person, household, roster, allPeople, households, householdMembers, orgs, onClose, onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, nav }) {
+export function HouseholdModal({ person, household, roster, allPeople, households, householdMembers, orgs, onClose, onCreateHousehold, onRenameHousehold, onSetHouseholdParent, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, nav }) {
   const isMobile = useIsMobile();
   const [name, setName] = useState(household?.name || `${person.name.split(' ').slice(-1)[0]} Household`);
   const [founderRel, setFounderRel] = useState('adult');
@@ -860,6 +860,31 @@ export function HouseholdModal({ person, household, roster, allPeople, household
   })();
 
   const relOpts = RELATIONSHIP_KEYS.map(k => ({ v:k, l:RELATIONSHIP_LABELS[k] }));
+
+  // Greater-household ("parent") picker options. A household may belong to at
+  // most one parent. To keep the tree acyclic we exclude, from the candidate
+  // list, THIS household plus every household that (transitively) descends from
+  // it — otherwise the user could pick a child as the parent and create a loop
+  // (the DB trigger would reject it, but filtering here is friendlier). Walks
+  // children downward from the current household, collecting ids to exclude.
+  const excludedParentIds = (() => {
+    if (!household) return new Set();
+    const excl = new Set([household.id]);
+    const kids = (parentId) => (households || []).filter(h => h.parentId === parentId);
+    const stack = [household.id];
+    let guard = 0;
+    while (stack.length && guard < 1000) {
+      guard++;
+      const cur = stack.pop();
+      for (const c of kids(cur)) {
+        if (!excl.has(c.id)) { excl.add(c.id); stack.push(c.id); }
+      }
+    }
+    return excl;
+  })();
+  const parentOptions = (households || [])
+    .filter(h => !excludedParentIds.has(h.id))
+    .sort((a,b) => a.name.localeCompare(b.name));
 
   const doCreate = async () => {
     const trimmed = name.trim();
@@ -967,6 +992,22 @@ export function HouseholdModal({ person, household, roster, allPeople, household
         </div>
         <div style={{color:C.muted,fontSize:10,marginTop:4,fontStyle:'italic'}}>Saves when you click away.</div>
       </div>
+
+      {/* Greater household (parent) — optional. Groups this household under a
+          larger one (e.g. an extended family) without moving any members. */}
+      {onSetHouseholdParent && (
+        <div style={{marginBottom:18}}>
+          <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>GREATER HOUSEHOLD (OPTIONAL)</label>
+          <select value={household.parentId || ''} onChange={e=>onSetHouseholdParent(household.id, e.target.value || null)}
+            style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:isMobile?16:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif",boxSizing:'border-box'}}>
+            <option value="">— none (top-level household) —</option>
+            {parentOptions.map(h=><option key={h.id} value={h.id}>{h.name}</option>)}
+          </select>
+          <div style={{color:C.muted,fontSize:10,marginTop:4,fontStyle:'italic'}}>
+            Links this household under a larger one for grouping. Members stay where they are.
+          </div>
+        </div>
+      )}
 
       {/* Members */}
       <div style={{marginBottom:18}}>
@@ -1364,7 +1405,7 @@ export function ContactDatesCard({ anchor, contactDates, onAdd, onUpdate, onRemo
 }
 
 
-export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], forms=[], orgs, nav, backInfo, highlightNoteId, emailTemplates=[], onSaveAsTemplate, people, households, householdMembers, contactDates=[], practiceLogs=[], onCreateHousehold, onRenameHousehold, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onAddToCalendar, onSendEmail, onSetPrimaryEmail = null, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook, links=[], onAddLink, onUpdateLink, onDeleteLink, onToggleLinkStar }) {
+export function PersonDetail({ person, org, pNotes, pClasses, attendance, packages, classes, notes=[], forms=[], orgs, nav, backInfo, highlightNoteId, emailTemplates=[], onSaveAsTemplate, people, households, householdMembers, contactDates=[], practiceLogs=[], onCreateHousehold, onRenameHousehold, onSetHouseholdParent, onDeleteHousehold, onAddHouseholdMember, onCreatePersonForHousehold, onUpdateMemberRelationship, onRemoveHouseholdMember, onAddContactDate, onUpdateContactDate, onRemoveContactDate, onAddNote, onAddToCalendar, onSendEmail, onSetPrimaryEmail = null, onEdit, onAddPackage, onEditPackage, onUseSession, onReturnSession, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onEditNote, onBook, links=[], onAddLink, onUpdateLink, onDeleteLink, onToggleLinkStar }) {
   const isMobile = useIsMobile();  const [addKind, setAddKind] = useState(null);  // null | 'note' | 'call' | 'email' | 'meeting'
   const [menuOpen, setMenuOpen] = useState(false);  // controls the "+ Log ▾" dropdown
   const menuRef = useRef(null);
@@ -1540,14 +1581,29 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
     }
   }, [myHouseholds.map(h=>h.id).join(','), activeHouseholdId]);
   const activeHousehold = myHouseholds.find(h => h.id === activeHouseholdId) || myHouseholds[0] || null;
-  // Roster (members + their relationship + person record) for the active household.
-  const householdRoster = activeHousehold
-    ? (householdMembers || [])
-        .filter(m => m.householdId === activeHousehold.id)
-        .map(m => ({ membership: m, person: (people || []).find(p => p.id === m.personId) }))
-        .filter(x => x.person)
-        .sort((a,b) => a.person.name.localeCompare(b.person.name))
+  // Roster builder — members (+ relationship + person record) for any household.
+  const rosterFor = (householdId) => (householdMembers || [])
+    .filter(m => m.householdId === householdId)
+    .map(m => ({ membership: m, person: (people || []).find(p => p.id === m.personId) }))
+    .filter(x => x.person)
+    .sort((a,b) => a.person.name.localeCompare(b.person.name));
+  // Roster of the active household's OWN direct members.
+  const householdRoster = activeHousehold ? rosterFor(activeHousehold.id) : [];
+  // Child households: the smaller households grouped UNDER the active one (its
+  // parent_id points here). Each renders as its own labelled sub-group so an
+  // extended family shows its constituent households distinctly rather than as
+  // one flat list. Sorted by name; each carries its own roster.
+  const childHouseholds = activeHousehold
+    ? (households || [])
+        .filter(h => h.parentId === activeHousehold.id)
+        .sort((a,b) => a.name.localeCompare(b.name))
+        .map(h => ({ household: h, roster: rosterFor(h.id) }))
     : [];
+  // The greater household this one sits under, if any (for a small "part of …"
+  // hint on the child's own card).
+  const parentHousehold = activeHousehold?.parentId
+    ? (households || []).find(h => h.id === activeHousehold.parentId) || null
+    : null;
   // Household modal state: null | { mode:'create' } | { mode:'manage', householdId }
   const [householdModal, setHouseholdModal] = useState(null);
   // The household now lives as a line inside the contact card (both mobile and
@@ -1735,33 +1791,78 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
               })}
             </div>
           )}
-          {activeHousehold ? (
-            householdRoster.length > 1 ? (
-              <div style={{display:'flex',flexDirection:'column',gap:2}}>
-                {householdRoster.map(({membership, person:mp}) => {
-                  const isSelf = mp.id === person.id;
-                  const b = mp.dateOfBirth ? birthdayInfo(mp.dateOfBirth) : null;
-                  return (
-                    <div key={membership.id}
-                      onClick={isSelf ? undefined : ()=>nav('person_detail',{personId:mp.id})}
-                      style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'7px 0',borderBottom:`1px solid ${C.border}`,cursor:isSelf?'default':'pointer'}}>
-                      <div style={{minWidth:0}}>
-                        <div style={{color:isSelf?C.muted:C.blue,fontSize:13,fontWeight:isSelf?400:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
-                          {mp.name}{isSelf && <span style={{color:C.muted,fontSize:11,fontStyle:'italic'}}> · this contact</span>}
-                        </div>
-                        <div style={{color:C.muted,fontSize:11}}>
-                          {RELATIONSHIP_LABELS[membership.relationship] || 'Other'}
-                          {b && <span style={{color:b.days<=30?C.gold:C.muted,marginLeft:6}}>· {b.label}</span>}
-                        </div>
-                      </div>
+          {activeHousehold ? (() => {
+            // One member row. Shared between the household's own roster and each
+            // child sub-group so they look identical. `self` greys out + disables
+            // navigation for the contact whose page we're already on.
+            const memberRow = ({ membership, person: mp }) => {
+              const isSelf = mp.id === person.id;
+              const b = mp.dateOfBirth ? birthdayInfo(mp.dateOfBirth) : null;
+              return (
+                <div key={membership.id}
+                  onClick={isSelf ? undefined : ()=>nav('person_detail',{personId:mp.id})}
+                  style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'7px 0',borderBottom:`1px solid ${C.border}`,cursor:isSelf?'default':'pointer'}}>
+                  <div style={{minWidth:0}}>
+                    <div style={{color:isSelf?C.muted:C.blue,fontSize:13,fontWeight:isSelf?400:500,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                      {mp.name}{isSelf && <span style={{color:C.muted,fontSize:11,fontStyle:'italic'}}> · this contact</span>}
                     </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div style={{color:C.muted,fontSize:13}}>Just this contact so far. <span style={{color:C.blue,cursor:'pointer'}} onClick={()=>setHouseholdModal({mode:'manage',householdId:activeHousehold.id})}>Add someone →</span></div>
-            )
-          ) : (
+                    <div style={{color:C.muted,fontSize:11}}>
+                      {RELATIONSHIP_LABELS[membership.relationship] || 'Other'}
+                      {b && <span style={{color:b.days<=30?C.gold:C.muted,marginLeft:6}}>· {b.label}</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            };
+            const hasOwnMembers = householdRoster.length > 1;
+            const hasChildren = childHouseholds.length > 0;
+            return (
+              <>
+                {/* "Part of a greater household" hint — shown on a child's own
+                    card so the hierarchy is visible from either direction. */}
+                {parentHousehold && (
+                  <div style={{color:C.muted,fontSize:11,marginBottom:10,fontStyle:'italic'}}>
+                    Part of <span style={{color:C.blue,cursor:'pointer',fontStyle:'normal'}}
+                      onClick={()=>setHouseholdModal({mode:'manage',householdId:parentHousehold.id})}>{parentHousehold.name}</span>
+                  </div>
+                )}
+
+                {/* This household's own direct members. */}
+                {hasOwnMembers ? (
+                  <div style={{display:'flex',flexDirection:'column',gap:2}}>
+                    {householdRoster.map(memberRow)}
+                  </div>
+                ) : !hasChildren ? (
+                  <div style={{color:C.muted,fontSize:13}}>Just this contact so far. <span style={{color:C.blue,cursor:'pointer'}} onClick={()=>setHouseholdModal({mode:'manage',householdId:activeHousehold.id})}>Add someone →</span></div>
+                ) : null}
+
+                {/* Child households — each its own labelled sub-group. This is
+                    the "sub-households shown as distinct groups within it" view:
+                    a greater household surfaces its constituent households
+                    separately rather than flattening everyone into one list. */}
+                {hasChildren && (
+                  <div style={{marginTop:hasOwnMembers?14:0,display:'flex',flexDirection:'column',gap:12}}>
+                    {childHouseholds.map(({ household: ch, roster: chRoster }) => (
+                      <div key={ch.id} style={{border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 12px',background:C.card}}>
+                        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,marginBottom:6}}>
+                          <div style={{color:C.text,fontSize:12,fontWeight:600,letterSpacing:'0.3px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{ch.name}</div>
+                          <span style={{color:C.muted,fontSize:11,cursor:'pointer',flexShrink:0}}
+                            onClick={()=>setHouseholdModal({mode:'manage',householdId:ch.id})}>Manage</span>
+                        </div>
+                        {chRoster.length > 0 ? (
+                          <div style={{display:'flex',flexDirection:'column',gap:2}}>
+                            {chRoster.map(memberRow)}
+                          </div>
+                        ) : (
+                          <div style={{color:C.muted,fontSize:12,fontStyle:'italic'}}>No members yet.</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            );
+          })() : (
             <Btn small onClick={()=>setHouseholdModal({mode:'create'})}>+ Create household</Btn>
           )}
         </div>
@@ -2252,6 +2353,7 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
             onClose={()=>setHouseholdModal(null)}
             onCreateHousehold={onCreateHousehold}
             onRenameHousehold={onRenameHousehold}
+            onSetHouseholdParent={onSetHouseholdParent}
             onDeleteHousehold={onDeleteHousehold}
             onAddHouseholdMember={onAddHouseholdMember}
             onCreatePersonForHousehold={onCreatePersonForHousehold}

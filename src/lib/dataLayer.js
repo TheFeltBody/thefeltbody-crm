@@ -1004,7 +1004,18 @@ export const households = {
       .eq('id', id).select().single().then(ok);
     return householdFromDb(row);
   },
+  // Set (or clear, with null) the "greater household" this one belongs to.
+  // The DB cycle-guard trigger rejects any assignment that would create a
+  // loop, so a bad pick surfaces as a thrown error rather than corrupt state.
+  async setParent(id, parentId) {
+    const row = await supabase.from('households')
+      .update({ parent_id: parentId || null })
+      .eq('id', id).select().single().then(ok);
+    return householdFromDb(row);
+  },
   // Hard delete. Cascade removes household_members rows automatically.
+  // parent_id FK is ON DELETE SET NULL, so deleting a parent orphans its
+  // children (they become top-level) rather than deleting them.
   async delete(id) {
     await supabase.from('households').delete().eq('id', id).then(ok);
   },

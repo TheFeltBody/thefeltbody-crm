@@ -675,12 +675,20 @@ export const householdFromDb = (row) => ({
   id: row.id,
   name: row.name,
   notes: row.notes || '',
+  // Optional "greater household" this one belongs to (self-referential FK).
+  // null = top-level. Grouping is derived at read time; see PersonDetail.
+  parentId: row.parent_id || null,
   createdAt: row.created_at,
 });
 
 export const householdToDb = (h) => ({
   name: h.name,
   notes: h.notes || null,
+  // Only written when the caller supplies the property, so a name-only rename
+  // never clobbers an existing parent. undefined → omitted from the patch.
+  ...(Object.prototype.hasOwnProperty.call(h, 'parentId')
+    ? { parent_id: h.parentId || null }
+    : {}),
 });
 
 export const householdMemberFromDb = (row) => ({
