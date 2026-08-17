@@ -394,6 +394,80 @@ export const nextInvoiceNumber = (invoices, orgId, orgs) => {
 };
 
 // HTML escape for safe injection into the printable invoice template
+// ─── BASIC RICH TEXT ──────────────────────────────────────────────────────────
+// Note bodies and logged plaintext are free text that routinely arrives with
+// formatting already baked in — pasted out of an email, a web page, or an AI
+// answer. NoteCard used to render that in a bare <div>, so even hard newlines
+// collapsed and a pasted block landed as one unbroken wall of prose.
+//
+// normaliseRich() flattens both dialects (a whitelist of basic HTML tags, and
+// markdown-lite) into ONE predictable markdown-lite shape. <RichText> in
+// primitives.jsx then parses that into React ELEMENTS.
+//
+// SAFETY: nothing on this path ever reaches dangerouslySetInnerHTML. Tags
+// outside the whitelist are dropped, entities are decoded AFTER stripping (so
+// "&lt;script&gt;" survives only as inert visible text), and React escapes the
+// result anyway. The sandboxed iframe remains the ONLY route for untrusted
+// email HTML (note.htmlBody / m.htmlBody) — do not repurpose this for that.
+const RICH_ENTITIES = {
+  amp:'&', lt:'<', gt:'>', quot:'"', apos:"'", nbsp:' ',
+  ndash:'–', mdash:'—', hellip:'…', pound:'£', euro:'€', copy:'©', reg:'®',
+  lsquo:'\u2018', rsquo:'\u2019', ldquo:'\u201c', rdquo:'\u201d', bull:'•', middot:'·',
+};
+
+const decodeEntities = (s) => s.replace(/&(#x[0-9a-f]{1,6}|#\d{1,7}|[a-z]{2,8});/gi, (m, ent) => {
+  if (ent[0] === '#') {
+    const code = ent[1] === 'x' || ent[1] === 'X'
+      ? parseInt(ent.slice(2), 16)
+      : parseInt(ent.slice(1), 10);
+    if (!Number.isFinite(code) || code < 9 || code > 0x10ffff) return m;
+    try { return String.fromCodePoint(code); } catch { return m; }
+  }
+  const hit = RICH_ENTITIES[ent.toLowerCase()];
+  return hit === undefined ? m : hit;
+});
+
+export const normaliseRich = (raw) => {
+  let s = String(raw ?? '');
+  if (!s.trim()) return '';
+  s = s.replace(/\r\n?/g, '\n');
+  // script/style/head: drop the whole ELEMENT. Stripping only the tags would
+  // leave the source visible as text, which is inert but ugly.
+  s = s.replace(/<\s*(script|style|head|title)(\s[^>]{0,300})?>[\s\S]{0,50000}?<\s*\/\s*\1\s*>/gi, '');
+  // Block-level HTML → newlines, so the line-based block parser sees structure.
+  s = s.replace(/<\s*br\s*\/?\s*>/gi, '\n');
+  s = s.replace(/<\s*\/\s*(p|div|h[1-6]|tr|blockquote)\s*>/gi, '\n');
+  s = s.replace(/<\s*\/\s*li\s*>/gi, '');  // <li> already opens the line; a second \n would split the list
+  s = s.replace(/<\s*(p|div|blockquote)(\s[^>\n]{0,300})?>/gi, '\n');
+  s = s.replace(/<\s*li(\s[^>\n]{0,300})?>/gi, '\n- ');
+  s = s.replace(/<\s*h[1-6](\s[^>\n]{0,300})?>/gi, '\n### ');
+  s = s.replace(/<\s*hr\s*\/?\s*>/gi, '\n---\n');
+  s = s.replace(/<\s*\/?\s*(ul|ol|table|tbody|thead|tfoot)\s*>/gi, '\n');
+  s = s.replace(/<\s*\/?\s*(td|th)(\s[^>\n]{0,300})?>/gi, '  ');
+  // Inline HTML → markdown markers, so ONE inline parser covers both dialects.
+  s = s.replace(/<\s*(b|strong)(\s[^>\n]{0,300})?>([\s\S]{0,20000}?)<\s*\/\s*\1\s*>/gi, (m, t, a, inner) => `**${inner}**`);
+  s = s.replace(/<\s*(i|em)(\s[^>\n]{0,300})?>([\s\S]{0,20000}?)<\s*\/\s*\1\s*>/gi, (m, t, a, inner) => `*${inner}*`);
+  s = s.replace(/<\s*(code|tt|kbd)(\s[^>\n]{0,300})?>([\s\S]{0,20000}?)<\s*\/\s*\1\s*>/gi, (m, t, a, inner) => '`' + inner + '`');
+  s = s.replace(/<\s*a\s[^>\n]{0,300}?href\s*=\s*["']([^"'\s]{1,600})["'][^>\n]{0,300}?>([\s\S]{0,4000}?)<\s*\/\s*a\s*>/gi,
+    (m, href, inner) => /^(https?:|mailto:)/i.test(href) ? `[${inner}](${href})` : inner);
+  // Anything still tag-shaped is outside the whitelist: drop the tag, keep the
+  // text. Matching only RECOGNISED tag names (not any "<word...>") means prose
+  // like "if x<y and a>b" survives untouched instead of losing a chunk.
+  s = s.replace(/<\/?(?:a|abbr|address|area|article|aside|audio|b|base|bdi|bdo|blockquote|body|br|button|canvas|caption|center|cite|code|col|colgroup|data|datalist|dd|del|details|dfn|dialog|div|dl|dt|em|embed|fieldset|figcaption|figure|font|footer|form|h[1-6]|head|header|hgroup|hr|html|i|iframe|img|input|ins|kbd|label|legend|li|link|main|map|mark|menu|meta|meter|nav|noscript|object|ol|optgroup|option|output|p|param|picture|pre|progress|q|rp|rt|ruby|s|samp|script|section|select|slot|small|source|span|strike|strong|style|sub|summary|sup|svg|table|tbody|td|template|textarea|tfoot|th|thead|time|title|tr|track|tt|u|ul|var|video|wbr|xml)\b[^>\n]{0,400}>/gi, '');
+  s = s.replace(/<\/?[a-z]{1,10}:[a-z0-9-]{1,20}[^>\n]{0,400}>/gi, '');  // Word/Outlook namespaced junk: <o:p>, <st1:place>, <v:shape>
+  s = decodeEntities(s);
+  return s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+};
+
+// One-line, marker-free version for row previews and ellipsised snippets, where
+// raw "**" or "- " would just be visual noise.
+export const plainText = (raw) => normaliseRich(raw)
+  .replace(/\[([^\]\n]+)\]\([^)\s]*\)/g, '$1')
+  .replace(/^\s{0,8}(?:[-*•]|\d{1,3}[.)]|#{1,6}|>)\s+/gm, '')
+  .replace(/(\*\*|__|[*`#])/g, '')
+  .replace(/\s+/g, ' ')
+  .trim();
+
 export const escHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // Renders the printable invoice HTML body — used by the inline print overlay.

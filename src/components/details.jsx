@@ -974,6 +974,7 @@ export function HouseholdModal({ person, household, roster, allPeople, household
     return (
       <AddPersonForm
         orgs={orgs}
+        defaultName={addQuery.trim()}
         onSave={async (p) => { await onCreatePersonForHousehold(household.id, p, newContactRel); }}
         onClose={() => setAddingNew(false)}
       />
@@ -1049,7 +1050,7 @@ export function HouseholdModal({ person, household, roster, allPeople, household
                 {addableFiltered.map(p=><option key={p.id} value={p.id}>{p.name}{p.email?` · ${p.email}`:''}</option>)}
               </select>
               {addQuery.trim() && addableFiltered.length===0 && (
-                <div style={{color:C.muted,fontSize:11,marginTop:4,fontStyle:'italic'}}>No contacts match “{addQuery.trim()}”.</div>
+                <div style={{color:C.muted,fontSize:11,marginTop:4,fontStyle:'italic'}}>No contacts match “{addQuery.trim()}” — “+ Add new contact” below starts a new one with that name.</div>
               )}
             </div>
             <div style={{flex:isMobile?'1 1 auto':'1 1 120px'}}>

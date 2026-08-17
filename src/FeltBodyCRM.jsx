@@ -1299,7 +1299,7 @@ export default function FeltBodyCRM() {
         return <AddToRegisterForm people={people} classId={modal.classId} existing={attendance.filter(a=>a.classId===modal.classId).map(a=>a.personId)} attendance={attendance} classes={classes} cls={cls}
           onSave={(cid,pid)=>data.attendance.create({classId:cid,personId:pid,attended:false})
             .then(saved=>setAttendance(p=>[...p,saved])).catch(onError('Add to register'))}
-          onAddNew={()=>setModal({type:'add_person_to_register', classId: modal.classId})}
+          onAddNew={(name)=>setModal({type:'add_person_to_register', classId: modal.classId, name})}
           onClose={close} />;
       }
       case 'add_person_to_register': {
@@ -1308,6 +1308,7 @@ export default function FeltBodyCRM() {
         // when AddPersonForm calls onClose(); the async work continues in the background
         // and updates state when it resolves.
         return <AddPersonForm orgs={orgs}
+          defaultName={modal.name}
           onAddPersonRole={addPersonRole}
           customPersonRoles={customPersonRoles}
           roleParents={roleParents}

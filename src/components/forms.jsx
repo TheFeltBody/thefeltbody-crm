@@ -97,7 +97,7 @@ function BirthdayField({ value, onChange, half }) {
 }
 
 
-export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOrgId, onEmailAdd, onEmailDelete, onEmailSetPrimary, onAddPersonRole, customPersonRoles: customRolesList=[], roleParents=[] }) {
+export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOrgId, defaultName, onEmailAdd, onEmailDelete, onEmailSetPrimary, onAddPersonRole, customPersonRoles: customRolesList=[], roleParents=[] }) {
   const { personRoles, orgTypes } = useTypes();
   const [addingRoleType, setAddingRoleType] = useState(false);
   // Active parent filter for the role chips. null = "All".
@@ -108,7 +108,10 @@ export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, de
   const initRoles = existing?.roles || (defaultType?[defaultType]:[]);
   // Strip `emails` and `email` from form state — managed separately
   const initForm = existing ? (() => { const {emails, email, ...rest} = existing; return rest; })()
-    : {name:'',phone:'',website:'',address:'',dateOfBirth:'',orgId:defaultOrgId||'',status:'active',source:{channel:'manual',detail:''},notes:'',defaultSessionRate:'',rateNotes:''};
+    // defaultName: when this form is reached from a search that found nothing
+    // (register picker, household picker), the typed name seeds the field so it
+    // isn't retyped. Edit mode ignores it — `existing` wins.
+    : {name:(defaultName||'').trim(),phone:'',website:'',address:'',dateOfBirth:'',orgId:defaultOrgId||'',status:'active',source:{channel:'manual',detail:''},notes:'',defaultSessionRate:'',rateNotes:''};
   const [f, setF] = useState(initForm);
   const [roles, setRoles] = useState(initRoles);
   // Emails: live for edit (server is source of truth), staged for create.
@@ -674,6 +677,10 @@ export function AddToRegisterForm({ onSave, onClose, people, classId, existing, 
   // and refocuses the input — so tapping a name adds them and leaves the search
   // live and empty, ready to type the next name (no confirm step, no re-tap).
   const [pickerKey, setPickerKey] = useState(0);
+  // Mirror of SearchSelect's query, so "+ Add new contact" can pass whatever was
+  // typed straight into AddPersonForm. Reset alongside pickerKey — the remount
+  // clears the input, and this copy has to clear with it or it goes stale.
+  const [query, setQuery] = useState('');
   const initialExisting = useRef(existing);
   const available = people.filter(p=>p.status!=='inactive' && !addedIds.has(p.id));
 
@@ -682,12 +689,13 @@ export function AddToRegisterForm({ onSave, onClose, people, classId, existing, 
     onSave(classId, person.id);
     setAddedNames(prev => [...prev, person.name]);
     setAddedIds(prev => { const n=new Set(prev); n.add(person.id); return n; });
+    setQuery('');
     setPickerKey(k => k + 1); // remount the search: clears + refocuses for the next name
   };
 
   return (
     <Modal title="Add to Register" onClose={onClose} wide topAlign>
-      <SearchSelect key={pickerKey} people={available} onSelect={handleAdd} attendance={attendance} classes={classes} contextSeriesId={cls?.seriesId} existing={initialExisting.current} />
+      <SearchSelect key={pickerKey} people={available} onSelect={handleAdd} onQueryChange={setQuery} attendance={attendance} classes={classes} contextSeriesId={cls?.seriesId} existing={initialExisting.current} />
       {addedNames.length > 0 && (
         <div style={{marginTop:14,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 14px'}}>
           <div style={{color:C.green,fontSize:12,fontWeight:600,marginBottom:6}}>Added · {addedNames.length}</div>
@@ -696,8 +704,10 @@ export function AddToRegisterForm({ onSave, onClose, people, classId, existing, 
       )}
       {onAddNew && (
         <div style={{marginTop:18,paddingTop:16,borderTop:`1px solid ${C.border}`,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
-          <div style={{color:C.muted,fontSize:12}}>Can't find them?</div>
-          <Btn variant="ghost" small onClick={onAddNew}>+ Add new contact</Btn>
+          <div style={{color:C.muted,fontSize:12}}>
+            {query.trim() ? <>Can't find <span style={{color:C.text}}>{query.trim()}</span>?</> : "Can't find them?"}
+          </div>
+          <Btn variant="ghost" small onClick={()=>onAddNew(query.trim())}>+ Add new contact</Btn>
         </div>
       )}
       <div style={{marginTop:18,paddingTop:16,borderTop:`1px solid ${C.border}`,display:'flex',justifyContent:'flex-end'}}>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BANK_DETAILS, C, CARE_HOME_STAGES, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, calKeys, calLabel, calStripeStyle, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
-import { PrintInvoiceOverlay, addDays, buildInvoicePdfFile, deriveReplyAllRecipients, birthdayInfo, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, primaryRole, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
-import { AttachmentChips, Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
+import { addDays, birthdayInfo, buildInvoicePdfFile, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, deriveReplyAllRecipients, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, plainText, primaryRole, PrintInvoiceOverlay, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
+import { AttachmentChips, Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RichText, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
 
 export function SidebarCustomTypeItem({ active, indent, label, icon, count, onNav, onDelete, onEdit }) {
@@ -738,7 +738,7 @@ export function Dashboard({ orgs, people, classes, attendance, notes, packages, 
                       )}
                       {n.important && !isCompleted && <span style={{color:C.gold,fontSize:9,fontWeight:700,letterSpacing:'0.5px'}}>⚑</span>}
                     </div>
-                    <div style={{color:C.muted,fontSize:13,lineHeight:1.5,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',opacity:isCompleted?0.7:1}}>{n.text}</div>
+                    <div style={{color:C.muted,fontSize:13,lineHeight:1.5,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',opacity:isCompleted?0.7:1}}>{plainText(n.text)}</div>
                   </div>
                   <div style={{textAlign:'right',flexShrink:0}}>
                     <div style={{color:accent,fontSize:11,fontWeight:600,letterSpacing:'0.4px',textTransform:'uppercase'}}>
@@ -813,7 +813,7 @@ export function Dashboard({ orgs, people, classes, attendance, notes, packages, 
           <div key={n.id} onClick={()=>goToNote(n)} style={{background:C.goldBg,borderLeft:`3px solid ${C.gold}`,borderRadius:'0 8px 8px 0',padding:'10px 14px',marginBottom:9,cursor:'pointer',transition:'background 0.15s'}}
             onMouseEnter={e=>e.currentTarget.style.background='#23311a'} onMouseLeave={e=>e.currentTarget.style.background=C.goldBg}>
             {p && <div style={{color:C.gold,fontSize:11,fontWeight:600,letterSpacing:'0.5px',marginBottom:3}}>{p.name}</div>}
-            <div style={{color:C.text,fontSize:13,lineHeight:1.6}}>{n.text}</div>
+            <RichText text={n.text} style={{color:C.text,fontSize:13,lineHeight:1.6,wordBreak:'break-word'}} />
             <div style={{color:C.muted,fontSize:12,marginTop:4}}>{fmt(n.date)}</div>
           </div>
         );
@@ -1163,7 +1163,7 @@ export function InboxView({ notes, people, attendance, classes, onAssign, onDisc
   // Snippet: first ~140 chars of the body, single-line for the row preview.
   // Full body shows after expansion (click row).
   const snippet = (t) => {
-    const s = String(t || '').replace(/\s+/g, ' ').trim();
+    const s = plainText(t);
     return s.length > 140 ? s.slice(0, 140) + '…' : s;
   };
 
@@ -1222,14 +1222,15 @@ export function InboxView({ notes, people, attendance, classes, onAssign, onDisc
                 )}
 
                 {/* Body: snippet when collapsed, full text when expanded (click row) */}
-                <div style={{
-                  color:C.text,fontSize:13,lineHeight:1.5,marginBottom:12,opacity:0.9,
-                  whiteSpace: expandedId === n.id ? 'pre-wrap' : 'normal',
-                }}>
-                  {expandedId === n.id
-                    ? (n.text || <span style={{fontStyle:'italic',opacity:0.6}}>(no body)</span>)
-                    : snippet(n.text)}
-                </div>
+                {expandedId === n.id && n.text ? (
+                  <RichText text={n.text} style={{color:C.text,fontSize:13,lineHeight:1.5,marginBottom:12,opacity:0.9,wordBreak:'break-word'}} />
+                ) : (
+                  <div style={{color:C.text,fontSize:13,lineHeight:1.5,marginBottom:12,opacity:0.9}}>
+                    {expandedId === n.id
+                      ? <span style={{fontStyle:'italic',opacity:0.6}}>(no body)</span>
+                      : snippet(n.text)}
+                  </div>
+                )}
 
                 {/* Attachments: expanded rows only — collapsed rows stay scannable */}
                 {expandedId === n.id && <AttachmentChips rh={n.rawHeaders} />}
@@ -1385,10 +1386,13 @@ export function WebActivityRow({ note, personName, onOpen, compact }) {
           </span>
           <span style={{marginLeft:'auto',color:C.muted,fontSize:11}}>{fmt(note.date)}</span>
         </div>
-        <div style={{color:C.text,fontSize:compact?12.5:13,lineHeight:1.45,opacity:0.88,
-          ...(compact ? {whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'} : {})}}>
-          {note.text}
-        </div>
+        {compact ? (
+          <div style={{color:C.text,fontSize:12.5,lineHeight:1.45,opacity:0.88,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+            {plainText(note.text)}
+          </div>
+        ) : (
+          <RichText text={note.text} style={{color:C.text,fontSize:13,lineHeight:1.45,opacity:0.88,wordBreak:'break-word'}} />
+        )}
       </div>
     </div>
   );
@@ -1933,7 +1937,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
     const unread = t.unreadCount > 0;
     const names = participantNames(t);
     const last = t.messages[t.messages.length - 1];
-    const snippet = String(last.text || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+    const snippet = plainText(last.text).slice(0, 90);
     return (
       <div onClick={() => setSelectedKey(t.key)}
         style={{
@@ -2046,9 +2050,13 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
             srcDoc={`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:;"><base target="_blank"><style>html,body{margin:0;padding:0;background:#fff;color:#111;font-family:sans-serif;font-size:14px;line-height:1.5;word-break:break-word}img{max-width:100%;height:auto}</style></head><body>${m.htmlBody}</body></html>`}
             style={{ width: '100%', minHeight: 400, border: `1px solid ${C.border}`, borderRadius: 6, background: '#fff' }} />
         ) : (
-          <div style={{ color: C.text, fontSize: 13.5, lineHeight: 1.65, whiteSpace: 'pre-wrap', opacity: 0.92 }}>
-            {m.text || <span style={{ fontStyle: 'italic', opacity: 0.6 }}>(no body)</span>}
-          </div>
+          m.text ? (
+            <RichText text={m.text} style={{ color: C.text, fontSize: 13.5, lineHeight: 1.65, opacity: 0.92, wordBreak: 'break-word' }} />
+          ) : (
+            <div style={{ color: C.text, fontSize: 13.5, lineHeight: 1.65, opacity: 0.92 }}>
+              <span style={{ fontStyle: 'italic', opacity: 0.6 }}>(no body)</span>
+            </div>
+          )
         )}
         {/* rawHeaders directly, NOT rh — rh is direction-gated above but
             attachments render on inbound and outbound alike. */}
@@ -2321,7 +2329,7 @@ export function RecentActivityView({ notes, people, classes, orgs, attendance, p
   }, [query, people, orgs]);
 
   const snippet = (t) => {
-    const s = String(t || '').replace(/\s+/g, ' ').trim();
+    const s = plainText(t);
     return s.length > 140 ? s.slice(0, 140) + '…' : s;
   };
 
@@ -4248,7 +4256,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
                       {p && <div style={{color:C.text,fontSize:14,fontWeight:500}}>{p.name}</div>}
                       {n.important && <span style={{color:C.gold,fontSize:9,fontWeight:700,letterSpacing:'0.5px'}}>⚑</span>}
                     </div>
-                    <div style={{color:C.muted,fontSize:13,lineHeight:1.5,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{n.text}</div>
+                    <div style={{color:C.muted,fontSize:13,lineHeight:1.5,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{plainText(n.text)}</div>
                   </div>
                   <div style={{textAlign:'right',flexShrink:0}}>
                     <div style={{color:accent,fontSize:11,fontWeight:600,letterSpacing:'0.4px',textTransform:'uppercase'}}>

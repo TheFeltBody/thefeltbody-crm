@@ -1,7 +1,154 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { C, INTERACTION_KINDS, KIND_META, ORG_META, PAYMENT_STATUS, PERSON_ROLES, SOURCES } from "../lib/constants.js";
-import { addDays, fmt, initials, labelAbbrev, primaryRole, smartSortPeople, today, useIsMobile, useMobileUI, useTypes } from "../lib/helpers.jsx";
+import { addDays, fmt, initials, labelAbbrev, normaliseRich, primaryRole, smartSortPeople, today, useIsMobile, useMobileUI, useTypes } from "../lib/helpers.jsx";
 import { files as filesApi } from "../lib/dataLayer.js";
+
+// ─── RICH TEXT RENDERER ───────────────────────────────────────────────────────
+// Display-side only: turns the markdown-lite produced by normaliseRich() into
+// React elements. Never innerHTML — every node below is a real element, so
+// hostile markup in a pasted note has no path to execution. Untrusted email
+// HTML keeps going through the sandboxed iframe, NOT through here.
+//
+// Supported: paragraphs & hard line breaks, **bold**, *italic*, `code`,
+// - bullets, 1. numbered lists, # headings, > quotes, --- rules,
+// [label](url) and bare URLs. Everything else renders as literal text.
+
+const INLINE_RE = /\*\*([\s\S]+?)\*\*|__([\s\S]+?)__|\*([^*\n]+?)\*|`([^`\n]+?)`|\[([^\]\n]+)\]\(((?:https?:\/\/|mailto:)[^\s)]+)\)|(https?:\/\/[^\s<>()[\]]+)/g;
+
+// depth guard: **a *b* c** nests one level; anything pathological stops here.
+function renderInline(str, key, depth = 0) {
+  const src = String(str ?? '');
+  if (!src) return null;
+  if (depth > 3) return src;
+  const out = [];
+  let last = 0, m, i = 0;
+  // A FRESH regex per call — this function recurses into matched groups, and a
+  // shared /g literal would have its lastIndex clobbered by the inner call
+  // mid-loop, which spins forever on nested markers like **bold *italic***.
+  const re = new RegExp(INLINE_RE.source, 'g');
+  while ((m = re.exec(src)) !== null) {
+    if (m.index > last) out.push(src.slice(last, m.index));
+    const k = `${key}i${i++}`;
+    if (m[1] !== undefined || m[2] !== undefined) {
+      out.push(<strong key={k} style={{fontWeight:600}}>{renderInline(m[1] ?? m[2], k, depth+1)}</strong>);
+    } else if (m[3] !== undefined) {
+      out.push(<em key={k}>{renderInline(m[3], k, depth+1)}</em>);
+    } else if (m[4] !== undefined) {
+      out.push(<code key={k} style={{fontFamily:'ui-monospace,Menlo,Consolas,monospace',fontSize:'0.92em',background:C.card,border:`1px solid ${C.border}`,borderRadius:3,padding:'0 4px'}}>{m[4]}</code>);
+    } else if (m[5] !== undefined) {
+      out.push(<RichLink key={k} href={m[6]} label={m[5]} />);
+    } else if (m[7] !== undefined) {
+      out.push(<RichLink key={k} href={m[7]} label={m[7]} />);
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < src.length) out.push(src.slice(last));
+  return out.length === 1 ? out[0] : out;
+}
+
+// stopPropagation matters: notes render inside clickable cards, and following a
+// link shouldn't also fire the card's edit/open handler.
+const RichLink = ({ href, label }) => (
+  <a href={href} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()}
+    style={{color:C.gold,textDecoration:'underline',textUnderlineOffset:2,wordBreak:'break-word'}}>
+    {label}
+  </a>
+);
+
+function parseRichBlocks(src) {
+  const lines = String(src || '').split('\n');
+  const blocks = [];
+  let para = [];
+  const flush = () => { if (para.length) { blocks.push({t:'p', lines:para}); para = []; } };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) { flush(); continue; }
+    if (/^(-{3,}|_{3,}|\*{3,})$/.test(line)) { flush(); blocks.push({t:'hr'}); continue; }
+    const h = line.match(/^(#{1,6})\s+(.+)$/);
+    if (h) { flush(); blocks.push({t:'h', level:h[1].length, text:h[2]}); continue; }
+    const ul = line.match(/^[-*•]\s+(.*)$/);
+    if (ul) {
+      flush();
+      const items = [ul[1]];
+      while (i + 1 < lines.length) {
+        const n = lines[i+1].trim().match(/^[-*•]\s+(.*)$/);
+        if (!n) break;
+        items.push(n[1]); i++;
+      }
+      blocks.push({t:'ul', items});
+      continue;
+    }
+    const ol = line.match(/^(\d{1,3})[.)]\s+(.*)$/);
+    if (ol) {
+      flush();
+      const items = [ol[2]];
+      while (i + 1 < lines.length) {
+        const n = lines[i+1].trim().match(/^\d{1,3}[.)]\s+(.*)$/);
+        if (!n) break;
+        items.push(n[1]); i++;
+      }
+      blocks.push({t:'ol', start:parseInt(ol[1],10) || 1, items});
+      continue;
+    }
+    const bq = line.match(/^>\s?(.*)$/);
+    if (bq) {
+      flush();
+      const qs = [bq[1]];
+      while (i + 1 < lines.length) {
+        const n = lines[i+1].trim().match(/^>\s?(.*)$/);
+        if (!n) break;
+        qs.push(n[1]); i++;
+      }
+      blocks.push({t:'bq', lines:qs});
+      continue;
+    }
+    para.push(line);
+  }
+  flush();
+  return blocks;
+}
+
+// Single newlines inside one paragraph stay as hard breaks — a pasted address
+// block or a signature should keep its shape.
+const paraNodes = (ls, key) => ls.flatMap((l, j) => j === 0
+  ? [renderInline(l, `${key}l${j}`)]
+  : [<br key={`${key}br${j}`} />, renderInline(l, `${key}l${j}`)]);
+
+export function RichText({ text, style }) {
+  const blocks = useMemo(() => parseRichBlocks(normaliseRich(text)), [text]);
+  if (!blocks.length) return null;
+  return (
+    <div style={style}>
+      {blocks.map((b, i) => {
+        const key = `b${i}`;
+        const top = i === 0 ? 0 : 8;
+        if (b.t === 'hr') return <hr key={key} style={{border:'none',borderTop:`1px solid ${C.border}`,margin:'12px 0'}} />;
+        if (b.t === 'h') return (
+          <div key={key} style={{fontWeight:600,fontSize:b.level<=2?'1.1em':'1em',letterSpacing:'0.2px',marginTop:i===0?0:12,marginBottom:2}}>
+            {renderInline(b.text, key)}
+          </div>
+        );
+        if (b.t === 'ul' || b.t === 'ol') {
+          const Tag = b.t === 'ul' ? 'ul' : 'ol';
+          return (
+            <Tag key={key} start={b.t === 'ol' ? b.start : undefined}
+              style={{margin:`${top ? 6 : 0}px 0 0`,paddingLeft:22,listStyleType:b.t==='ul'?'disc':'decimal'}}>
+              {b.items.map((it, j) => (
+                <li key={`${key}li${j}`} style={{marginBottom:2}}>{renderInline(it, `${key}li${j}`)}</li>
+              ))}
+            </Tag>
+          );
+        }
+        if (b.t === 'bq') return (
+          <div key={key} style={{marginTop:top,paddingLeft:11,borderLeft:`2px solid ${C.border}`,opacity:0.85,fontStyle:'italic'}}>
+            {paraNodes(b.lines, key)}
+          </div>
+        );
+        return <div key={key} style={{marginTop:top}}>{paraNodes(b.lines, key)}</div>;
+      })}
+    </div>
+  );
+}
 
 // Paperclip chips for email attachments. Renders from raw_headers —
 // attachment_file_ids + attachment_names are stamped by BOTH workers on the
@@ -221,7 +368,7 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
           srcDoc={`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:;"><base target="_blank"><style>html,body{margin:0;padding:0;background:#fff;color:#111;font-family:sans-serif;font-size:14px;line-height:1.5;word-break:break-word}img{max-width:100%;height:auto}</style></head><body>${note.htmlBody}</body></html>`}
           style={{width:'100%',minHeight:400,border:`1px solid ${C.border}`,borderRadius:6,background:'#fff'}} />
       ) : note.text ? (
-        <div style={{color:textColor,fontSize:14,lineHeight:1.7,opacity:completed?0.75:1}}>{note.text}</div>
+        <RichText text={note.text} style={{color:textColor,fontSize:14,lineHeight:1.7,opacity:completed?0.75:1,wordBreak:'break-word'}} />
       ) : null}
       {!note.subject && !note.text && !(isEmail && note.htmlBody) && (
         <div style={{color:C.muted,fontSize:13,fontStyle:'italic',opacity:0.7}}>(no details)</div>
@@ -543,8 +690,12 @@ export const MobileTabBar = ({ tabs, active, onChange, topOffset=0 }) => (
 
 // ─── SEARCHABLE SELECT ────────────────────────────────────────────────────────
 
-export function SearchSelect({ people, onSelect, attendance, classes, contextSeriesId, existing=[] }) {
+// onQueryChange: the typed query is mirrored to the parent so a caller can carry
+// whatever was typed into a follow-on "add new contact" form. The parent owns no
+// input state — this stays the single source of truth.
+export function SearchSelect({ people, onSelect, attendance, classes, contextSeriesId, existing=[], onQueryChange }) {
   const [q, setQ] = useState('');
+  const setQuery = (v) => { setQ(v); onQueryChange && onQueryChange(v); };
   const inputRef = useRef(null);
   const sorted = useMemo(() => smartSortPeople(people.filter(p=>!existing.includes(p.id)), attendance, classes, contextSeriesId), [people, attendance, classes, contextSeriesId, existing]);
   const filtered = useMemo(() => {
@@ -553,11 +704,11 @@ export function SearchSelect({ people, onSelect, attendance, classes, contextSer
     return sorted.filter(p => p.name.toLowerCase().includes(lq) || (p.email||'').toLowerCase().includes(lq));
   }, [sorted, q]);
   useEffect(() => { setTimeout(()=>inputRef.current?.focus(), 50); }, []);
-  const clear = () => { setQ(''); inputRef.current?.focus(); };
+  const clear = () => { setQuery(''); inputRef.current?.focus(); };
   return (
     <div>
       <div style={{position:'relative',marginBottom:8}}>
-        <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by name or email..." style={{width:'100%',background:C.card,border:`1px solid ${C.gold}55`,borderRadius:6,color:C.text,fontSize:14,padding:'9px 34px 9px 12px',fontFamily:"'Jost',sans-serif",boxSizing:'border-box'}} />
+        <input ref={inputRef} value={q} onChange={e=>setQuery(e.target.value)} placeholder="Search by name or email..." style={{width:'100%',background:C.card,border:`1px solid ${C.gold}55`,borderRadius:6,color:C.text,fontSize:14,padding:'9px 34px 9px 12px',fontFamily:"'Jost',sans-serif",boxSizing:'border-box'}} />
         {q!=='' && (
           <button onClick={clear} title="Clear" aria-label="Clear search"
             style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:18,lineHeight:1,padding:'2px 6px',fontFamily:"'Jost',sans-serif"}}
