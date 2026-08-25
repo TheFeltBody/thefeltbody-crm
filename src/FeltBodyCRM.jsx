@@ -1489,7 +1489,10 @@ export default function FeltBodyCRM() {
         onAddProject={addProject} onSetStatus={setProjectStatus} />;
       case 'project_detail': {
         const project = projects.find(p => p.id === view.projectId); if(!project) return <Empty text="Not found" />;
-        return <ProjectDetail project={project} notes={notes} people={people} nav={nav} backInfo={backInfo}
+        return <ProjectDetail project={project} notes={notes} people={people} files={files} nav={nav} backInfo={backInfo}
+          onUploadFile={uploadFile}
+          onGetFileUrl={getFileUrl}
+          onRemoveFile={removeFile}
           onAddTodo={addNote}
           onCompleteNote={clearNoteAction}
           onReopenNote={reopenNote}

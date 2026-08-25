@@ -5,8 +5,13 @@ import { Avatar, Btn, ConfirmBtn, Empty, FI, KindBadge, MobileTabBar, Modal, Not
 import { AddPersonForm, NoteForm, SendEmailModal } from "./forms.jsx";
 import { ClassLog } from "./views.jsx";
 
-export function ProjectDetail({ project, notes, people, nav, backInfo,
-  onAddTodo, onCompleteNote, onReopenNote, onDeleteNote, onUpdateActionDate, onUpdateNoteText, onSetStatus, onUpdateProject }) {
+// Does this files row hold a picture? Drives thumbnail-vs-chip rendering on a
+// to-do. Anything non-image still attaches fine, it just shows as a filename.
+const isImageFile = (f) => (f?.mimeType || '').startsWith('image/');
+
+export function ProjectDetail({ project, notes, people, files = [], nav, backInfo,
+  onAddTodo, onCompleteNote, onReopenNote, onDeleteNote, onUpdateActionDate, onUpdateNoteText, onSetStatus, onUpdateProject,
+  onUploadFile, onGetFileUrl, onRemoveFile }) {
   const isMobile = useIsMobile();
   const [newTodo, setNewTodo] = useState('');
   const [newDate, setNewDate] = useState('');
@@ -49,6 +54,142 @@ export function ProjectDetail({ project, notes, people, nav, backInfo,
     .sort((a,b) => (a.actionDate||'9999').localeCompare(b.actionDate||'9999'));
   const doneTodos = todos.filter(t => t.completed)
     .sort((a,b) => (b.completedAt||b.date||'').localeCompare(a.completedAt||a.date||''));
+
+  // ─── To-do attachments ─────────────────────────────────────────────────────
+  // Project to-dos ARE interactions, so an image attaches via the existing
+  // files.interaction_id anchor — no schema change. State lives HERE, not in
+  // TodoRow: TodoRow is defined inside this render and gets a fresh identity
+  // every parent render, so any state it held would be dropped mid-upload.
+  //
+  // One hidden <input type="file"> is shared by every row (N inputs would be
+  // remounted constantly); attachTargetRef carries which to-do the picker was
+  // opened for. It's a ref, not state, so the onChange handler can't read a
+  // stale value.
+  const [uploadErr, setUploadErr] = useState('');
+  const [uploadingId, setUploadingId] = useState(null);
+  const [urls, setUrls] = useState({});          // fileId -> signed / blob URL
+  const [lightbox, setLightbox] = useState(null); // the file row being viewed
+  const attachInputRef = useRef(null);
+  const attachTargetRef = useRef(null);
+  // Ids we've already asked for a URL for — success or failure. Without this
+  // the minting effect would retry a failed file on every render.
+  const urlAttempted = useRef(new Set());
+
+  // files rows anchored to any to-do in THIS project, grouped by to-do id.
+  const attachments = useMemo(() => {
+    const ids = new Set(todos.map(t => t.id));
+    const byTodo = {};
+    for (const f of files) {
+      if (f.interactionId && ids.has(f.interactionId)) {
+        (byTodo[f.interactionId] = byTodo[f.interactionId] || []).push(f);
+      }
+    }
+    return byTodo;
+  }, [files, todos]);
+
+  // Mint a viewing URL per attachment. The bucket is private, so thumbnails
+  // can't just point at a path — signedUrl gives a 1-hour https URL for
+  // supabase-store rows (a blob: URL for r2 ones). Sequential, best-effort:
+  // one failure leaves that thumbnail as a placeholder glyph, nothing more.
+  useEffect(() => {
+    if (!onGetFileUrl) return;
+    const wanted = [];
+    for (const list of Object.values(attachments)) {
+      for (const f of list) {
+        if (!urlAttempted.current.has(f.id)) { urlAttempted.current.add(f.id); wanted.push(f); }
+      }
+    }
+    if (!wanted.length) return;
+    let cancelled = false;
+    (async () => {
+      for (const f of wanted) {
+        try {
+          const u = await onGetFileUrl(f);
+          if (cancelled) return;
+          setUrls(prev => ({ ...prev, [f.id]: u }));
+        } catch { /* thumbnail falls back to a placeholder */ }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [attachments, onGetFileUrl]);
+
+  // Drop the URL cache when we navigate to a different project, revoking any
+  // blob: URLs so they don't leak for the life of the page.
+  useEffect(() => () => {
+    setUrls(prev => {
+      Object.values(prev).forEach(u => { if (typeof u === 'string' && u.startsWith('blob:')) URL.revokeObjectURL(u); });
+      return {};
+    });
+    urlAttempted.current = new Set();
+  }, [project.id]);
+
+  const pickImage = (todoId) => {
+    setUploadErr('');
+    attachTargetRef.current = todoId;
+    if (attachInputRef.current) {
+      attachInputRef.current.value = '';   // so re-picking the same file fires
+      attachInputRef.current.click();
+    }
+  };
+
+  const onAttachChange = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    const todoId = attachTargetRef.current;
+    e.target.value = '';
+    if (!file || !todoId || !onUploadFile) return;
+    setUploadingId(todoId);
+    setUploadErr('');
+    try {
+      // onUploadFile splices the saved row into the parent's files state, which
+      // comes straight back down as the `files` prop — no local bookkeeping.
+      await onUploadFile(file, { interactionId: todoId }, '');
+    } catch (err) {
+      setUploadErr(err?.message || 'Upload failed.');
+    } finally {
+      setUploadingId(null);
+      attachTargetRef.current = null;
+    }
+  };
+
+  const forgetUrl = (fileId) => {
+    setUrls(prev => {
+      const next = { ...prev };
+      const u = next[fileId];
+      if (typeof u === 'string' && u.startsWith('blob:')) URL.revokeObjectURL(u);
+      delete next[fileId];
+      return next;
+    });
+    urlAttempted.current.delete(fileId);
+  };
+
+  const openAttachment = async (f) => {
+    setLightbox(f);
+    if (!urls[f.id] && onGetFileUrl) {
+      try {
+        const u = await onGetFileUrl(f);
+        setUrls(prev => ({ ...prev, [f.id]: u }));
+      } catch (err) { setUploadErr(err?.message || 'Could not open that file.'); }
+    }
+  };
+
+  const removeAttachment = async (f) => {
+    setLightbox(null);
+    forgetUrl(f.id);
+    try { await onRemoveFile(f); }
+    catch (err) { setUploadErr(err?.message || 'Could not remove that image.'); }
+  };
+
+  // Deleting a to-do soft-deletes the interaction, which would leave its
+  // images anchored to a row nothing can reach — so we purge them first.
+  // Best-effort: a failed image removal must not block the to-do delete.
+  const deleteTodo = async (t) => {
+    const attached = attachments[t.id] || [];
+    for (const f of attached) {
+      forgetUrl(f.id);
+      try { await onRemoveFile(f); } catch { /* orphan tolerated over a stuck delete */ }
+    }
+    onDeleteNote(t.id);
+  };
 
   const [justAdded, setJustAdded] = useState(false);
   const addTodo = async () => {
@@ -169,11 +310,47 @@ export function ProjectDetail({ project, notes, people, nav, backInfo,
                 ◉ {person.name}
               </span>
             )}
+            {!t.completed && onUploadFile && (
+              <span onClick={()=>uploadingId===t.id ? null : pickImage(t.id)}
+                title="Attach an image"
+                style={{color:uploadingId===t.id?C.gold:C.muted, fontSize:11, cursor:uploadingId===t.id?'default':'pointer', opacity:uploadingId===t.id?1:0.65}}>
+                {uploadingId===t.id ? 'Uploading…' : '+ image'}
+              </span>
+            )}
           </div>
+
+          {/* Attachments. Images render as tappable thumbnails; anything else
+              falls back to a filename chip. Both open the same viewer. */}
+          {(attachments[t.id] || []).length > 0 && (
+            <div style={{display:'flex', gap:6, flexWrap:'wrap', marginTop:8}}>
+              {attachments[t.id].map(f => isImageFile(f) ? (
+                <div key={f.id} onClick={()=>openAttachment(f)} title={f.filename}
+                  style={{
+                    width:56, height:56, flexShrink:0, borderRadius:6, overflow:'hidden',
+                    border:`1px solid ${C.border}`, background:C.surf, cursor:'pointer',
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                  }}>
+                  {urls[f.id]
+                    ? <img src={urls[f.id]} alt={f.filename}
+                        style={{width:'100%', height:'100%', objectFit:'cover', display:'block'}} />
+                    : <span style={{color:C.muted, fontSize:15, opacity:0.7}}>🖼</span>}
+                </div>
+              ) : (
+                <span key={f.id} onClick={()=>openAttachment(f)} title={f.filename}
+                  style={{
+                    color:C.muted, fontSize:11, cursor:'pointer', border:`1px solid ${C.border}`,
+                    borderRadius:10, padding:'2px 8px', maxWidth:200, overflow:'hidden',
+                    textOverflow:'ellipsis', whiteSpace:'nowrap',
+                  }}>
+                  📎 {f.filename}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <div style={{flexShrink:0}}>
           <ConfirmBtn idleLabel="✕" armedLabel="Delete" variant="danger" small
-            title="Delete to-do" onConfirm={()=>onDeleteNote(t.id)} />
+            title="Delete to-do" onConfirm={()=>deleteTodo(t)} />
         </div>
       </div>
     );
@@ -212,6 +389,13 @@ export function ProjectDetail({ project, notes, people, nav, backInfo,
           </span>
         )}
       </PageHead>
+
+      {uploadErr && (
+        <div onClick={()=>setUploadErr('')} title="Dismiss"
+          style={{background:'#2a1313', border:`1px solid ${C.red}44`, color:C.red, borderRadius:6, padding:'8px 12px', fontSize:12, marginBottom:14, cursor:'pointer'}}>
+          {uploadErr}
+        </div>
+      )}
 
       {/* Add a to-do */}
       {!isDone && (
@@ -267,6 +451,35 @@ export function ProjectDetail({ project, notes, people, nav, backInfo,
           rows={5} placeholder="Anything worth keeping about this project…"
           style={{...inputStyle, width:'100%', resize:'vertical', lineHeight:1.6}} />
       </div>
+
+      {/* One picker for every row — see attachTargetRef above. accept="image/*"
+          gives camera + photo library on iOS, which is where most of these
+          will come from. */}
+      <input ref={attachInputRef} type="file" accept="image/*"
+        onChange={onAttachChange} style={{display:'none'}} />
+
+      {lightbox && (
+        <Modal wide title={lightbox.filename || 'Attachment'} onClose={()=>setLightbox(null)}>
+          {isImageFile(lightbox) && urls[lightbox.id] ? (
+            <img src={urls[lightbox.id]} alt={lightbox.filename}
+              style={{maxWidth:'100%', maxHeight:'60vh', display:'block', margin:'0 auto', borderRadius:6}} />
+          ) : urls[lightbox.id] ? (
+            <div style={{color:C.muted, fontSize:13, textAlign:'center', padding:'18px 0'}}>
+              <a href={urls[lightbox.id]} target="_blank" rel="noreferrer"
+                style={{color:C.gold}}>Open {lightbox.filename}</a>
+            </div>
+          ) : (
+            <div style={{color:C.muted, fontSize:13, textAlign:'center', padding:'18px 0'}}>Loading…</div>
+          )}
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:16, gap:10}}>
+            <span style={{color:C.muted, fontSize:11}}>
+              {lightbox.sizeBytes ? `${(lightbox.sizeBytes/1048576).toFixed(1)} MB` : ''}
+            </span>
+            <ConfirmBtn idleLabel="Remove" armedLabel="Delete image" variant="danger" small
+              title="Remove this image" onConfirm={()=>removeAttachment(lightbox)} />
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
