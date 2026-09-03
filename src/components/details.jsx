@@ -2624,7 +2624,7 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
 
 // ─── CLASSES LIST / DETAIL ────────────────────────────────────────────────────
 
-export function ClassDetail({ cls, org, people, attendance, notes, series, forms, packages, nav, backInfo, onToggle, onAddNote, onAddToRegister, onEdit, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onUpdateClass, onSetPayment, onDeleteClass, onRemoveFromRegister }) {
+export function ClassDetail({ cls, org, people, attendance, notes, series, forms, readings = [], packages, nav, backInfo, onToggle, onAddNote, onAddToRegister, onEdit, onToggleImportant, onClearAction, onReopenNote, onDeleteNote, onUpdateActionDate, onUpdateClass, onSetPayment, onDeleteClass, onRemoveFromRegister }) {
   const isMobile = useIsMobile();  const [expanded, setExpanded] = useState(null); // { type:'note'|'payment', personId }
   // Privacy mode for in-class teaching: by default we hide rates and payment amounts so
   // a client glancing at the screen doesn't see what we charge. Toggle in the header.
@@ -2703,7 +2703,7 @@ export function ClassDetail({ cls, org, people, attendance, notes, series, forms
         </div>
       )}
 
-      <ClassLog cls={cls} forms={forms} onUpdateClass={onUpdateClass} nav={nav} />
+      <ClassLog cls={cls} forms={forms} readings={readings} onUpdateClass={onUpdateClass} nav={nav} />
 
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
         <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:21,color:C.text,fontWeight:600}}>Register <span style={{color:C.muted,fontSize:16,fontWeight:400}}>({reg.filter(r=>r.attended).length}/{reg.length} attended)</span></div>

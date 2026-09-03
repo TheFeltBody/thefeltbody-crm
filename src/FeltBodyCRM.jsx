@@ -5,7 +5,7 @@ import { C, ORG_META, PERSON_ROLES, SEED, SELF_PERSON_ID, applyTheme } from "./l
 import { MobileUIContext, TypesContext, addDays, buildOrgTypes, buildPersonRoles, fmt, generateSeriesClasses, isWebEvent, today, uid, useLocalStorage } from "./lib/helpers.jsx";
 import { Empty } from "./components/primitives.jsx";
 import { AddClassForm, AddOrgForm, AddPackageForm, AddPersonForm, AddToRegisterForm, AddTypeForm, BookForPersonForm, CreateInvoiceForm, DiaryModal, EditNoteForm, EditPackageForm, EditSeriesClassForm, EmailTemplateForm, MergePeopleForm, PackageTemplateForm, PickPersonModal } from "./components/forms.jsx";
-import { BirthdaysView, ClassList, Dashboard, EmailTemplatesView, FormDetail, FormsList, FourWeekView, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackagesView, PackageTemplatesView, PaymentsView, PeopleList, PersonalDashboard, ProjectsView, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
+import { BirthdaysView, ClassList, Dashboard, EmailTemplatesView, FormDetail, FormsList, FourWeekView, HouseholdsList, InboxView, InvoiceDetail, InvoiceList, MonthView, OrgList, PackagesView, PackageTemplatesView, PaymentsView, PeopleList, PersonalDashboard, ProjectsView, ReadingDetail, ReadingsList, RecentActivityView, Sidebar, ThreadsView, WebActivityView, WeekView } from "./components/views.jsx";
 import { ClassDetail, HouseholdModal, OrgDetail, PersonDetail, ProjectDetail } from "./components/details.jsx";
 import { CareHomeResourcesView, DocumentsView } from "./components/documents.jsx";
 
@@ -86,6 +86,9 @@ export default function FeltBodyCRM() {
   // org, often lifted out of an email thread. Read into state on load; mutated
   // by the Threads "Save links" action and (later) a PersonDetail links tab.
   const [links, setLinks] = useState([]);
+  // Readings: quotes, relaxation scripts, nidras, poems, jokes. Class material
+  // and personal reading both, so it is NOT gated on mode.
+  const [readings, setReadings] = useState([]);
   // Mobile nav state (Phase 1: basic hamburger button + modal nav for small screens)
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   // Mobile accordion expand/contract toggle, persisted per-device so the user's
@@ -140,6 +143,7 @@ export default function FeltBodyCRM() {
         setFiles(all.files || []);
         setPracticeLogs(all.practiceLogs || []);
         setLinks(all.links || []);
+        setReadings(all.readings || []);
         setLoadStatus('ready');
       } catch (e) {
         if (cancelled) return;
@@ -339,6 +343,12 @@ export default function FeltBodyCRM() {
       case 'week_view': label = 'Week View'; break;
       case 'month_view': label = 'Month View'; break;
       case 'forms_list': label = 'Forms'; break;
+      case 'readings': label = 'Readings'; break;
+      case 'reading_detail': {
+        const rd = readings.find(r => r.id === prev.readingId);
+        label = rd ? (rd.title || 'Reading') : 'Reading';
+        break;
+      }
       case 'form_detail': {
         const fm = forms.find(f => f.id === prev.formId);
         label = fm ? fm.name : 'Form';
@@ -920,6 +930,24 @@ export default function FeltBodyCRM() {
     data.forms.reorder(next).catch(onError('Reorder forms'));
   };
 
+  // ── Readings
+  // addReading awaits the saved row for a real UUID before splicing (the list
+  // navigates by id). patchReading is optimistic-local then fire-and-forget:
+  // a favourite toggle or a body save should feel instant, and the patch mapper
+  // writes only the touched columns so a concurrent edit from the other machine
+  // survives. Soft-delete, so a mistap is recoverable in SQL.
+  const addReading = (r) => data.readings.create(r)
+    .then(saved => { setReadings(p => [saved, ...p]); return saved; })
+    .catch(onError('Add reading'));
+  const patchReading = (id, fields) => {
+    setReadings(p => p.map(r => r.id === id ? { ...r, ...fields } : r));
+    data.readings.patch(id, fields).catch(onError('Update reading'));
+  };
+  const deleteReading = (id) => {
+    setReadings(p => p.filter(r => r.id !== id));
+    data.readings.delete(id).catch(onError('Delete reading'));
+  };
+
   // ── Attendance
   const toggleAtt = (classId, personId) => {
     const ex = attendance.find(a => a.classId === classId && a.personId === personId);
@@ -1452,7 +1480,7 @@ export default function FeltBodyCRM() {
 
 
   const renderView = () => {
-    const { name, orgId, orgType, personType, personId, classId, formId, invoiceId, highlightNoteId } = view;
+    const { name, orgId, orgType, personType, personId, classId, formId, readingId, invoiceId, highlightNoteId } = view;
     switch(name){
       case 'dashboard':
         if (mode === 'personal') return <PersonalDashboard people={people} orgs={orgs} classes={classes}
@@ -1589,6 +1617,13 @@ export default function FeltBodyCRM() {
         onAddDiary={(date,time)=>setModal({type:'add_diary', date, time, personal: mode==='personal'})}
         onEditDiary={(entry)=>setModal({type:'add_diary', entry})} />;
       case 'forms_list': return <FormsList forms={forms} classes={classes} nav={nav} onAdd={addForm} onUpdate={updateForm} onRemove={removeForm} onMove={moveForm} />;
+      case 'readings': return <ReadingsList readings={readings} classes={classes} nav={nav}
+        onAdd={addReading} onPatch={patchReading} onDelete={deleteReading} />;
+      case 'reading_detail': {
+        const rd=readings.find(r=>r.id===readingId); if(!rd) return <Empty text="Reading not found" />;
+        return <ReadingDetail reading={rd} classes={classes} nav={nav} backInfo={backInfo}
+          onPatch={patchReading} onDelete={deleteReading} />;
+      }
       case 'form_detail': {
         const form=forms.find(f=>f.id===formId); if(!form) return <Empty text="Form not found" />;
         return <FormDetail form={form} classes={classes} nav={nav} backInfo={backInfo}
@@ -1597,7 +1632,7 @@ export default function FeltBodyCRM() {
       case 'class_detail': {
         const cls=classes.find(c=>c.id===classId); if(!cls) return <Empty text="Not found" />;
         const org=orgs.find(o=>o.id===cls.orgId);
-        return <ClassDetail cls={cls} org={org} people={people} attendance={attendance} notes={notes} series={series} forms={forms} packages={packages} nav={nav} backInfo={backInfo}
+        return <ClassDetail cls={cls} org={org} people={people} attendance={attendance} notes={notes} series={series} forms={forms} readings={readings} packages={packages} nav={nav} backInfo={backInfo}
           onToggle={toggleAtt} onAddNote={addNote}
           onToggleImportant={toggleNoteImportant}
           onClearAction={clearNoteAction}

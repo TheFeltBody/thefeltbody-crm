@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BANK_DETAILS, C, CARE_HOME_STAGES, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, calKeys, calLabel, calStripeStyle, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, RECURRENCE, RELATIONSHIP_LABELS, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
+import { BANK_DETAILS, C, CARE_HOME_STAGES, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, calKeys, calLabel, calStripeStyle, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, READING_KINDS, RECURRENCE, RELATIONSHIP_LABELS, readingKind, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
 import { addDays, birthdayInfo, buildInvoicePdfFile, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, deriveReplyAllRecipients, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, plainText, primaryRole, PrintInvoiceOverlay, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
 import { AttachmentChips, Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RichText, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
@@ -366,6 +366,11 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
 
       {/* Bottom section — ordered top-to-bottom per spec. Documents moved here
           from the top group. */}
+      {/* Readings — quotes, scripts, nidras, poems, jokes. Rendered in BOTH
+          modes, unlike everything else down here: it is class material and
+          personal reading at the same time, so gating it on business mode
+          would hide it exactly when you want it for yourself. */}
+      <Item name="readings" label="Readings" icon="❝" />
       {!isPersonal && <Item name="email_templates" label="Email Templates" icon="✉" />}
       {!isPersonal && <Item name="package_templates" label="Package Templates" icon="❒" />}
       {!isPersonal && <Item name="documents" label="Documents" icon="📎" />}
@@ -4574,9 +4579,14 @@ export function MonthView({ classes, orgs, notes, people=[], contactDates=[], na
 
 // ─── PAYMENT EDITOR ───────────────────────────────────────────────────────────
 
-export function ClassLog({ cls, forms, onUpdateClass, nav }) {
+export function ClassLog({ cls, forms, readings = [], onUpdateClass, nav }) {
   const isMobile = useIsMobile();
   const worked = cls.formsWorked || [];
+  // Readings tagged to this class — same jsonb-array-of-ids shape as
+  // formsWorked. readerId opens the full-screen reader in place, so you can
+  // stand in front of the class with this page open and read straight off it.
+  const readingsUsed = cls.readingsUsed || [];
+  const [readerId, setReaderId] = useState(null);
   const reflection = cls.reflection || '';
   const [draftReflection, setDraftReflection] = useState(reflection);
   const [editing, setEditing] = useState(false);
@@ -4593,6 +4603,10 @@ export function ClassLog({ cls, forms, onUpdateClass, nav }) {
   const toggle = (formId) => {
     const next = worked.includes(formId) ? worked.filter(x=>x!==formId) : [...worked,formId];
     onUpdateClass(cls.id, { formsWorked: next });
+  };
+  const toggleReading = (id) => {
+    const next = readingsUsed.includes(id) ? readingsUsed.filter(x=>x!==id) : [...readingsUsed,id];
+    onUpdateClass(cls.id, { readingsUsed: next });
   };
   const saveReflection = () => {
     onUpdateClass(cls.id, { reflection: draftReflection.trim() });
@@ -4612,10 +4626,12 @@ export function ClassLog({ cls, forms, onUpdateClass, nav }) {
           <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,color:C.gold,fontWeight:600}}>Session log</div>
         </div>
         {savedFlash ? <div style={{color:C.green,fontSize:11,letterSpacing:'1px'}}>✓ SAVED</div>
-          : collapsed && (worked.length || reflection) ? (
+          : collapsed && (worked.length || readingsUsed.length || reflection) ? (
             <div style={{color:C.muted,fontSize:11,letterSpacing:'0.3px'}}>
               {worked.length ? `${worked.length} form${worked.length===1?'':'s'}` : ''}
-              {worked.length && reflection ? ' · ' : ''}
+              {worked.length && readingsUsed.length ? ' · ' : ''}
+              {readingsUsed.length ? `${readingsUsed.length} reading${readingsUsed.length===1?'':'s'}` : ''}
+              {(worked.length || readingsUsed.length) && reflection ? ' · ' : ''}
               {reflection ? 'reflection ✓' : ''}
             </div>
           ) : null}
@@ -4639,6 +4655,40 @@ export function ClassLog({ cls, forms, onUpdateClass, nav }) {
       ) : (
         <div style={{color:C.muted,fontSize:13,marginBottom:18,fontStyle:'italic'}}>
           No forms defined yet. <span style={{color:C.gold,cursor:'pointer'}} onClick={()=>nav('forms_list')}>Add forms →</span>
+        </div>
+      )}
+
+      <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:9}}>READING</div>
+      {readings.length ? (
+        <div style={{display:'flex',flexWrap:'wrap',gap:7,marginBottom:18}}>
+          {readings.map(r=>{
+            const on = readingsUsed.includes(r.id);
+            const meta = readingKind(r.kind);
+            const label = r.title || (r.body||'').replace(/\s+/g,' ').trim().slice(0,32) || meta.label;
+            return (
+              <span key={r.id}
+                style={{display:'inline-flex',alignItems:'center',background:on?C.goldBg:C.surf,border:`1px solid ${on?C.gold:C.border}`,borderRadius:20,overflow:'hidden'}}>
+                {/* Two hit areas in one pill: the label toggles whether this
+                    reading is logged against the class, the ▷ opens it to read
+                    right now. Splitting them means opening the reader mid-class
+                    can't accidentally untag the session log. */}
+                <button onClick={()=>toggleReading(r.id)}
+                  style={{background:'none',border:'none',color:on?C.gold:C.muted,cursor:'pointer',fontSize:12,fontWeight:500,padding:'5px 4px 5px 13px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',display:'inline-flex',alignItems:'center',gap:6}}>
+                  <span style={{fontSize:10,opacity:on?1:0.5}}>{on?'●':'○'}</span>
+                  <span style={{color:meta.color,fontSize:11}}>{meta.icon}</span>
+                  {label}
+                </button>
+                <button onClick={()=>setReaderId(r.id)} title="Read full screen"
+                  style={{background:'none',border:'none',borderLeft:`1px solid ${on?C.gold+'55':C.border}`,color:on?C.gold:C.muted,cursor:'pointer',fontSize:11,padding:'5px 11px',fontFamily:"'Jost',sans-serif"}}>
+                  ▷
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      ) : (
+        <div style={{color:C.muted,fontSize:13,marginBottom:18,fontStyle:'italic'}}>
+          No readings saved yet. <span style={{color:C.gold,cursor:'pointer'}} onClick={()=>nav('readings')}>Add readings →</span>
         </div>
       )}
 
@@ -4675,6 +4725,13 @@ export function ClassLog({ cls, forms, onUpdateClass, nav }) {
         </div>
       )}
       </>)}
+
+      {/* Outside the collapse: with the log collapsed on mobile you can still
+          have a reader open from a tap a moment earlier. */}
+      {readerId && (()=>{
+        const r = readings.find(x=>x.id===readerId);
+        return r ? <ReadingReader reading={r} onClose={()=>setReaderId(null)} /> : null;
+      })()}
     </div>
   );
 }
@@ -4881,6 +4938,504 @@ export function FormDetail({ form, classes, nav, backInfo, onUpdateClass }) {
         ) : filter === 'reflection' ? (
           <Empty text="No reflections recorded yet for this form." action="Show all classes" onAction={() => setFilter('all')} />
         ) : null}
+    </div>
+  );
+}
+
+// ─── READING READER (full-screen reading overlay) ─────────────────────────────
+// The whole point of the feature: something you can hold up and read aloud in a
+// dim room at the end of class without squinting or the screen dimming on you.
+//
+// Not a route, deliberately — it's an overlay owned by whichever component
+// opened it, so closing it always returns you exactly where you were (a card in
+// the list, a class page) with scroll position intact.
+//
+// Three controls, all sticky at the top so they're reachable one-handed:
+//   A− / A+   font size, 16–72px, remembered across sessions
+//   ☀ / ☾     paper mode — a warm light page, for reading in a bright room or
+//             if the dark theme is hard on your eyes at size
+//   ✕         close (Escape also works on desktop)
+//
+// Wake lock keeps the screen on while it's open. It's best-effort: the API
+// needs https and isn't in every browser, so a failure is swallowed rather than
+// shown. It's re-acquired on visibilitychange because the OS drops the lock
+// whenever the tab is backgrounded (a notification, a lock-screen tap) and it
+// does NOT come back by itself.
+export function ReadingReader({ reading, onClose }) {
+  const isMobile = useIsMobile();
+  const [size, setSize] = useLocalStorage('fbc.reader.size', isMobile ? 26 : 34);
+  const [paper, setPaper] = useLocalStorage('fbc.reader.paper', false);
+
+  // Paper mode uses fixed values, not C tokens — it has to look the same in
+  // business (dark) and personal (light) mode, since it's about the room you're
+  // reading in, not which lens the CRM is wearing.
+  const bg     = paper ? '#f3ede1' : C.bg;
+  const fg     = paper ? '#241f18' : C.text;
+  const dim    = paper ? '#7a6f60' : C.muted;
+  const stroke = paper ? '#d6cbb8' : C.border;
+
+  // Screen wake lock — best effort, silent on failure.
+  useEffect(() => {
+    let lock = null;
+    let dead = false;
+    const acquire = async () => {
+      try {
+        if (!('wakeLock' in navigator)) return;
+        lock = await navigator.wakeLock.request('screen');
+      } catch { /* denied, unsupported, or not https — read on regardless */ }
+    };
+    acquire();
+    const onVis = () => { if (document.visibilityState === 'visible' && !dead) acquire(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      dead = true;
+      document.removeEventListener('visibilitychange', onVis);
+      try { lock && lock.release(); } catch {}
+    };
+  }, []);
+
+  // Lock the page behind the overlay so a scroll gesture can't drag the CRM
+  // around underneath, and wire Escape.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+
+  const bump = (d) => setSize(s => Math.min(72, Math.max(16, s + d)));
+  const meta = readingKind(reading.kind);
+
+  const ctrl = {
+    background: 'transparent', border: `1px solid ${stroke}`, color: dim,
+    cursor: 'pointer', borderRadius: 6, fontSize: 13, lineHeight: 1,
+    padding: '7px 11px', fontFamily: "'Jost',sans-serif", minWidth: 38,
+  };
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 9999, background: bg,
+      overflowY: 'auto', WebkitOverflowScrolling: 'touch',
+    }}>
+      <div style={{
+        position: 'sticky', top: 0, zIndex: 2, background: bg,
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+        gap: 7, padding: '10px 12px', borderBottom: `1px solid ${stroke}`,
+      }}>
+        <div style={{ flex: 1, minWidth: 0, color: dim, fontSize: 11, letterSpacing: '0.6px',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {meta.icon} {meta.label.toUpperCase()}
+        </div>
+        <button onClick={() => bump(-2)} style={ctrl} title="Smaller">A−</button>
+        <button onClick={() => bump(2)} style={ctrl} title="Bigger">A+</button>
+        <button onClick={() => setPaper(p => !p)} style={ctrl}
+          title={paper ? 'Dark' : 'Paper'}>{paper ? '☾' : '☀'}</button>
+        <button onClick={onClose} style={{ ...ctrl, color: fg }} title="Close (Esc)">✕</button>
+      </div>
+
+      {/* Bottom padding is generous on purpose — the last line of a nidra should
+          be liftable to the middle of the screen, not stuck at the very bottom
+          edge where your thumb covers it. */}
+      <div style={{
+        maxWidth: 30 * size, margin: '0 auto',
+        padding: isMobile ? '26px 20px 45vh' : '44px 40px 45vh',
+      }}>
+        {reading.title && (
+          <div style={{
+            color: dim, fontFamily: "'Jost',sans-serif",
+            fontSize: Math.max(11, Math.round(size * 0.42)),
+            letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 22,
+          }}>
+            {reading.title}
+          </div>
+        )}
+
+        {/* pre-wrap, never markdown-parsed: a poem's line breaks and an asterisk
+            in a joke both have to survive exactly as typed. */}
+        <div style={{
+          color: fg, fontFamily: "'Cormorant Garamond',serif",
+          fontSize: size, lineHeight: 1.55, whiteSpace: 'pre-wrap',
+        }}>
+          {reading.body}
+        </div>
+
+        {reading.source && (
+          <div style={{
+            color: dim, fontFamily: "'Cormorant Garamond',serif",
+            fontSize: Math.round(size * 0.62), fontStyle: 'italic', marginTop: 26,
+          }}>
+            — {reading.source}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── READINGS LIST ────────────────────────────────────────────────────────────
+// Tap the card body to read it; the buttons on the right are for managing it.
+// That ordering is deliberate — reading is the thing you do fifty times, editing
+// is the thing you do once.
+
+export function ReadingsList({ readings = [], classes = [], nav, onAdd, onPatch, onDelete }) {
+  const isMobile = useIsMobile();
+  const [q, setQ] = useState('');
+  const [kind, setKind] = useState('all');
+  const [tag, setTag] = useState(null);
+  const [favesOnly, setFavesOnly] = useState(false);
+  const [readerId, setReaderId] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ kind: 'quote', title: '', source: '', body: '', tags: '' });
+
+  const usageCount = (id) => classes.filter(c => (c.readingsUsed || []).includes(id)).length;
+
+  // Every tag actually in use, alphabetical. No tag admin screen — a tag exists
+  // because something is tagged with it, and stops existing when nothing is.
+  const allTags = useMemo(() => {
+    const s = new Set();
+    readings.forEach(r => (r.tags || []).forEach(t => s.add(t)));
+    return [...s].sort();
+  }, [readings]);
+
+  const visible = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return readings.filter(r => {
+      if (kind !== 'all' && r.kind !== kind) return false;
+      if (tag && !(r.tags || []).includes(tag)) return false;
+      if (favesOnly && !r.favourite) return false;
+      if (!needle) return true;
+      return [r.title, r.source, r.body, ...(r.tags || [])]
+        .join(' ').toLowerCase().includes(needle);
+    });
+  }, [readings, q, kind, tag, favesOnly]);
+
+  // Only offer a kind chip if something is actually filed under it.
+  const kindChips = useMemo(() => {
+    const counts = {};
+    readings.forEach(r => { counts[r.kind] = (counts[r.kind] || 0) + 1; });
+    return Object.keys(READING_KINDS)
+      .filter(k => counts[k])
+      .map(k => ({ key: k, label: READING_KINDS[k].label, count: counts[k] }));
+  }, [readings]);
+
+  const resetDraft = () => setDraft({ kind: 'quote', title: '', source: '', body: '', tags: '' });
+  const saveNew = () => {
+    if (!draft.body.trim() && !draft.title.trim()) return;
+    onAdd({
+      kind: draft.kind,
+      title: draft.title,
+      source: draft.source,
+      body: draft.body,
+      tags: draft.tags.split(',').map(t => t.trim()).filter(Boolean),
+    });
+    resetDraft();
+    setAdding(false);
+  };
+
+  const reader = readerId && readings.find(r => r.id === readerId);
+
+  const inputStyle = {
+    width: '100%', background: C.surf, border: `1px solid ${C.border}`, borderRadius: 6,
+    color: C.text, fontSize: isMobile ? 16 : 14, padding: '9px 12px',
+    fontFamily: "'Jost',sans-serif", outline: 'none', boxSizing: 'border-box',
+  };
+
+  return (
+    <div style={{ padding: isMobile ? '12px 12px 24px' : '32px 36px', maxWidth: 820 }}>
+      <PageHead action={!adding && <Btn small={isMobile} onClick={() => setAdding(true)}>+ {isMobile ? 'New' : 'Add Reading'}</Btn>}>
+        Readings
+      </PageHead>
+      <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, marginBottom: 18, maxWidth: 560 }}>
+        Quotes, relaxation scripts, nidras, poems, jokes. Tap one to open it full-screen for reading aloud.
+      </div>
+
+      {adding && (
+        <div style={{ background: C.card, border: `1px solid ${C.gold}55`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+            <select value={draft.kind} onChange={e => setDraft(d => ({ ...d, kind: e.target.value }))}
+              style={{ ...inputStyle, width: 'auto', minWidth: 150 }}>
+              {Object.entries(READING_KINDS).map(([k, m]) =>
+                <option key={k} value={k}>{m.icon} {m.label}</option>)}
+            </select>
+            <input value={draft.title} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
+              placeholder="Title — e.g. Be water"
+              style={{ ...inputStyle, width: 'auto', flex: 1, minWidth: 180 }} />
+          </div>
+          <textarea value={draft.body} onChange={e => setDraft(d => ({ ...d, body: e.target.value }))}
+            rows={isMobile ? 8 : 10} placeholder="The words. Paragraph breaks are kept exactly as you type them."
+            style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.6, marginBottom: 10 }} />
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <input value={draft.source} onChange={e => setDraft(d => ({ ...d, source: e.target.value }))}
+              placeholder="Source — e.g. Bruce Lee"
+              style={{ ...inputStyle, width: 'auto', flex: 1, minWidth: 150 }} />
+            <input value={draft.tags} onChange={e => setDraft(d => ({ ...d, tags: e.target.value }))}
+              placeholder="Tags, comma separated"
+              style={{ ...inputStyle, width: 'auto', flex: 1, minWidth: 150 }} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+            <Btn variant="ghost" small onClick={() => { setAdding(false); resetDraft(); }}>Cancel</Btn>
+            <Btn small onClick={saveNew}>Save</Btn>
+          </div>
+        </div>
+      )}
+
+      {readings.length > 0 && (
+        <>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search readings…"
+            style={{ ...inputStyle, marginBottom: 12 }} />
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 14 }}>
+            <Chip on={kind === 'all' && !favesOnly} onClick={() => { setKind('all'); setFavesOnly(false); }}
+              label="All" count={readings.length} />
+            <Chip on={favesOnly} onClick={() => setFavesOnly(f => !f)}
+              label="★ Favourites" count={readings.filter(r => r.favourite).length} />
+            {kindChips.map(c => (
+              <Chip key={c.key} on={kind === c.key} label={c.label} count={c.count}
+                onClick={() => setKind(k => k === c.key ? 'all' : c.key)} />
+            ))}
+          </div>
+
+          {allTags.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 18 }}>
+              {allTags.map(t => (
+                <button key={t} onClick={() => setTag(cur => cur === t ? null : t)}
+                  style={{
+                    background: tag === t ? C.goldBg : 'transparent',
+                    border: `1px solid ${tag === t ? C.gold : C.border}`,
+                    color: tag === t ? C.gold : C.muted, cursor: 'pointer',
+                    borderRadius: 20, fontSize: 11, padding: '3px 10px',
+                    fontFamily: "'Jost',sans-serif",
+                  }}>#{t}</button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {visible.length ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {visible.map(r => {
+            const meta = readingKind(r.kind);
+            const used = usageCount(r.id);
+            const preview = (r.body || '').replace(/\s+/g, ' ').trim();
+            return (
+              <div key={r.id}
+                style={{ background: C.card, border: `1px solid ${r.favourite ? C.gold + '55' : C.border}`, borderRadius: 8, padding: '13px 15px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                  <div onClick={() => setReaderId(r.id)} style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 5 }}>
+                      <span style={{ background: meta.bg, color: meta.color, borderRadius: 4, fontSize: 10,
+                        letterSpacing: '0.5px', padding: '2px 7px', fontFamily: "'Jost',sans-serif" }}>
+                        {meta.icon} {meta.label.toUpperCase()}
+                      </span>
+                      {r.title && <span style={{ color: C.text, fontSize: 14, fontWeight: 500 }}>{r.title}</span>}
+                      {r.source && <span style={{ color: C.muted, fontSize: 12, fontStyle: 'italic' }}>— {r.source}</span>}
+                    </div>
+                    <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.5,
+                      display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                      {preview || 'Empty — tap Edit to write it.'}
+                    </div>
+                    {(r.tags || []).length > 0 && (
+                      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 7 }}>
+                        {r.tags.map(t => (
+                          <span key={t} style={{ color: C.muted, fontSize: 10, border: `1px solid ${C.border}`,
+                            borderRadius: 10, padding: '1px 7px' }}>#{t}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0, alignItems: 'flex-end' }}>
+                    <button onClick={() => onPatch(r.id, { favourite: !r.favourite })}
+                      title={r.favourite ? 'Remove from favourites' : 'Favourite'}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer',
+                        color: r.favourite ? C.gold : C.muted, fontSize: 16, lineHeight: 1, padding: '2px 4px' }}>
+                      {r.favourite ? '★' : '☆'}
+                    </button>
+                    <button onClick={() => nav('reading_detail', { readingId: r.id })}
+                      style={{ background: 'none', border: `1px solid ${C.border}`, color: C.muted, cursor: 'pointer',
+                        borderRadius: 4, fontSize: 11, padding: '3px 9px', fontFamily: "'Jost',sans-serif" }}>
+                      Edit
+                    </button>
+                  </div>
+                </div>
+                {used > 0 && (
+                  <div style={{ color: C.muted, fontSize: 10, letterSpacing: '0.4px', marginTop: 8 }}>
+                    READ IN {used} CLASS{used === 1 ? '' : 'ES'}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : readings.length ? (
+        <Empty text="Nothing matches those filters." action="Clear"
+          onAction={() => { setQ(''); setKind('all'); setTag(null); setFavesOnly(false); }} />
+      ) : !adding && (
+        <Empty text="No readings yet." action="Add one →" onAction={() => setAdding(true)} />
+      )}
+
+      {reader && <ReadingReader reading={reader} onClose={() => setReaderId(null)} />}
+    </div>
+  );
+}
+
+// Small local filter chip. Not promoted to primitives — FormDetail's chip bar is
+// a segmented control (one row, shared borders) and this one is loose pills, so
+// they'd fight over the same name without sharing behaviour.
+function Chip({ on, label, count, onClick }) {
+  return (
+    <button onClick={onClick}
+      style={{
+        background: on ? C.goldBg : 'transparent',
+        border: `1px solid ${on ? C.gold : C.border}`,
+        color: on ? C.gold : C.muted, cursor: 'pointer', borderRadius: 20,
+        fontSize: 12, fontWeight: 500, padding: '5px 13px',
+        fontFamily: "'Jost',sans-serif", letterSpacing: '0.3px',
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+      }}>
+      {label}
+      {count !== undefined && <span style={{ opacity: 0.7, fontSize: 11 }}>{count}</span>}
+    </button>
+  );
+}
+
+// ─── READING DETAIL (edit one reading + where it's been read) ─────────────────
+// Explicit Save, not save-on-blur. A relaxation script is long enough that you
+// will scroll, switch apps, come back — and an autosave that fires on every blur
+// turns a half-finished thought into the saved version. Draft state re-seeds
+// only when the reading id changes, so a save round-trip can't clobber what
+// you're typing.
+
+export function ReadingDetail({ reading, classes = [], nav, backInfo, onPatch, onDelete }) {
+  const isMobile = useIsMobile();
+  const [draft, setDraft] = useState({
+    kind: reading.kind, title: reading.title, source: reading.source,
+    body: reading.body, tags: (reading.tags || []).join(', '),
+  });
+  const [dirty, setDirty] = useState(false);
+  const [flash, setFlash] = useState(false);
+  const [readerOpen, setReaderOpen] = useState(false);
+
+  useEffect(() => {
+    setDraft({
+      kind: reading.kind, title: reading.title, source: reading.source,
+      body: reading.body, tags: (reading.tags || []).join(', '),
+    });
+    setDirty(false);
+  }, [reading.id]);
+
+  const set = (k, v) => { setDraft(d => ({ ...d, [k]: v })); setDirty(true); };
+
+  const save = () => {
+    onPatch(reading.id, {
+      kind: draft.kind,
+      title: draft.title,
+      source: draft.source,
+      body: draft.body,
+      tags: draft.tags.split(',').map(t => t.trim()).filter(Boolean),
+    });
+    setDirty(false);
+    setFlash(true);
+    setTimeout(() => setFlash(false), 1400);
+  };
+
+  // Where it's been read. Same reverse-lookup shape as FormDetail over
+  // sessions.forms_worked.
+  const readIn = useMemo(() => classes
+    .filter(c => (c.readingsUsed || []).includes(reading.id))
+    .sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+    [classes, reading.id]);
+
+  const inputStyle = {
+    width: '100%', background: C.surf, border: `1px solid ${C.border}`, borderRadius: 6,
+    color: C.text, fontSize: isMobile ? 16 : 14, padding: '9px 12px',
+    fontFamily: "'Jost',sans-serif", outline: 'none', boxSizing: 'border-box',
+  };
+  const lbl = { color: C.muted, fontSize: 10, letterSpacing: '0.5px', marginBottom: 6 };
+
+  return (
+    <div style={{ padding: isMobile ? '12px 12px 24px' : '32px 36px', maxWidth: 760 }}>
+      <PageHead back={backInfo ? backInfo.label : 'Readings'}
+        onBack={backInfo ? backInfo.onBack : () => nav('readings')}
+        action={
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Btn variant="ghost" small onClick={() => setReaderOpen(true)}>Read</Btn>
+            <Btn small disabled={!dirty} onClick={save}>{flash ? 'Saved ✓' : 'Save'}</Btn>
+          </div>
+        }>
+        {reading.title || readingKind(reading.kind).label}
+      </PageHead>
+
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+        <div style={{ flex: '0 0 auto' }}>
+          <div style={lbl}>KIND</div>
+          <select value={draft.kind} onChange={e => set('kind', e.target.value)}
+            style={{ ...inputStyle, width: 'auto', minWidth: 160 }}>
+            {Object.entries(READING_KINDS).map(([k, m]) =>
+              <option key={k} value={k}>{m.icon} {m.label}</option>)}
+          </select>
+        </div>
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <div style={lbl}>TITLE</div>
+          <input value={draft.title} onChange={e => set('title', e.target.value)} style={inputStyle} />
+        </div>
+      </div>
+
+      <div style={lbl}>THE WORDS</div>
+      <textarea value={draft.body} onChange={e => set('body', e.target.value)}
+        rows={isMobile ? 14 : 18}
+        style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.65,
+          fontFamily: "'Cormorant Garamond',serif", fontSize: isMobile ? 17 : 16, marginBottom: 12 }} />
+
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <div style={lbl}>SOURCE</div>
+          <input value={draft.source} onChange={e => set('source', e.target.value)}
+            placeholder="Bruce Lee" style={inputStyle} />
+        </div>
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <div style={lbl}>TAGS (COMMA SEPARATED)</div>
+          <input value={draft.tags} onChange={e => set('tags', e.target.value)}
+            placeholder="stillness, closing" style={inputStyle} />
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 10, paddingBottom: 18, borderBottom: `1px solid ${C.border}`, marginBottom: 18 }}>
+        <button onClick={() => onPatch(reading.id, { favourite: !reading.favourite })}
+          style={{ background: 'none', border: 'none', cursor: 'pointer',
+            color: reading.favourite ? C.gold : C.muted, fontSize: 13,
+            fontFamily: "'Jost',sans-serif", display: 'inline-flex', alignItems: 'center', gap: 6, padding: 0 }}>
+          <span style={{ fontSize: 16 }}>{reading.favourite ? '★' : '☆'}</span>
+          {reading.favourite ? 'Favourite' : 'Mark favourite'}
+        </button>
+        <ConfirmBtn idleLabel="Delete" armedLabel="Confirm"
+          title={readIn.length ? `Read in ${readIn.length} class${readIn.length === 1 ? '' : 'es'} — those tags stay but will stop resolving.` : undefined}
+          onConfirm={() => { onDelete(reading.id); nav('readings'); }} />
+      </div>
+
+      <div style={{ color: C.muted, fontSize: 10, letterSpacing: '0.5px', marginBottom: 10 }}>WHERE IT'S BEEN READ</div>
+      {readIn.length ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {readIn.map(c => (
+            <Row key={c.id} onClick={() => nav('class_detail', { classId: c.id })}>
+              <span style={{ color: C.text, fontSize: 14 }}>{c.name}</span>
+              <span style={{ color: C.muted, fontSize: 12, marginLeft: 8 }}>{fmt(c.date)}</span>
+            </Row>
+          ))}
+        </div>
+      ) : (
+        <div style={{ color: C.muted, fontSize: 13, fontStyle: 'italic' }}>
+          Not read in a class yet. Tag it in a session log to start a history here.
+        </div>
+      )}
+
+      {readerOpen && <ReadingReader reading={{ ...reading, ...draft, tags: reading.tags }}
+        onClose={() => setReaderOpen(false)} />}
     </div>
   );
 }
