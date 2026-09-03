@@ -351,3 +351,25 @@ export const isPersonalOnly = (p, personRoles) => {
   return hasPersonalRole(p, personRoles) && !roles.some(r => CLIENT_ROLES.includes(r));
 };
 export const isPersonalOrg = o => o.type === 'personal';
+
+// ─── Reading kinds ───────────────────────────────────────────────────────────
+// Quotes, relaxation scripts, yoga nidras, poems, jokes — anything read aloud
+// in the settling at the end of class, or kept for yourself.
+//
+// This list is the ONLY definition of what kinds exist. There is deliberately
+// no CHECK constraint on readings.kind in Postgres, so adding a kind here is
+// the whole change — no migration. An unrecognised kind coming back from the
+// DB falls through to `other` at render time via readingKind() below.
+export const READING_KINDS = {
+  quote:      { label:'Quote',            icon:'❝',  color:'#c9a84c', bg:'#221d10' },
+  motivation: { label:'Motivational',     icon:'⚡', color:'#d49966', bg:'#2a1d10' },
+  script:     { label:'Relaxation',       icon:'🕯', color:'#7fc4b8', bg:'#13282a' },
+  nidra:      { label:'Yoga nidra',       icon:'🌙', color:'#a07fd4', bg:'#1a1428' },
+  poem:       { label:'Poem',             icon:'✒',  color:'#6ba3d4', bg:'#131d2a' },
+  joke:       { label:'Joke',             icon:'😄', color:'#4db879', bg:'#132413' },
+  other:      { label:'Other',            icon:'◇',  color:'#8a9aa3', bg:'#1a2226' },
+};
+
+// Safe lookup — never returns undefined, so a kind renamed or removed from the
+// map above can't blank out a card or throw in a badge.
+export const readingKind = (k) => READING_KINDS[k] || READING_KINDS.other;

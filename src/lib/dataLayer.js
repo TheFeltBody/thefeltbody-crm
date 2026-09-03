@@ -26,6 +26,7 @@ import {
   packageTemplateFromDb, packageTemplateToDb,
   invoiceFromDb, invoiceToDb, lineItemToDb,
   formFromDb, formToDb,
+  readingFromDb, readingToDb, readingPatchToDb,
   customOrgTypeFromDb, customOrgTypeToDb,
   customPersonRoleFromDb, customPersonRoleToDb,
   roleParentFromDb, roleParentToDb,
@@ -108,6 +109,7 @@ export async function loadAll() {
     roleParentRows,
     practiceLogRows,
     linkRows,
+    readingRows,
   ] = await Promise.all([
     supabase.from('active_organisations').select('*').order('name').then(ok),
     // Ranged reads: these tables cross (or are near) PostgREST's 1000-row cap.
@@ -147,6 +149,18 @@ export async function loadAll() {
     // Saved links (reference URLs on a person or org). RLS scopes to owner.
     // Newest first for the tab. Small table — no ranged read needed.
     supabase.from('links').select('*').order('created_at', { ascending: false }).then(ok),
+    // Readings (quotes, relaxation scripts, nidras, poems, jokes). Soft-deleted
+    // rows filtered inline — no active_readings view, the table is small and a
+    // view would be one more object to keep security_invoker'd.
+    //
+    // Deliberately fault-tolerant: this is the ONLY query in loadAll with a
+    // catch. Promise.all is fail-fast, so before the readings migration has run
+    // a 404 here would take the whole CRM down on boot. Falling back to [] means
+    // the modules can ship independently of the SQL, on either machine, in
+    // either order. Remove the catch once the table is confirmed live if you'd
+    // rather a missing table shouted.
+    supabase.from('readings').select('*').is('deleted_at', null)
+      .order('updated_at', { ascending: false }).then(ok).catch(() => []),
   ]);
 
   // Group person_roles by person_id -> array of role keys
@@ -206,6 +220,7 @@ export async function loadAll() {
     files: fileRows.map(fileFromDb),
     practiceLogs: practiceLogRows.map(practiceLogFromDb),
     links: linkRows.map(linkFromDb),
+    readings: readingRows.map(readingFromDb),
   };
 }
 
@@ -891,6 +906,37 @@ export const forms = {
   async delete(id) {
     await supabase.from('yoga_forms').delete().eq('id', id).then(ok);
   },
+};
+
+// ─── Readings (DB: readings) ─────────────────────────────────────────────────
+// Soft-delete, unlike forms — a relaxation script you spent an hour writing is
+// not something to lose to a mistap. `patch` exists so a favourite toggle or an
+// autosaved body writes one column instead of rewriting the row, which on two
+// machines would otherwise let the last blur win over a newer edit.
+//
+// Note: nothing here touches sessions.readings_used. A deleted reading leaves
+// its id behind in the jsonb array of any class that used it; the UI resolves
+// ids through a lookup and drops misses, same as forms.
+
+export const readings = {
+  async create(r) {
+    const row = await supabase.from('readings').insert(readingToDb(r))
+      .select().single().then(ok);
+    return readingFromDb(row);
+  },
+  async update(id, r) {
+    const row = await supabase.from('readings').update(readingToDb(r))
+      .eq('id', id).select().single().then(ok);
+    return readingFromDb(row);
+  },
+  async patch(id, fields) {
+    const body = readingPatchToDb(fields);
+    if (!Object.keys(body).length) return null;
+    const row = await supabase.from('readings').update(body)
+      .eq('id', id).select().single().then(ok);
+    return readingFromDb(row);
+  },
+  delete: (id) => softDelete('readings', id),
 };
 
 // ─── Custom org types and person roles ───────────────────────────────────────

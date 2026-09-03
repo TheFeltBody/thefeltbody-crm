@@ -205,6 +205,7 @@ export const classFromDb = (row) => ({
   reflection: row.reflection || '',
   reflectionStarred: row.reflection_starred ?? false,
   formsWorked: Array.isArray(row.forms_worked) ? row.forms_worked : [],
+  readingsUsed: Array.isArray(row.readings_used) ? row.readings_used : [],
   isBookable: row.is_bookable ?? false,
   capacity: row.capacity ?? '',
   publicBlurb: row.public_blurb || '',
@@ -226,6 +227,7 @@ export const classToDb = (c) => ({
   reflection: c.reflection || null,
   reflection_starred: c.reflectionStarred ?? false,
   forms_worked: Array.isArray(c.formsWorked) ? c.formsWorked : [],
+  readings_used: Array.isArray(c.readingsUsed) ? c.readingsUsed : [],
   is_bookable: c.isBookable ?? false,
   capacity: numOrNull(c.capacity),
   public_blurb: c.publicBlurb ? String(c.publicBlurb).trim() || null : null,
@@ -254,6 +256,9 @@ export const classPatchToDb = (patch) => {
   if (patch.reflectionStarred !== undefined) out.reflection_starred = !!patch.reflectionStarred;
   if (patch.formsWorked !== undefined) {
     out.forms_worked = Array.isArray(patch.formsWorked) ? patch.formsWorked : [];
+  }
+  if (patch.readingsUsed !== undefined) {
+    out.readings_used = Array.isArray(patch.readingsUsed) ? patch.readingsUsed : [];
   }
   if (patch.isBookable !== undefined) out.is_bookable = patch.isBookable;
   if (patch.capacity !== undefined) out.capacity = numOrNull(patch.capacity);
@@ -582,6 +587,56 @@ export const formToDb = (f) => ({
   notes: f.notes || null,
   position: f.position ?? 0,
 });
+
+// ─── Readings (quotes, scripts, nidras, poems, jokes) ────────────────────────
+// `body` is long-form and whitespace is meaningful — paragraph breaks are the
+// pacing of the thing when read aloud — so it is NEVER trimmed or collapsed
+// here. Only the surrounding metadata gets tidied.
+//
+// `tags` is a real text[] in Postgres, so it arrives as a JS array already.
+// `source` is the attribution line ("Bruce Lee"), stored NULL when blank so
+// the UI can test truthiness without caring about empty strings.
+
+export const readingFromDb = (row) => ({
+  id: row.id,
+  kind: row.kind || 'quote',
+  title: row.title || '',
+  source: row.source || '',
+  body: row.body || '',
+  tags: Array.isArray(row.tags) ? row.tags : [],
+  favourite: row.favourite ?? false,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+export const readingToDb = (r) => ({
+  kind: r.kind || 'quote',
+  title: (r.title || '').trim(),
+  source: r.source ? String(r.source).trim() || null : null,
+  body: r.body ?? '',
+  tags: Array.isArray(r.tags)
+    ? [...new Set(r.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean))]
+    : [],
+  favourite: !!r.favourite,
+});
+
+// Partial patch — same contract as classPatchToDb. Lets a favourite toggle or
+// an autosaved body write one column instead of rewriting the whole row (which
+// would clobber a concurrent edit from the other machine).
+export const readingPatchToDb = (patch) => {
+  const out = {};
+  if (patch.kind !== undefined) out.kind = patch.kind || 'quote';
+  if (patch.title !== undefined) out.title = (patch.title || '').trim();
+  if (patch.source !== undefined) out.source = patch.source ? String(patch.source).trim() || null : null;
+  if (patch.body !== undefined) out.body = patch.body ?? '';
+  if (patch.tags !== undefined) {
+    out.tags = Array.isArray(patch.tags)
+      ? [...new Set(patch.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean))]
+      : [];
+  }
+  if (patch.favourite !== undefined) out.favourite = !!patch.favourite;
+  return out;
+};
 
 // ─── Custom types (org_type_meta + person_role_meta) ─────────────────────────
 // JSX uses these for user-defined org categories (Insurance, Banks...) and roles.
