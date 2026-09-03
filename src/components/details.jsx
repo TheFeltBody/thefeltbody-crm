@@ -33,7 +33,7 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
     onUpdateProject(project.id, { name, status: project.status, notes: project.notes || '', completedAt: project.completedAt });
   };
 
-  // Inline todo-text edit. State hoisted here (not inside TodoRow) so the row
+  // Inline todo-text edit. State hoisted here (not inside todoRow) so the row
   // component stays stateless — defining a stateful component in render would
   // remount it on every parent render and drop the edit mid-type.
   const [editingTodoId, setEditingTodoId] = useState(null);
@@ -58,8 +58,8 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
   // ─── To-do attachments ─────────────────────────────────────────────────────
   // Project to-dos ARE interactions, so an image attaches via the existing
   // files.interaction_id anchor — no schema change. State lives HERE, not in
-  // TodoRow: TodoRow is defined inside this render and gets a fresh identity
-  // every parent render, so any state it held would be dropped mid-upload.
+  // todoRow: it is re-created on every parent render, so any state it held
+  // would be dropped mid-upload.
   //
   // One hidden <input type="file"> is shared by every row (N inputs would be
   // remounted constantly); attachTargetRef carries which to-do the picker was
@@ -242,11 +242,17 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
     color:C.text, fontSize:14, padding:'8px 12px', fontFamily:"'Jost',sans-serif", outline:'none',
   };
 
-  const TodoRow = ({ t }) => {
+  // NOT a component — a plain function returning JSX, called as todoRow(t).
+  // As a component it was re-created on every parent render, so React saw a new
+  // element *type* each keystroke, unmounted the row and mounted a fresh
+  // <input>; autoFocus then re-fired and dropped the caret at the end of the
+  // text. Called as a function, React only ever sees the stable <div> tree and
+  // the input node survives. It holds no hooks, so this is safe.
+  const todoRow = (t) => {
     const person = personOf(t.personId);
     const overdue = !t.completed && t.actionDate && t.actionDate < today();
     return (
-      <div style={{display:'flex', alignItems:'flex-start', gap:12, background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:'12px 14px'}}>
+      <div key={t.id} style={{display:'flex', alignItems:'flex-start', gap:12, background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:'12px 14px'}}>
         <div onClick={()=> t.completed ? onReopenNote(t.id) : onCompleteNote(t.id)}
           title={t.completed?'Reopen':'Mark done'}
           style={{
@@ -419,7 +425,7 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
         <Empty text="No to-dos in this project yet." />
       ) : (
         <div style={{display:'flex', flexDirection:'column', gap:10}}>
-          {openTodos.map(t => <TodoRow key={t.id} t={t} />)}
+          {openTodos.map(t => todoRow(t))}
           {openTodos.length === 0 && !isDone && (
             <div style={{color:C.muted, fontSize:13, fontStyle:'italic', padding:'4px 2px'}}>All to-dos complete.</div>
           )}
@@ -436,7 +442,7 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
           </div>
           {showCompleted && (
             <div style={{display:'flex', flexDirection:'column', gap:10}}>
-              {doneTodos.map(t => <TodoRow key={t.id} t={t} />)}
+              {doneTodos.map(t => todoRow(t))}
             </div>
           )}
         </div>
