@@ -3839,6 +3839,77 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Full-screen landscape mode ────────────────────────────────────────────
+  // A distraction-free week grid for the phone. The Fullscreen API is what
+  // actually removes the browser's address bar and Android's nav bar (~200px
+  // of vertical space back); the fixed overlay below only removes OUR chrome.
+  // requestFullscreen() must be called from a user gesture, so the ⛶ button's
+  // onClick is the sole entry point. Orientation lock is only permitted while
+  // fullscreen, which is why it comes after the request — it rejects on iOS
+  // and desktop and we simply carry on in whatever orientation we're in.
+  const FS_BAR_H = 36;
+  const [fs, setFs] = useState(false);
+  const [vh, setVh] = useState(() => (typeof window === 'undefined' ? 800 : window.innerHeight));
+  // Two-letter pill labels for the compact bar. Reads an optional `short` off
+  // the calendar definition so constants.js can override without touching this.
+  const shortCal = (cal) => cal.short || cal.label.slice(0, 2);
+  const enterFs = async () => {
+    const el = document.documentElement;
+    try {
+      if(el.requestFullscreen) await el.requestFullscreen();
+      else if(el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    } catch(err) { /* user or browser denied — still show the overlay */ }
+    try { if(screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape'); }
+    catch(err) { /* unsupported (iOS/desktop) — stay in current orientation */ }
+    setVh(window.innerHeight);
+    setFs(true);
+  };
+  const exitFs = () => {
+    try { if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch(err) {}
+    try {
+      if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(()=>{});
+      else if(document.webkitFullscreenElement && document.webkitExitFullscreen) document.webkitExitFullscreen();
+    } catch(err) {}
+    setFs(false);
+  };
+  // Android's back gesture and Esc drop fullscreen WITHOUT going through our ✕,
+  // so mirror the browser's state back into ours. Without this you'd be left
+  // with a fixed overlay and no browser chrome to escape it with.
+  useEffect(() => {
+    const sync = () => {
+      if(!document.fullscreenElement && !document.webkitFullscreenElement) {
+        try { if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch(err) {}
+        setFs(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', sync);
+    document.addEventListener('webkitfullscreenchange', sync);
+    return () => {
+      document.removeEventListener('fullscreenchange', sync);
+      document.removeEventListener('webkitfullscreenchange', sync);
+    };
+  }, []);
+  // Re-measure on rotate so the scroller fills the new viewport. innerHeight is
+  // often still the pre-rotation value when orientationchange fires, hence the
+  // delayed second read.
+  useEffect(() => {
+    if(!fs) return;
+    const onResize = () => setVh(window.innerHeight);
+    const onRotate = () => { onResize(); setTimeout(onResize, 350); };
+    onResize();
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onRotate);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onRotate);
+    };
+  }, [fs]);
+  // Navigating away (sidebar, a diary entry's person link) must not strand the
+  // browser in fullscreen.
+  useEffect(() => () => {
+    try { if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(()=>{}); } catch(err) {}
+  }, []);
+
   // Position a timed class block. Height reflects duration in 30-min units.
   const classBlock = (c) => {
     const startMin = timeToMin(c.time);
@@ -3867,6 +3938,16 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
     return `${aMonth} – ${eMonth}`;
   })();
 
+  // Compact month label for the full-screen bar — "Oct 26" / "Sep–Oct 26".
+  const fsMonthLabel = (() => {
+    const a = new Date(anchor+'T12:00');
+    const e = new Date(weekEnd+'T12:00');
+    const yy = String(e.getFullYear()).slice(2);
+    const aM = a.toLocaleDateString('en-GB',{month:'short'});
+    const eM = e.toLocaleDateString('en-GB',{month:'short'});
+    return a.getMonth() === e.getMonth() ? `${aM} ${yy}` : `${aM}–${eM} ${yy}`;
+  })();
+
   // Build the multi-line tooltip shown on hover (native title attribute).
   const tooltipFor = (c) => {
     const lines = [c.name];
@@ -3880,9 +3961,68 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
   };
 
   return (
-    <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px'}}>
+    <div style={ fs
+      ? {position:'fixed',inset:0,zIndex:90,background:C.bg,display:'flex',flexDirection:'column',padding:0}
+      : {padding: isMobile ? '12px 12px 24px' : '32px 36px'} }>
+
+      {/* ── Full-screen bar ──────────────────────────────────────────────────
+          The three rows above the grid (page head, week navigator, layer
+          toggles) compressed into one strip: exit · week nav · this-week ·
+          layer pills. z-index is deliberately 90 — ABOVE every in-view sticky
+          header (max 60) and the desktop sidebar, but BELOW Modal's 100, so
+          tapping a slot still opens the diary editor on top of the grid rather
+          than behind it. Overflow-x is the fallback on very narrow phones. */}
+      {fs && (
+        <div style={{display:'flex',alignItems:'center',gap:6,height:FS_BAR_H,flexShrink:0,padding:'0 8px',background:C.surf,borderBottom:`1px solid ${C.border}`,overflowX:'auto',overflowY:'hidden'}}>
+          <button onClick={exitFs} title="Exit full screen"
+            style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:13,padding:'3px 10px',lineHeight:1.2,flexShrink:0,fontFamily:"'Jost',sans-serif"}}>✕</button>
+          <button onClick={()=>setAnchor(addDays(anchor,-7))} title="Previous week"
+            style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:13,padding:'3px 10px',lineHeight:1.2,flexShrink:0,fontFamily:"'Jost',sans-serif"}}>‹</button>
+          <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:16,color:C.text,fontWeight:600,whiteSpace:'nowrap',flexShrink:0}}>{fsMonthLabel}</div>
+          <button onClick={()=>setAnchor(addDays(anchor,7))} title="Next week"
+            style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,cursor:'pointer',borderRadius:6,fontSize:13,padding:'3px 10px',lineHeight:1.2,flexShrink:0,fontFamily:"'Jost',sans-serif"}}>›</button>
+          {anchor !== initialAnchor && (
+            <button onClick={()=>setAnchor(initialAnchor)} title="This week"
+              style={{background:C.goldBg,border:`1px solid ${C.gold}88`,color:C.gold,cursor:'pointer',borderRadius:6,fontSize:11,padding:'3px 9px',lineHeight:1.2,flexShrink:0,fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>TW</button>
+          )}
+          <div style={{flex:1,minWidth:8}} />
+          {personalMode ? (
+            <div style={{display:'flex',gap:4,alignItems:'center',flexShrink:0}}>
+              {DIARY_CALENDAR_KEYS.map(k=>{
+                const cal = DIARY_CALENDARS[k];
+                const on = layerOn(k);
+                return (
+                  <button key={k} onClick={()=>toggleLayer(k)}
+                    title={on ? `Hide ${cal.label}` : `Show ${cal.label}`}
+                    style={{cursor:'pointer',borderRadius:20,fontSize:11,padding:'3px 8px',lineHeight:1.2,
+                      fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',flexShrink:0,
+                      background: on ? cal.color+'22' : 'transparent',
+                      border:`1px solid ${on ? cal.color+'88' : C.border}`,
+                      color: on ? cal.color : C.muted, opacity: on ? 1 : 0.6}}>
+                    {shortCal(cal)}
+                  </button>
+                );
+              })}
+              {/* Checkbox → pill: same sticky state, thumb-sized target. */}
+              <button onClick={()=>setShowClasses(!showClasses)}
+                title={showClasses ? 'Hide classes' : 'Show classes (greyed)'}
+                style={{cursor:'pointer',borderRadius:20,fontSize:11,padding:'3px 8px',lineHeight:1.2,
+                  fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px',flexShrink:0,
+                  background: showClasses ? C.gold+'22' : 'transparent',
+                  border:`1px solid ${showClasses ? C.gold+'88' : C.border}`,
+                  color: showClasses ? C.gold : C.muted, opacity: showClasses ? 1 : 0.6}}>Cls</button>
+            </div>
+          ) : (
+            <div style={{color:C.muted,fontSize:11,flexShrink:0,whiteSpace:'nowrap'}}>{weekClasses.length} cls</div>
+          )}
+        </div>
+      )}
+
+      {!fs && (
+      <>
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={
         <div style={{display:'flex',gap:8}}>
+          <Btn small variant="secondary" onClick={enterFs}>⛶</Btn>
           {onAddDiary && <Btn small variant="secondary" onClick={()=>onAddDiary(t, currentHourTime())}>+ Diary</Btn>}
           {onAddPrivate && <Btn small variant="secondary" onClick={()=>onAddPrivate(t)}>+ PS</Btn>}
           <Btn small onClick={()=>onAddClass && onAddClass(t)}>+ Class</Btn>
@@ -3929,13 +4069,17 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
           <div style={{color:C.muted,fontSize:12}}>{weekClasses.length} class{weekClasses.length!==1?'es':''}</div>
         )}
       </div>
+      </>
+      )}
 
       {/* Scroll window for the 24h grid. The dow header / DATES / UNTIMED
           strips live INSIDE the scroller as one sticky block so their content
           width always matches the grid's (both sit left of the same
           scrollbar) — mounting them outside would re-introduce the
           header-vs-column misalignment the DATES-strip rework fixed. */}
-      <div ref={scrollerRef} style={{maxHeight:visibleHeight + 64, overflowY:'auto', overscrollBehavior:'contain'}}>
+      <div ref={scrollerRef} style={{...(fs
+          ? {flex:1,minHeight:0,height:Math.max(200, vh - FS_BAR_H),maxHeight:Math.max(200, vh - FS_BAR_H),padding:'0 6px'}
+          : {maxHeight:visibleHeight + 64}), overflowY:'auto', overscrollBehavior:'contain'}}>
       <div style={{position:'sticky',top:0,zIndex:60,background:C.bg}}>
       {/* Slim Mon–Sun header — mirrors the 3-Week grid's day row. The date
           numbers moved into the DATES strip below (boxed, one per column, same
@@ -4239,7 +4383,7 @@ export function WeekView({ classes, orgs, notes, people, contactDates=[], nav, b
       </div>{/* /scroll window */}
 
       {/* Action-by notes for this week */}
-      {weekActionNotes.length > 0 && (
+      {!fs && weekActionNotes.length > 0 && (
         <div style={{marginTop:32}}>
           <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:19,color:C.gold,marginBottom:14,fontWeight:600}}>
             Action this week
