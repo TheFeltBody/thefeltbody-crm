@@ -740,8 +740,8 @@ export function SearchSelect({ people, onSelect, attendance, classes, contextSer
 // ─── MODAL SHELL ──────────────────────────────────────────────────────────────
 
 export const Modal = ({ title, onClose, children, wide, xwide, topAlign }) => (
-  <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.78)',display:'flex',alignItems:topAlign?'flex-start':'center',justifyContent:'center',zIndex:100,overflowY:'auto'}}>
-    <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:12,padding:28,width:xwide?860:wide?580:480,maxHeight:topAlign?'none':'90vh',overflowY:topAlign?'visible':'auto',marginTop:topAlign?16:0}}>
+  <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.78)',display:'flex',alignItems:topAlign?'flex-start':'center',justifyContent:'center',zIndex:100,overflowY:'auto',padding:'0 12px',boxSizing:'border-box'}}>
+    <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:12,padding:'clamp(16px, 4vw, 28px)',width:'100%',maxWidth:xwide?860:wide?580:480,boxSizing:'border-box',maxHeight:topAlign?'none':'90vh',overflowY:topAlign?'visible':'auto',marginTop:topAlign?16:0}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:22}}>
         <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:600,color:C.text,margin:0}}>{title}</h2>
         <button onClick={onClose} style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:22,lineHeight:1}}>×</button>
