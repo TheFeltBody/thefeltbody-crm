@@ -614,23 +614,45 @@ export default function FeltBodyCRM() {
     .catch(onError('Add note'));
   // Diary entries are interactions with kind='diary' — same create path as a
   // note, splicing into local notes state so the new block appears on the
-  // calendar immediately rather than waiting on the 60s poll.
+  // calendar immediately rather than waiting on the 60s poll. Attachments
+  // follow the same two-phase rails as addNote: the modal uploads bytes to R2
+  // before the row exists (returning file ids in rawHeaders), and once the
+  // interaction row is confirmed we point those files rows at it.
   const handleAddDiary = (entry) => data.notes.create(entry)
-    .then(saved => setNotes(p => [...p, saved]))
+    .then(saved => {
+      setNotes(p => [...p, saved]);
+      const attIds = saved.rawHeaders?.attachment_file_ids;
+      if (Array.isArray(attIds) && attIds.length) {
+        data.files.anchorToInteraction(attIds, saved.id)
+          .catch(onError('Link attachments'));
+      }
+      return saved;
+    })
     .catch(onError('Add diary entry'));
   // Grouped create for "repeat daily ×N": insert all entries, append all to
   // local state. Sequential awaits keep it simple and order-stable; the batch is
   // small (≤60). If one fails the rest still land — acceptable for a diary batch.
+  // Attachments (if any) are carried only on the first entry (DiaryModal strips
+  // rawHeaders from the rest), so anchoring only ever fires for that one row.
   const handleAddDiaryMany = async (entries) => {
     try {
       const saved = [];
       for (const e of entries) saved.push(await data.notes.create(e));
       setNotes(p => [...p, ...saved]);
+      for (const s of saved) {
+        const attIds = s.rawHeaders?.attachment_file_ids;
+        if (Array.isArray(attIds) && attIds.length) {
+          data.files.anchorToInteraction(attIds, s.id).catch(onError('Link attachments'));
+        }
+      }
     } catch (e) { onError('Add repeating diary entries')(e); }
   };
   // Edit an existing diary entry. Patches the FULL diary field set (time,
   // isPersonal, personId, projectId, duration) — the generic updateNote patch
   // omits these, which would silently strip a diary entry off the calendar.
+  // rawHeaders carries attachment ids/names (same contract as updateNote) —
+  // DiaryModal only sets it when attachments were touched, and notePatchToDb's
+  // presence check means an untouched entry leaves the column alone.
   // Optimistic local patch first, then server-confirm.
   const handleEditDiary = (entry) => {
     const patch = {
@@ -645,8 +667,18 @@ export default function FeltBodyCRM() {
       calendar: entry.calendar || 'mine',
       diaryGroup: entry.diaryGroup || null,
     };
+    if (entry.rawHeaders !== undefined) patch.rawHeaders = entry.rawHeaders;
     setNotes(p => p.map(n => n.id === entry.id ? { ...n, ...patch } : n));
     data.notes.patch(entry.id, patch).catch(onError('Update diary entry'));
+    // Same post-save attachment side-effects as updateNote: anchor new
+    // uploads, delete removed ones. Both best-effort.
+    if (entry._newAttachmentIds?.length) {
+      data.files.anchorToInteraction(entry._newAttachmentIds, entry.id)
+        .catch(onError('Link attachments'));
+    }
+    (entry._removedAttachmentIds || []).forEach(fid => {
+      data.files.remove({ id: fid, store: 'r2' }).catch(onError('Remove attachment'));
+    });
   };
   // "Add to calendar" on a note row → open the diary modal in create mode,
   // seeded from the note (text, date, person/project link). Creates a NEW diary
@@ -902,13 +934,13 @@ export default function FeltBodyCRM() {
       onError('Assign to contact')(err);
     }
   };
-  
+
   // ── Classes (sessions). Field updates from the class detail page (reflection, formsWorked, etc.)
   const updateClassFields = (classId, fields) => {
     setClasses(p => p.map(c => c.id === classId ? { ...c, ...fields } : c));
     data.classes.patch(classId, fields).catch(onError('Update class'));
   };
-  
+
   // ── Forms (yoga_forms)
   const addForm = (name) => data.forms.create({ name, position: forms.length })
     .then(saved => setForms(p => [...p, saved]))
@@ -1732,4 +1764,3 @@ export default function FeltBodyCRM() {
     </TypesContext.Provider>
   );
 }
-

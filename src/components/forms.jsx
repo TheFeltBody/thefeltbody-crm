@@ -1117,14 +1117,6 @@ export function MergePeopleForm({ personA, personB, orgs, onMerge, onClose }) {
             <FieldRadio fieldKey="rateNotes" valA={personA.rateNotes} valB={personB.rateNotes} displayA={personA.rateNotes} displayB={personB.rateNotes} />
           </div>
 
-          {/* NOTES */}
-          <div style={{marginBottom:12}}>
-            <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>NOTES</label>
-            <textarea value={get('notes')} onChange={e=>setOverride('notes')(e.target.value)} rows={3}
-              style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif",resize:'vertical'}} />
-            <FieldRadio fieldKey="notes" valA={personA.notes} valB={personB.notes} displayA={personA.notes} displayB={personB.notes} />
-          </div>
-
           <div style={{padding:8,background:C.card,border:`1px dashed ${C.border}`,borderRadius:4,fontSize:11,color:C.muted,marginTop:8}}>
             Master keeps its own roles: {master.roles.map(r=><RoleBadge key={r} role={r} />)}
           </div>
@@ -2103,6 +2095,42 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
   ];
   const curFreq = REPEAT_FREQS.find(x=>x.v===repeatFreq) || REPEAT_FREQS[0];
 
+  // Attachments — same rails as NoteForm: bytes to R2 via the forms-worker,
+  // ids + names ride in raw_headers (the AttachmentChips render contract),
+  // files rows get anchored to the real interaction id by the parent handler
+  // after save (the row doesn't exist yet at upload time). Existing chips
+  // come from existing.rawHeaders; removing one is collected into removedIds
+  // and executed by the parent AFTER a successful patch. Per-file cap mirrors
+  // the worker's 25 MB.
+  const DIARY_ATTACH_MAX = 25 * 1024 * 1024;
+  const [attach, setAttach] = useState([]);            // new picks: [{ key, file }]
+  const [keptExisting, setKeptExisting] = useState(() => {
+    const ids = existing?.rawHeaders?.attachment_file_ids;
+    if (!Array.isArray(ids) || !ids.length) return [];
+    const names = existing.rawHeaders.attachment_names || [];
+    return ids.map((id, i) => ({ id, name: names[i] || 'attachment' }));
+  });
+  const [removedIds, setRemovedIds] = useState([]);
+  const [attBusy, setAttBusy] = useState(false);
+  const [attErr, setAttErr] = useState(null);
+  const attUploadedIds = useRef({});                    // key → files-row id (retry cache)
+  const attInputRef = useRef(null);
+  const attTooBig = attach.filter(a => a.file.size > DIARY_ATTACH_MAX);
+  const addDiaryFiles = (list) => {
+    setAttach(prev => {
+      const next = [...prev];
+      for (const f of Array.from(list || [])) {
+        if (next.some(a => a.file.name === f.name && a.file.size === f.size)) continue;
+        next.push({ key: `${f.name}—${f.size}—${Date.now()}`, file: f });
+      }
+      return next;
+    });
+  };
+  const removeExistingAtt = (id) => {
+    setKeptExisting(prev => prev.filter(a => a.id !== id));
+    setRemovedIds(prev => [...prev, id]);
+  };
+
   // Resolve the duration field (value + unit) down to stored minutes.
   const durationToMins = () => {
     const v = parseInt(f.duration) || (f.durationUnit === 'hours' ? 1 : 60);
@@ -2134,7 +2162,7 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
     return dt.toISOString().slice(0,10);
   };
 
-  const save = () => {
+  const save = async () => {
     // Title is the calendar label and is required. Body is the optional longer
     // note shown on hover / in this form. (When promoting a note to the calendar
     // the note text seeds the body, so title may start empty — hence we validate
@@ -2142,6 +2170,30 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
     const title = f.title.trim();
     const text = f.text.trim();
     if(!title && !text) return;
+    if(attBusy || attTooBig.length) return;
+
+    // Upload any newly-picked attachments first (sequential; ids cached
+    // across a failed attempt so retry never re-uploads). Mirrors NoteForm.
+    let newAtt = [];
+    if (attach.length) {
+      setAttBusy(true); setAttErr(null);
+      try {
+        for (const a of attach) {
+          if (!attUploadedIds.current[a.key]) {
+            const row = await filesApi.uploadAttachment(a.file);
+            attUploadedIds.current[a.key] = row.id;
+          }
+          newAtt.push({ id: attUploadedIds.current[a.key], name: a.file.name });
+        }
+      } catch (e) {
+        setAttErr(e?.message || String(e));
+        setAttBusy(false);
+        return;
+      }
+      setAttBusy(false);
+    }
+    const finalAtt = [...keptExisting, ...newAtt];
+
     // Anchoring safety net: at least one of person / project must be set, else
     // fall back to self so interactions_anchored passes.
     let personId = f.personId || null;
@@ -2158,17 +2210,46 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
       projectId,
       calendar: f.calendar || 'mine',
     };
+    // Attachments ride along in raw_headers — same contract as NoteForm. On
+    // edit, merge into whatever's already in raw_headers so nothing else
+    // stashed there is disturbed, and carry the _new/_removed transient
+    // instructions the parent handler executes after the patch lands.
+    if (isEdit) {
+      const merged = { ...(existing.rawHeaders || {}) };
+      if (finalAtt.length) {
+        merged.attachment_file_ids = finalAtt.map(a => a.id);
+        merged.attachment_names = finalAtt.map(a => a.name);
+      } else {
+        delete merged.attachment_file_ids;
+        delete merged.attachment_names;
+      }
+      base.rawHeaders = Object.keys(merged).length ? merged : null;
+      base._newAttachmentIds = newAtt.map(a => a.id);
+      base._removedAttachmentIds = removedIds;
+    } else if (finalAtt.length) {
+      base.rawHeaders = {
+        attachment_file_ids: finalAtt.map(a => a.id),
+        attachment_names: finalAtt.map(a => a.name),
+      };
+    }
     // Repeat ×N (create-only): N occurrences at the chosen frequency sharing one
     // diary_group so they can be deleted together. Guard the count to a sane
     // range. When off (or editing), behave exactly as before — one entry.
     if (!isEdit && repeat && onSaveMany) {
       const n = Math.max(2, Math.min(60, parseInt(repeatCount) || 2));
       const group = crypto.randomUUID();
-      const entries = Array.from({length:n}, (_,i) => ({
-        ...base,
-        date: stepDateStr(f.date, repeatFreq, i, repeatEvery),
-        diaryGroup: group,
-      }));
+      // Attachments only ride on the FIRST occurrence — anchoring one set of
+      // uploaded files to N separate interaction rows has no clean meaning,
+      // and a repeat series is rarely where a document belongs anyway.
+      const entries = Array.from({length:n}, (_,i) => {
+        const entry = {
+          ...base,
+          date: stepDateStr(f.date, repeatFreq, i, repeatEvery),
+          diaryGroup: group,
+        };
+        if (i > 0) delete entry.rawHeaders;
+        return entry;
+      });
       onSaveMany(entries);
       onClose();
       return;
@@ -2195,7 +2276,7 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
     let personId = f.personId || null;
     const projectId = f.projectId || null;
     if(!personId && !projectId) personId = selfPersonId || null;
-    onCopy({
+    const payload = {
       kind: 'diary',
       subject: title || text,
       text,
@@ -2206,7 +2287,16 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
       personId,
       projectId,
       calendar: calKey,
-    });
+    };
+    // Carry over already-saved attachments (not any unsaved new picks — those
+    // haven't uploaded yet and a copy is a fire-and-forget action).
+    if (keptExisting.length) {
+      payload.rawHeaders = {
+        attachment_file_ids: keptExisting.map(a => a.id),
+        attachment_names: keptExisting.map(a => a.name),
+      };
+    }
+    onCopy(payload);
     onClose();
   };
 
@@ -2240,6 +2330,56 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
       )}
       <FI label="TITLE" value={f.title} onChange={s('title')} placeholder="e.g. Dentist, Erica's birthday, Supervision" />
       <FI label="NOTE (optional)" value={f.text} onChange={s('text')} rows={3} placeholder="Longer detail — shows on hover and here when you reopen." />
+
+      {/* Attachments: kept-existing chips (edit mode) + new picks + adder.
+          Same rails as NoteForm/email — bytes go to R2 via the forms-worker,
+          ids + names ride in raw_headers, AttachmentChips renders them
+          anywhere this interaction shows up. Bytes upload at save time. */}
+      <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginTop:-6,marginBottom:14}}>
+        <input ref={attInputRef} type="file" multiple style={{display:'none'}}
+          onChange={e => { addDiaryFiles(e.target.files); e.target.value = ''; }} />
+        <button onClick={() => attInputRef.current?.click()} disabled={attBusy}
+          title="Attach files to this entry"
+          style={{background:'none',border:`1px solid ${C.border}`,color:C.gold,
+            cursor:attBusy ? 'default' : 'pointer',borderRadius:6,fontSize:12,
+            padding:'4px 10px',fontFamily:"'Jost',sans-serif"}}>
+          📎 Attach
+        </button>
+        {keptExisting.map(a => (
+          <span key={a.id} style={{display:'inline-flex',alignItems:'center',gap:6,
+            background:C.surf,border:`1px solid ${C.border}`,color:C.text,
+            fontSize:11.5,padding:'3px 10px',borderRadius:14,maxWidth:220}}>
+            <span style={{opacity:0.75}}>📎</span>
+            <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.name}</span>
+            {!attBusy && (
+              <span onClick={() => removeExistingAtt(a.id)} title="Remove (deletes the file on save)"
+                style={{color:C.muted,cursor:'pointer',fontSize:13,lineHeight:1}}>×</span>
+            )}
+          </span>
+        ))}
+        {attach.map(a => (
+          <span key={a.key} style={{display:'inline-flex',alignItems:'center',gap:6,
+            background:C.surf,border:`1px solid ${a.file.size > DIARY_ATTACH_MAX ? C.red : C.border}`,
+            color:C.text,fontSize:11.5,padding:'3px 10px',borderRadius:14,maxWidth:220}}>
+            <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.file.name}</span>
+            <span style={{color:C.muted,flexShrink:0}}>{(a.file.size / 1048576).toFixed(1)} MB</span>
+            {!attBusy && (
+              <span onClick={() => setAttach(prev => prev.filter(x => x.key !== a.key))} title="Remove"
+                style={{color:C.muted,cursor:'pointer',fontSize:13,lineHeight:1}}>×</span>
+            )}
+          </span>
+        ))}
+      </div>
+      {attTooBig.length > 0 && (
+        <div style={{color:C.gold,fontSize:11,marginTop:-10,marginBottom:14}}>
+          ⚠ Over the 25 MB per-file limit: {attTooBig.map(a => a.file.name).join(', ')}
+        </div>
+      )}
+      {attErr && (
+        <div style={{marginTop:-6,marginBottom:14,padding:'6px 10px',background:'#3a1f1f',border:'1px solid #6b2e2e',
+          borderRadius:6,color:'#e8a4a4',fontSize:12,lineHeight:1.5}}>{attErr}</div>
+      )}
+
       <div style={{display:'flex',gap:12}}>
         <FI label="DATE" value={f.date} onChange={s('date')} type="date" half />
         <FI label="TIME" value={f.time} onChange={s('time')} type="time" half />
@@ -2285,6 +2425,11 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
             <input type="checkbox" checked={repeat} onChange={e=>setRepeat(e.target.checked)} />
             Repeat
           </label>
+          {repeat && (keptExisting.length > 0 || attach.length > 0) && (
+            <div style={{color:C.muted,fontSize:10,marginTop:6,fontStyle:'italic'}}>
+              Attachments are added to the first occurrence only.
+            </div>
+          )}
           {repeat && (
             <div style={{marginTop:8}}>
               {/* Frequency chips */}
@@ -2489,14 +2634,15 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
           )}
         </div>
         <div style={{display:'flex',gap:8}}>
-          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={save}>{isEdit ? 'Save changes' : 'Add entry'}</Btn>
+          <Btn variant="ghost" onClick={onClose} disabled={attBusy}>Cancel</Btn>
+          <Btn onClick={save} disabled={attBusy || attTooBig.length > 0}>
+            {attBusy ? 'Uploading…' : (isEdit ? 'Save changes' : 'Add entry')}
+          </Btn>
         </div>
       </div>
     </Modal>
   );
 }
-
 // Lightweight client picker for the calendar "+ PS" flow. Private sessions are
 // normally booked from a person's record (the person is already known); booking
 // from the calendar reverses that — you have a date and need to choose who. This
@@ -2662,7 +2808,7 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
   const ATTACH_MAX_COUNT = 5;
   const [attach, setAttach] = useState(() =>
     Array.isArray(initialAttachments)
-      ? initialAttachments.map(f => ({ key: `${f.name}\u2014${f.size}\u2014${Date.now()}`, file: f }))
+      ? initialAttachments.map(f => ({ key: `${f.name}—${f.size}—${Date.now()}`, file: f }))
       : []);       // [{ key, file }]
   const [uploadingName, setUploadingName] = useState(null);
   const uploadedIds = useRef({});                 // key → files-row id
@@ -3007,5 +3153,4 @@ export function SendEmailModal({ person, org, people = [], initialRecipients = n
 // Hoisted out of Sidebar so its internal hover state survives Sidebar re-renders.
 // (Defining it inline made React see a "new" component type on every parent re-render
 // and unmount/remount, wiping local state including the hover toggle for the × button.)
-
 
