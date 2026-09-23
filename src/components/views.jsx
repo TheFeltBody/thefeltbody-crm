@@ -1142,7 +1142,7 @@ export function Dashboard({ orgs, people, classes, attendance, notes, packages, 
 // Reads from the shared `notes` array (already in state from loadAll), so
 // no extra fetching is needed. The badge on the sidebar uses the same count.
 
-export function InboxView({ notes, people, attendance, classes, onAssign, onDiscard }) {
+export function InboxView({ notes, people, attendance, classes, onAssign, onDiscard, onCreateContact }) {
   const isMobile = useIsMobile();
   const { personRoles } = useTypes();
   const [pickerFor, setPickerFor] = useState(null);  // note row currently being assigned
@@ -1265,6 +1265,13 @@ export function InboxView({ notes, people, attendance, classes, onAssign, onDisc
             onAssign(pickerFor.id, personId, addEmailIfNew);
             setPickerFor(null);
           }}
+          // "+ Add new contact": hand the note id + a starting name up to the
+          // parent, which opens AddPersonForm and assigns the note on save.
+          onAddNew={onCreateContact ? (name) => {
+            const noteId = pickerFor.id;
+            setPickerFor(null);
+            onCreateContact(noteId, name);
+          } : undefined}
         />
       )}
     </div>
@@ -1277,9 +1284,15 @@ export function InboxView({ notes, people, attendance, classes, onAssign, onDisc
 // checkbox defaults on — the killer feature of the inbox is one-click
 // "log this comm AND learn this new address".
 
-export function AssignToPersonModal({ note, people, attendance, classes, onClose, onAssign }) {
+// onAddNew (optional): mirrors AddToRegisterForm's "Can't find them?" row —
+// when the sender isn't in the CRM yet, create them from here. Passes the
+// typed search text, falling back to the sender's display name from the
+// email headers, so the new-contact form starts pre-filled.
+export function AssignToPersonModal({ note, people, attendance, classes, onClose, onAssign, onAddNew }) {
   const [selected, setSelected] = useState(null);
   const [addEmail, setAddEmail] = useState(true);
+  // Mirror of SearchSelect's query, same as the register picker.
+  const [query, setQuery] = useState('');
 
   // Pick which address would be added (matches assignToPerson logic in data layer).
   const candidateEmail = note.direction === 'outbound'
@@ -1287,6 +1300,27 @@ export function AssignToPersonModal({ note, people, attendance, classes, onClose
     : note.fromEmail;
 
   const available = people.filter(p => p.status !== 'inactive');
+
+  // Display name of the other party, when the headers carry one.
+  // Inbound: raw_headers.from ({address,name} from postal-mime, or a string).
+  // Outbound fan-out: the matching to_list/cc_list entry.
+  const senderName = (() => {
+    const rh = note.rawHeaders || {};
+    if (note.direction === 'outbound') {
+      const em = String(note.toEmail || '').trim().toLowerCase();
+      const hit = [...(rh.to_list || []), ...(rh.cc_list || [])]
+        .find(a => String(a?.email || '').trim().toLowerCase() === em);
+      return String(hit?.name || '').trim();
+    }
+    const from = rh.from;
+    if (from && typeof from === 'object') return String(from.name || '').trim();
+    if (typeof from === 'string') {
+      const m = from.match(/^\s*"?([^"<]+?)"?\s*</);  // 'Jane Doe <jane@x.com>'
+      return m ? m[1].trim() : '';
+    }
+    return '';
+  })();
+  const newName = query.trim() || senderName;
 
   return (
     <Modal title="Assign to contact" onClose={onClose} wide>
@@ -1298,6 +1332,7 @@ export function AssignToPersonModal({ note, people, attendance, classes, onClose
       </div>
 
       <SearchSelect people={available} onSelect={p => setSelected(p)}
+        onQueryChange={setQuery}
         attendance={attendance} classes={classes} />
 
       {selected && (
@@ -1315,6 +1350,15 @@ export function AssignToPersonModal({ note, people, attendance, classes, onClose
               Also add <span style={{color:C.text}}>{candidateEmail}</span> to {selected.name.split(' ')[0]}'s emails
             </label>
           )}
+        </div>
+      )}
+
+      {onAddNew && !selected && (
+        <div style={{marginTop:18,paddingTop:16,borderTop:`1px solid ${C.border}`,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
+          <div style={{color:C.muted,fontSize:12}}>
+            {query.trim() ? <>Can't find <span style={{color:C.text}}>{query.trim()}</span>?</> : "Not in your contacts yet?"}
+          </div>
+          <Btn variant="ghost" small onClick={() => onAddNew(newName)}>+ Add new contact</Btn>
         </div>
       )}
 

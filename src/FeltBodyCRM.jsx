@@ -1384,6 +1384,33 @@ export default function FeltBodyCRM() {
           }}
           onClose={close} />;
       }
+      case 'add_person_from_inbox': {
+        // Chained flow from the Inbox assign picker ("+ Add new contact"):
+        // create the person, then assign the unlinked email to them. The
+        // sender's address is pre-staged in the form (skipped if it's one of
+        // our own), so assignment runs with addEmailIfNew=false — whatever the
+        // user left in the form's email list is what gets saved. Modal closes
+        // synchronously; async work continues, same as add_person_to_register.
+        const inboxNote = notes.find(n => n.id === modal.noteId);
+        if (!inboxNote) return null;
+        const cand = String((inboxNote.direction === 'outbound' ? inboxNote.toEmail : inboxNote.fromEmail) || '').trim();
+        const mine = (settings.my_addresses || []).map(a => String(a).trim().toLowerCase());
+        const inboxEmail = cand && !mine.includes(cand.toLowerCase()) ? cand : '';
+        return <AddPersonForm orgs={orgs}
+          defaultName={modal.name}
+          defaultEmail={inboxEmail}
+          onAddPersonRole={addPersonRole}
+          customPersonRoles={customPersonRoles}
+          roleParents={roleParents}
+          onSave={async (p) => {
+            try {
+              const savedPerson = await data.people.create(p);
+              setPeople(prev => [...prev, savedPerson]);
+              await assignNoteToPerson(modal.noteId, savedPerson.id, false);
+            } catch (e) { onError('Add new contact from inbox')(e); }
+          }}
+          onClose={close} />;
+      }
       case 'add_package': return <AddPackageForm personId={modal.personId} onSave={addPackage} onClose={close} templates={packageTemplates} />;
       case 'edit_package': {
         const pk = packages.find(x => x.id === modal.packageId);
@@ -1527,7 +1554,8 @@ export default function FeltBodyCRM() {
       case 'inbox': return <InboxView notes={notes} people={people}
         attendance={attendance} classes={classes}
         onAssign={assignNoteToPerson}
-        onDiscard={deleteNote} />;
+        onDiscard={deleteNote}
+        onCreateContact={(noteId, name)=>setModal({type:'add_person_from_inbox', noteId, name})} />;
       case 'comms_log': return <RecentActivityView notes={notes} people={people} classes={classes} orgs={orgs} attendance={attendance} packages={packages} projects={projects} nav={nav} />;
       case 'package_templates': return <PackageTemplatesView templates={packageTemplates} nav={nav}
         onAdd={()=>setModal({type:'add_template'})}

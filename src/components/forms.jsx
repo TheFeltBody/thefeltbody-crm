@@ -97,7 +97,7 @@ function BirthdayField({ value, onChange, half }) {
 }
 
 
-export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOrgId, defaultName, onEmailAdd, onEmailDelete, onEmailSetPrimary, onAddPersonRole, customPersonRoles: customRolesList=[], roleParents=[] }) {
+export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, defaultOrgId, defaultName, defaultEmail, onEmailAdd, onEmailDelete, onEmailSetPrimary, onAddPersonRole, customPersonRoles: customRolesList=[], roleParents=[] }) {
   const { personRoles, orgTypes } = useTypes();
   const [addingRoleType, setAddingRoleType] = useState(false);
   // Active parent filter for the role chips. null = "All".
@@ -115,7 +115,12 @@ export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, de
   const [f, setF] = useState(initForm);
   const [roles, setRoles] = useState(initRoles);
   // Emails: live for edit (server is source of truth), staged for create.
-  const [emails, setEmails] = useState(existing?.emails || []);
+  // defaultEmail (create only): pre-stage an address as primary — used when
+  // creating a contact from an Inbox email, so the sender's address comes
+  // along. Still removable before saving. source 'import' matches the
+  // provenance assignToPerson uses for inbox-learned addresses.
+  const [emails, setEmails] = useState(existing?.emails
+    || ((defaultEmail || '').trim() ? [{ email: defaultEmail.trim(), isPrimary: true, source: 'import' }] : []));
   const [newEmail, setNewEmail] = useState('');
   const isEdit = !!existing;
 
