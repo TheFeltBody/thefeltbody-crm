@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { C, INTERACTION_KINDS, KIND_META, ORG_META, PAYMENT_STATUS, PERSON_ROLES, SOURCES } from "../lib/constants.js";
 import { addDays, fmt, initials, labelAbbrev, normaliseRich, primaryRole, smartSortPeople, today, useIsMobile, useMobileUI, useTypes } from "../lib/helpers.jsx";
-import { files as filesApi } from "../lib/dataLayer.js";
+import { files as filesApi, notes as notesApi } from "../lib/dataLayer.js";
 
 // ─── RICH TEXT RENDERER ───────────────────────────────────────────────────────
 // Display-side only: turns the markdown-lite produced by normaliseRich() into
@@ -201,6 +201,80 @@ export const AttachmentChips = ({ rh }) => {
   );
 };
 
+// ─── EMAIL HTML (on-demand, BUILD-12) ─────────────────────────────────────────
+// Bulk reads of interactions no longer include html_body (Supabase egress fix
+// — see dataLayer readInteractions). A row now carries hasHtml=true when an
+// HTML body exists, and the body itself is fetched only when someone opens the
+// HTML view. Shared by NoteCard (below) and the Threads message card (views).
+
+// srcDoc wrapper for untrusted email HTML. Unchanged contract: the iframe's
+// sandbox="" (empty) is the load-bearing safety control — no script
+// execution, no same-origin access, no form submission, no top-level
+// navigation — and the CSP meta additionally blocks ALL remote loads
+// (img/style/etc.), which kills tracking pixels, so viewing a logged email
+// never pings the sender. Never render email HTML via dangerouslySetInnerHTML.
+const emailSrcDoc = (html) => `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:;"><base target="_blank"><style>html,body{margin:0;padding:0;background:#fff;color:#111;font-family:sans-serif;font-size:14px;line-height:1.5;word-break:break-word}img{max-width:100%;height:auto}</style></head><body>${html}</body></html>`;
+
+// Resolve a note's HTML body. Uses an inline htmlBody when the row already has
+// one (full-table fallback / a mutation's returned row); otherwise, once
+// `enabled` (the HTML view is open), fetches it through the data layer, which
+// caches per session — reopening the same email costs nothing.
+// Returns { html, loading, error }.
+export function useEmailHtml(note, enabled) {
+  const inline = note?.htmlBody || null;
+  const id = note?.id || null;
+  const wanted = !!(enabled && !inline && id && note?.hasHtml);
+  const [state, setState] = useState({ id: null, html: null, loading: false, error: null });
+  useEffect(() => {
+    if (!wanted) return;
+    let cancelled = false;
+    setState({ id, html: null, loading: true, error: null });
+    notesApi.htmlBody(id)
+      .then(html => { if (!cancelled) setState({ id, html, loading: false, error: null }); })
+      .catch(e => { if (!cancelled) setState({ id, html: null, loading: false, error: e?.message || String(e) }); });
+    return () => { cancelled = true; };
+  }, [wanted, id]);
+  if (inline) return { html: inline, loading: false, error: null };
+  if (!wanted) return { html: null, loading: false, error: null };
+  if (state.id !== id) return { html: null, loading: true, error: null };
+  return state;
+}
+
+// Renders the sandboxed email iframe, a short loading placeholder while the
+// body is fetched, or — if the fetch failed or the row turned out to have no
+// HTML — the plaintext as a fallback so the card is never blank.
+export const EmailHtmlFrame = ({ html, loading, error, fallbackText, stopClicks }) => {
+  const swallow = stopClicks ? (e => e.stopPropagation()) : undefined;
+  if (html) {
+    return (
+      <iframe
+        title="email"
+        sandbox=""
+        onClick={swallow}
+        srcDoc={emailSrcDoc(html)}
+        style={{width:'100%',minHeight:400,border:`1px solid ${C.border}`,borderRadius:6,background:'#fff'}} />
+    );
+  }
+  if (loading) {
+    return (
+      <div onClick={swallow}
+        style={{border:`1px solid ${C.border}`,borderRadius:6,padding:'18px 14px',color:C.muted,fontSize:12,fontStyle:'italic'}}>
+        Loading email…
+      </div>
+    );
+  }
+  return (
+    <div onClick={swallow}>
+      {error && (
+        <div style={{color:C.red,fontSize:11,marginBottom:6}}>Couldn't load the HTML version ({error}) — showing text.</div>
+      )}
+      {fallbackText
+        ? <RichText text={fallbackText} style={{color:C.text,fontSize:13.5,lineHeight:1.65,opacity:0.92,wordBreak:'break-word'}} />
+        : <div style={{color:C.muted,fontSize:13,fontStyle:'italic',opacity:0.7}}>(no body)</div>}
+    </div>
+  );
+};
+
 export const RoleBadge = ({ role, compact }) => {
   const { personRoles } = useTypes();
   const m = personRoles[role] || PERSON_ROLES[role] || { label:role, color:C.muted, bg:C.surf };
@@ -241,8 +315,8 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
   const [editingDate, setEditingDate] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // HTML-view toggle for logged emails. Default false = plaintext (note.text),
-  // the readable-preview column. When note.htmlBody exists the card offers a
-  // switch to the full HTML, rendered in a sandboxed iframe (see below).
+  // the readable-preview column. When the email has an HTML body the card
+  // offers a switch to the full HTML, rendered in a sandboxed iframe (see below).
   const [showHtml, setShowHtml] = useState(false);
   // Auto-disarm the delete-confirm if user looks away
   useEffect(()=>{
@@ -270,6 +344,10 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
   // like a 1:1 email when it wasn't. Inbound shows the sender; plain
   // outbound falls back to the row's own to_email.
   const isEmail = note.kind === 'email';
+  // BUILD-12: html_body is no longer in bulk reads. hasHtml flags that one
+  // exists; useEmailHtml fetches it (cached) only once the HTML view is open.
+  const hasHtml = isEmail && !!(note.hasHtml || note.htmlBody);
+  const emailHtml = useEmailHtml(note, hasHtml && showHtml);
   const rh = (isEmail && note.rawHeaders) || {};
   const fmtAddrs = (arr) => (arr || []).map(a => a?.name || a?.email || '').filter(Boolean).join(', ');
   const emailLine = !isEmail ? '' : (note.direction === 'inbound'
@@ -330,14 +408,14 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
           <span style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px'}}>⚑ IMPORTANT</span>
         )}
       </div>
-      
+
       {note.subject && (
         <div style={{color:textColor,fontSize:14,fontWeight:600,lineHeight:1.5,marginBottom:note.text?3:0,opacity:completed?0.75:1}}>{note.subject}</div>
       )}
       {/* HTML/Text switch — only shown when the log-worker captured an HTML
           body for this email. Stops propagation so tapping the switch doesn't
           trigger the card's onClick (edit/open). */}
-      {isEmail && note.htmlBody && (
+      {hasHtml && (
         <div style={{display:'flex',gap:6,marginBottom:6}} onClick={e=>e.stopPropagation()}>
           {['text','html'].map(mode => {
             const active = (mode==='html') === showHtml;
@@ -353,24 +431,15 @@ export const NoteCard = ({ note, onToggleImportant, onClearAction, onReopenNote,
           })}
         </div>
       )}
-      {/* HTML view: sandboxed iframe. sandbox="" (empty) is the load-bearing
-          safety control — no script execution, no same-origin access, no form
-          submission, no top-level navigation, so hostile email markup is fully
-          quarantined from the CRM origin. The CSP meta injected ahead of the
-          body additionally blocks ALL remote loads (img/style/etc.), which
-          kills tracking pixels — merely viewing a logged email won't ping the
-          sender. Never render note.htmlBody via dangerouslySetInnerHTML. */}
-      {isEmail && note.htmlBody && showHtml ? (
-        <iframe
-          title="email"
-          sandbox=""
-          onClick={e=>e.stopPropagation()}
-          srcDoc={`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:;"><base target="_blank"><style>html,body{margin:0;padding:0;background:#fff;color:#111;font-family:sans-serif;font-size:14px;line-height:1.5;word-break:break-word}img{max-width:100%;height:auto}</style></head><body>${note.htmlBody}</body></html>`}
-          style={{width:'100%',minHeight:400,border:`1px solid ${C.border}`,borderRadius:6,background:'#fff'}} />
+      {/* HTML view: EmailHtmlFrame (above) — sandboxed iframe, sandbox="" +
+          CSP contract unchanged, body fetched on demand. Never render email
+          HTML via dangerouslySetInnerHTML. */}
+      {hasHtml && showHtml ? (
+        <EmailHtmlFrame {...emailHtml} fallbackText={note.text} stopClicks />
       ) : note.text ? (
         <RichText text={note.text} style={{color:textColor,fontSize:14,lineHeight:1.7,opacity:completed?0.75:1,wordBreak:'break-word'}} />
       ) : null}
-      {!note.subject && !note.text && !(isEmail && note.htmlBody) && (
+      {!note.subject && !note.text && !hasHtml && (
         <div style={{color:C.muted,fontSize:13,fontStyle:'italic',opacity:0.7}}>(no details)</div>
       )}
       {/* Any kind can carry attachments now (notes/meetings/calls too);

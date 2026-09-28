@@ -85,6 +85,47 @@ async function countRows(table, tweak = null) {
   return count ?? 0;
 }
 
+// ─── Interactions reads without the HTML body (BUILD-14, egress fix) ─────────
+// Inbound emails carry their full HTML in interactions.html_body — often tens
+// of KB each, and it was being downloaded for EVERY email on every page load.
+// Bulk reads now go through the interactions_lite view (all columns except
+// html_body, plus a has_html flag). The HTML itself is fetched on demand, one
+// email at a time, only when it's opened in HTML view — see notes.htmlBody().
+//
+// Fallback: if the view hasn't been created yet (SQL not run on this project),
+// the first read fails with "could not find ... interactions_lite"; we log it,
+// switch to the base table for the rest of the session, and retry. The CRM
+// keeps working either way — it's just heavier until the SQL runs. Same
+// ship-in-either-order stance as readings / project_sections in loadAll.
+let INTERACTIONS_READ = 'interactions_lite';
+
+async function readInteractions(run) {
+  try {
+    return await run(INTERACTIONS_READ);
+  } catch (e) {
+    if (INTERACTIONS_READ !== 'interactions' && /interactions_lite/i.test(e?.message || '')) {
+      console.warn('[CRM] interactions_lite view not found — reading the full interactions table instead (heavier egress). Run interactions-lite-view-BUILD-1.sql.');
+      INTERACTIONS_READ = 'interactions';
+      return run(INTERACTIONS_READ);
+    }
+    throw e;
+  }
+}
+
+// Row → note, plus hasHtml. From the view, has_html says whether an HTML body
+// exists (html_body itself is absent). From the base table (fallback, or a
+// mutation's returned row) html_body is present and noteFromDb carries it
+// through as htmlBody. UI checks `hasHtml || htmlBody`, so both shapes work.
+const noteFromReadRow = (row) => ({
+  ...noteFromDb(row),
+  hasHtml: row.has_html ?? (row.html_body != null),
+});
+
+// Per-session cache of fetched HTML bodies: id → string|null, or the in-flight
+// Promise so two cards asking at once share one request. Email HTML is
+// immutable once logged, so entries never go stale.
+const _htmlCache = new Map();
+
 // ─── Initial bulk load ───────────────────────────────────────────────────────
 // One call after auth. Issues all queries in parallel; returns the eleven
 // arrays the JSX expects, plus the customOrgTypes and customPersonRoles arrays.
@@ -139,8 +180,9 @@ export async function loadAll() {
     // PostgREST's 1000-row cap — a plain .select() would silently drop the
     // oldest rows past it. Secondary order on id keeps page boundaries stable
     // (date alone isn't unique, so rows could skip/duplicate across pages).
-    fetchAll('interactions', '*', q => q.is('deleted_at', null)
-      .order('date', { ascending: false }).order('id')),
+    // Reads the html_body-free view (see readInteractions above).
+    readInteractions(src => fetchAll(src, '*', q => q.is('deleted_at', null)
+      .order('date', { ascending: false }).order('id'))),
     supabase.from('packages_with_usage').select('*').is('deleted_at', null)
       .order('date_purchased', { ascending: false }).then(ok),
     supabase.from('active_invoices').select('*')
@@ -221,7 +263,7 @@ export async function loadAll() {
     series: seriesRows.map(seriesFromDb),
     classes: sessionRows.map(classFromDb),
     attendance: attendanceRows.map(attendanceFromDb),
-    notes: interactionRows.map(noteFromDb),
+    notes: interactionRows.map(noteFromReadRow),
     packages: packageRows.map(packageFromDb),
     invoices: invoiceRows.map((r) => invoiceFromDb(r, linesByInvoice[r.id] || [])),
     forms: formRows.map(formFromDb),
@@ -660,9 +702,9 @@ export const notes = {
   // Supabase egress. The poller uses listSince() below. Kept for ad-hoc use;
   // ranged so it isn't silently capped at 1000 rows.
   async list() {
-    const rows = await fetchAll('interactions', '*', q => q.is('deleted_at', null)
-      .order('date', { ascending: false }).order('id'));
-    return rows.map(noteFromDb);
+    const rows = await readInteractions(src => fetchAll(src, '*', q => q.is('deleted_at', null)
+      .order('date', { ascending: false }).order('id')));
+    return rows.map(noteFromReadRow);
   },
 
   // Incremental read for the background poller: only rows CREATED at or after
@@ -675,12 +717,46 @@ export const notes = {
   // Stripe, sends from the other machine). Edits and deletes made on another
   // machine show up on the next page load, not live.
   async listSince(sinceIso) {
-    let q = supabase.from('interactions').select('*')
-      .is('deleted_at', null)
-      .order('created_at', { ascending: true });
-    if (sinceIso) q = q.gte('created_at', sinceIso);
-    const rows = await q.then(ok);
-    return rows.map(noteFromDb);
+    const rows = await readInteractions(src => {
+      let q = supabase.from(src).select('*')
+        .is('deleted_at', null)
+        .order('created_at', { ascending: true });
+      if (sinceIso) q = q.gte('created_at', sinceIso);
+      return q.then(ok);
+    });
+    return rows.map(noteFromReadRow);
+  },
+
+  // Full HTML body for ONE email, fetched on demand when its HTML view is
+  // opened (NoteCard, Threads). Cached for the session, and concurrent callers
+  // share one request. Returns the HTML string, or null if the row has none.
+  async htmlBody(id) {
+    if (!id) return null;
+    if (_htmlCache.has(id)) return _htmlCache.get(id);
+    const p = supabase.from('interactions').select('html_body')
+      .eq('id', id).maybeSingle().then(ok)
+      .then(row => { const html = row?.html_body || null; _htmlCache.set(id, html); return html; })
+      .catch(e => { _htmlCache.delete(id); throw e; });
+    _htmlCache.set(id, p);
+    return p;
+  },
+
+  // Batch variant for a whole thread (Threads link extraction needs every
+  // message's HTML). Only fetches ids not already cached, in chunks so the
+  // id list in the query string stays short. Returns { id: html|null }.
+  async htmlBodies(ids) {
+    const unique = [...new Set((ids || []).filter(Boolean))];
+    const want = unique.filter(id => !_htmlCache.has(id));
+    for (let i = 0; i < want.length; i += 40) {
+      const chunk = want.slice(i, i + 40);
+      const rows = await supabase.from('interactions').select('id, html_body')
+        .in('id', chunk).then(ok);
+      const got = new Map(rows.map(r => [r.id, r.html_body || null]));
+      chunk.forEach(id => _htmlCache.set(id, got.has(id) ? got.get(id) : null));
+    }
+    const out = {};
+    for (const id of unique) out[id] = await _htmlCache.get(id);
+    return out;
   },
 
   // Assign an unlinked interaction (person_id IS NULL) to a real person.

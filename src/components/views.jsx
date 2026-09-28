@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BANK_DETAILS, C, CARE_HOME_STAGES, CLIENT_ROLES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, calKeys, calLabel, calStripeStyle, diaryCalColor, HOME_HOUSEHOLD_NAME, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAY_VIA, PERSON_ROLES, PKG_TYPES, READING_KINDS, RECURRENCE, RELATIONSHIP_LABELS, readingKind, hasPersonalRole, isPersonalOnly, isPersonalOrg } from "../lib/constants.js";
 import { addDays, birthdayInfo, buildInvoicePdfFile, calendarDateEvents, classKindKey, contactDateInfo, currentHourTime, deriveActivity, deriveReplyAllRecipients, downloadInvoiceHtml, endOfWeek, fmt, fmtMoney, fmtRel, fmtTime, initials, isBirthdayYearKnown, isCountlessPkg, lastDayOfMonth, plainText, primaryRole, PrintInvoiceOverlay, startOfWeek, timeToMin, today, useIsMobile, useLocalStorage, useMobileUI, useTypes, webEvents, webUnreadCount } from "../lib/helpers.jsx";
-import { AttachmentChips, Avatar, Btn, ConfirmBtn, Empty, KindBadge, MobileHeader, Modal, PageHead, RichText, RoleBadge, Row, SearchSelect, SourceTag, Stat } from "./primitives.jsx";
+import { AttachmentChips, Avatar, Btn, ConfirmBtn, EmailHtmlFrame, Empty, KindBadge, MobileHeader, Modal, PageHead, RichText, RoleBadge, Row, SearchSelect, SourceTag, Stat, useEmailHtml } from "./primitives.jsx";
 import { SendEmailModal } from "./forms.jsx";
+import { notes as notesApi } from "../lib/dataLayer.js";
 
 export function SidebarCustomTypeItem({ active, indent, label, icon, count, onNav, onDelete, onEdit }) {
   const [hover, setHover] = useState(false);
@@ -1618,11 +1619,13 @@ const isJunkUrl = (u) => {
 // Extract deduped, cleaned, non-junk URLs across every message in a thread.
 // Returns [{ url, seen }] where `seen` is how many messages referenced it —
 // purely informational (not shown prominently). Order: first-appearance.
-const extractThreadLinks = (messages) => {
+// htmlById: HTML bodies fetched on demand (BUILD-27 — bulk reads no longer
+// carry html_body). Falls back to an inline m.htmlBody when one is present.
+const extractThreadLinks = (messages, htmlById = {}) => {
   const order = [];
   const map = new Map();
   (messages || []).forEach(m => {
-    const hay = `${m.text || ''} \n ${htmlToLinkText(m.htmlBody)}`;
+    const hay = `${m.text || ''} \n ${htmlToLinkText(m.htmlBody || htmlById[m.id])}`;
     const found = hay.match(URL_RE) || [];
     found.forEach(raw => {
       const u = cleanUrl(raw);
@@ -1798,6 +1801,9 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
   // for. We store the thread object so the modals have its messages + subject
   // without a lookup. null = closed.
   const [saveLinksFor, setSaveLinksFor] = useState(null);
+  // id → HTML body for messages in threads opened this session (BUILD-27).
+  // Filled by the open-thread effect below; feeds link extraction.
+  const [htmlById, setHtmlById] = useState({});
 
   const personById = useMemo(() => {
     const m = {};
@@ -1949,7 +1955,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
 
   const saveLinksModal = saveLinksFor && (
     <SaveLinksModal
-      candidates={extractThreadLinks(saveLinksFor.messages)}
+      candidates={extractThreadLinks(saveLinksFor.messages, htmlById)}
       personId={threadCounterpartyId(saveLinksFor)}
       sourceThreadId={saveLinksFor.threadId || null}
       onSave={onSaveLinks}
@@ -1979,6 +1985,25 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
     if (selected && selected.unreadCount > 0) {
       onMarkThreadRead(selected.threadId, selected.soloId);
     }
+  }, [selectedKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // HTML bodies for the open thread (BUILD-27). Bulk reads no longer carry
+  // html_body, but link extraction ("Save links") mines each message's HTML
+  // for hrefs, so fetch the open thread's bodies once when it's opened —
+  // one batched request, cached for the session in the data layer. Message
+  // cards reuse the same cache when switched to HTML view. (htmlById state is
+  // declared at the top of ThreadsView — saveLinksModal reads it earlier.)
+  useEffect(() => {
+    if (!selected) return;
+    const ids = selected.messages
+      .filter(m => m.hasHtml && !m.htmlBody && htmlById[m.id] === undefined)
+      .map(m => m.id);
+    if (!ids.length) return;
+    let cancelled = false;
+    notesApi.htmlBodies(ids)
+      .then(got => { if (!cancelled) setHtmlById(prev => ({ ...prev, ...got })); })
+      .catch(e => console.warn('[CRM] could not load email HTML for thread:', e?.message || e));
+    return () => { cancelled = true; };
   }, [selectedKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── THREAD ROW (list item) ────────────────────────────────────────────────
@@ -2027,6 +2052,10 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
     // message. Per-message state — Message is a real component rendered
     // per row, so the hook is safe here (unlike an inline .map body).
     const [showHtml, setShowHtml] = useState(false);
+    // BUILD-27: the HTML body is no longer in bulk reads. hasHtml says one
+    // exists; useEmailHtml fetches it (cached) only once HTML view is chosen.
+    const hasHtml = !!(m.hasHtml || m.htmlBody);
+    const emailHtml = useEmailHtml(m, showHtml);
     const person = personById[m.personId];
     // Group outbound rows carry the full recipient line in raw_headers
     // (to_list/cc_list, written by the forms-worker fan-out). Render that
@@ -2071,7 +2100,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
           </div>
         )}
         {/* HTML/Text switch — shown only when an HTML body was captured. */}
-        {m.htmlBody && (
+        {hasHtml && (
           <div style={{ display: 'flex', gap: 6, marginBottom: 7 }}>
             {['text', 'html'].map(mode => {
               const active = (mode === 'html') === showHtml;
@@ -2087,17 +2116,11 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
             })}
           </div>
         )}
-        {/* HTML view: sandboxed iframe. sandbox="" (empty) is the load-bearing
-            safety control — no scripts, no same-origin, no forms, no top-level
-            nav — so hostile email markup can't touch the CRM origin. The CSP
-            meta blocks all remote loads (kills tracking pixels too). Never use
-            dangerouslySetInnerHTML for m.htmlBody. Same contract as NoteCard. */}
-        {m.htmlBody && showHtml ? (
-          <iframe
-            title="email"
-            sandbox=""
-            srcDoc={`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:;"><base target="_blank"><style>html,body{margin:0;padding:0;background:#fff;color:#111;font-family:sans-serif;font-size:14px;line-height:1.5;word-break:break-word}img{max-width:100%;height:auto}</style></head><body>${m.htmlBody}</body></html>`}
-            style={{ width: '100%', minHeight: 400, border: `1px solid ${C.border}`, borderRadius: 6, background: '#fff' }} />
+        {/* HTML view: EmailHtmlFrame (primitives) — sandboxed iframe with the
+            same sandbox="" + CSP contract as before. Never use
+            dangerouslySetInnerHTML for email HTML. Same contract as NoteCard. */}
+        {hasHtml && showHtml ? (
+          <EmailHtmlFrame {...emailHtml} fallbackText={m.text} />
         ) : (
           m.text ? (
             <RichText text={m.text} style={{ color: C.text, fontSize: 13.5, lineHeight: 1.65, opacity: 0.92, wordBreak: 'break-word' }} />
@@ -2136,7 +2159,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
               — opens the picker whether or not any were auto-detected, so links
               can be added by hand), and the recoverable soft-delete. */}
           {(() => {
-            const linkCount = extractThreadLinks(t.messages).length;
+            const linkCount = extractThreadLinks(t.messages, htmlById).length;
             return (
               <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
                 <Btn small variant="secondary" onClick={() => setSaveLinksFor(t)}>
