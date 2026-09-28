@@ -111,7 +111,7 @@ export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, de
     // defaultName: when this form is reached from a search that found nothing
     // (register picker, household picker), the typed name seeds the field so it
     // isn't retyped. Edit mode ignores it — `existing` wins.
-    : {name:(defaultName||'').trim(),phone:'',website:'',address:'',dateOfBirth:'',orgId:defaultOrgId||'',status:'active',source:{channel:'manual',detail:''},notes:'',defaultSessionRate:'',rateNotes:''};
+    : {name:(defaultName||'').trim(),phone:'',website:'',address:'',dateOfBirth:'',emergencyContactName:'',emergencyContactRelationship:'',emergencyContactPhone:'',orgId:defaultOrgId||'',status:'active',source:{channel:'manual',detail:''},notes:'',defaultSessionRate:'',rateNotes:''};
   const [f, setF] = useState(initForm);
   const [roles, setRoles] = useState(initRoles);
   // Emails: live for edit (server is source of truth), staged for create.
@@ -316,6 +316,12 @@ export function AddPersonForm({ existing, onSave, onClose, orgs, defaultType, de
       <div style={{display:'flex',gap:12}}>
         <BirthdayField value={f.dateOfBirth||''} onChange={s('dateOfBirth')} half />
         <div style={{flex:'1 1 0'}} />
+      </div>
+      <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',margin:'4px 0 8px',paddingTop:10,borderTop:`1px solid ${C.border}`}}>IN CASE OF EMERGENCY</div>
+      <FI label="EMERGENCY CONTACT" value={f.emergencyContactName||''} onChange={s('emergencyContactName')} />
+      <div style={{display:'flex',gap:12}}>
+        <FI label="RELATIONSHIP" value={f.emergencyContactRelationship||''} onChange={s('emergencyContactRelationship')} half />
+        <FI label="TELEPHONE" value={f.emergencyContactPhone||''} onChange={s('emergencyContactPhone')} type="tel" half />
       </div>
       <div style={{display:'flex',gap:12}}>
         <FI label="DEFAULT SESSION RATE (£)" value={f.defaultSessionRate||''} onChange={s('defaultSessionRate')} type="number" half />
@@ -814,7 +820,7 @@ export function MergePeopleForm({ personA, personB, orgs, onMerge, onClose }) {
 
   // For each field, track which side the user picked when values differ.
   // Default: master side wins. Reset whenever masterSide flips.
-  const fields = ['name','phone','website','address','dateOfBirth','notes','orgId','status','defaultSessionRate','rateNotes'];
+  const fields = ['name','phone','website','address','dateOfBirth','emergencyContactName','emergencyContactRelationship','emergencyContactPhone','notes','orgId','status','defaultSessionRate','rateNotes'];
   const [pick, setPick] = useState(() => Object.fromEntries(fields.map(k=>[k,masterSide])));
   // sourceChannel + sourceDetail nested under source.* — handle separately
   const [sourcePick, setSourcePick] = useState(masterSide);
@@ -934,6 +940,9 @@ export function MergePeopleForm({ personA, personB, orgs, onMerge, onClose }) {
         website: get('website') || null,
         address: get('address') || null,
         date_of_birth: get('dateOfBirth') || null,
+        emergency_contact_name: get('emergencyContactName') || null,
+        emergency_contact_relationship: get('emergencyContactRelationship') || null,
+        emergency_contact_phone: get('emergencyContactPhone') || null,
         notes: get('notes') || null,
         org_id: get('orgId') || null,
         status: get('status') || 'active',
@@ -1045,6 +1054,30 @@ export function MergePeopleForm({ personA, personB, orgs, onMerge, onClose }) {
             <input type="date" value={get('dateOfBirth')||''} onChange={e=>setOverride('dateOfBirth')(e.target.value)}
               style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}} />
             <FieldRadio fieldKey="dateOfBirth" valA={personA.dateOfBirth} valB={personB.dateOfBirth} displayA={personA.dateOfBirth||'—'} displayB={personB.dateOfBirth||'—'} />
+          </div>
+
+          {/* EMERGENCY CONTACT */}
+          <div style={{marginBottom:12}}>
+            <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>EMERGENCY CONTACT</label>
+            <input value={get('emergencyContactName')||''} onChange={e=>setOverride('emergencyContactName')(e.target.value)}
+              style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}} />
+            <FieldRadio fieldKey="emergencyContactName" valA={personA.emergencyContactName} valB={personB.emergencyContactName} displayA={personA.emergencyContactName||'—'} displayB={personB.emergencyContactName||'—'} />
+          </div>
+
+          {/* EMERGENCY RELATIONSHIP */}
+          <div style={{marginBottom:12}}>
+            <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>EMERGENCY RELATIONSHIP</label>
+            <input value={get('emergencyContactRelationship')||''} onChange={e=>setOverride('emergencyContactRelationship')(e.target.value)}
+              style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}} />
+            <FieldRadio fieldKey="emergencyContactRelationship" valA={personA.emergencyContactRelationship} valB={personB.emergencyContactRelationship} displayA={personA.emergencyContactRelationship||'—'} displayB={personB.emergencyContactRelationship||'—'} />
+          </div>
+
+          {/* EMERGENCY TELEPHONE */}
+          <div style={{marginBottom:12}}>
+            <label style={{display:'block',color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:5}}>EMERGENCY TELEPHONE</label>
+            <input value={get('emergencyContactPhone')||''} onChange={e=>setOverride('emergencyContactPhone')(e.target.value)}
+              style={{width:'100%',background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,padding:'8px 10px',fontFamily:"'Jost',sans-serif"}} />
+            <FieldRadio fieldKey="emergencyContactPhone" valA={personA.emergencyContactPhone} valB={personB.emergencyContactPhone} displayA={personA.emergencyContactPhone||'—'} displayB={personB.emergencyContactPhone||'—'} />
           </div>
 
           {/* ORG */}

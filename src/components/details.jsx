@@ -2504,6 +2504,11 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
               {person.website&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>WEBSITE</div><a href={/^https?:\/\//i.test(person.website)?person.website:`https://${person.website}`} target="_blank" rel="noopener noreferrer" style={{color:C.blue,fontSize:13,textDecoration:'none',wordBreak:'break-all'}}>{person.website}</a></div>}
               {person.address&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>ADDRESS</div><div style={{color:C.text,fontSize:13}}>{person.address}</div></div>}
               {person.dateOfBirth&&(()=>{const b=birthdayInfo(person.dateOfBirth);return <div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>DATE OF BIRTH</div><div style={{color:C.text,fontSize:13}}>{fmtDayMonth(person.dateOfBirth)}{b&&<span style={{color:b.days<=30?C.gold:C.muted,fontSize:12,marginLeft:8}}>· {b.label}</span>}</div></div>;})()}
+              {(person.emergencyContactName||person.emergencyContactPhone)&&<div>
+                <div style={{color:C.muted,fontSize:10,marginBottom:2}}>IN CASE OF EMERGENCY</div>
+                <div style={{color:C.text,fontSize:13}}>{person.emergencyContactName||'—'}{person.emergencyContactRelationship&&<span style={{color:C.muted,fontSize:12}}> · {person.emergencyContactRelationship}</span>}</div>
+                {person.emergencyContactPhone&&<a href={`tel:${person.emergencyContactPhone.replace(/\s+/g,'')}`} style={{color:C.gold,fontSize:13,textDecoration:'none'}}>{person.emergencyContactPhone}</a>}
+              </div>}
               {org&&<div><div style={{color:C.muted,fontSize:10,marginBottom:2}}>ORGANISATION</div><div style={{color:C.blue,fontSize:13,cursor:'pointer'}} onClick={()=>nav('org_detail',{orgId:org.id})}>{org.name}</div></div>}
               {/* STATUS & SOURCE: desktop only — on mobile they crowd out
                   the genuinely useful contact details (email/phone). Still

@@ -71,6 +71,11 @@ export const personFromDb = (row, roles = [], emails = []) => {
     // date_of_birth is a DATE column; Postgres returns 'YYYY-MM-DD'. Keep '' when
     // null so the date input stays blank and controlled.
     dateOfBirth: row.date_of_birth || '',
+    // In case of emergency — single contact, free text (relationship is
+    // whatever the person wrote: "Son", "Partner", "Neighbour").
+    emergencyContactName: row.emergency_contact_name || '',
+    emergencyContactRelationship: row.emergency_contact_relationship || '',
+    emergencyContactPhone: row.emergency_contact_phone || '',
     orgId: row.org_id || null,
     status: row.status || 'active',
     source: {
@@ -98,6 +103,9 @@ export const personToDb = (p) => ({
   address: p.address || null,
   // empty string from the date input → null (Postgres DATE rejects '')
   date_of_birth: p.dateOfBirth ? String(p.dateOfBirth).trim() || null : null,
+  emergency_contact_name: p.emergencyContactName ? String(p.emergencyContactName).trim() || null : null,
+  emergency_contact_relationship: p.emergencyContactRelationship ? String(p.emergencyContactRelationship).trim() || null : null,
+  emergency_contact_phone: p.emergencyContactPhone ? String(p.emergencyContactPhone).trim() || null : null,
   org_id: p.orgId || null,
   status: p.status || 'active',
   source_channel: p.source?.channel || 'manual',
