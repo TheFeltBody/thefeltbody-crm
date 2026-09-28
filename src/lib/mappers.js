@@ -316,6 +316,11 @@ export const noteFromDb = (row) => ({
   personId: row.person_id || null,
   classId: row.session_id || null,
   projectId: row.project_id || null,
+  // Project extras: which section of the project a to-do sits in, and whether
+  // this row is a journal entry rather than a to-do. Both only meaningful when
+  // projectId is set.
+  sectionId: row.section_id || null,
+  isJournal: row.is_journal ?? false,
   text: row.text,
   important: row.important,
   date: row.date,
@@ -369,6 +374,10 @@ export const noteToDb = (n) => ({
   person_id: n.personId || null,
   session_id: n.classId || null,
   project_id: n.projectId || null,
+  // Written only when set, so every other note insert (and any insert made
+  // before the sections/journal migration has run) never names these columns.
+  ...(n.sectionId ? { section_id: n.sectionId } : {}),
+  ...(n.isJournal ? { is_journal: true } : {}),
   text: n.text,
   important: n.important ?? false,
   date: n.date,
@@ -406,6 +415,8 @@ export const notePatchToDb = (patch) => {
   if (patch.personId !== undefined) out.person_id = patch.personId || null;
   if (patch.classId !== undefined) out.session_id = patch.classId || null;
   if (patch.projectId !== undefined) out.project_id = patch.projectId || null;
+  if (patch.sectionId !== undefined) out.section_id = patch.sectionId || null;
+  if (patch.isJournal !== undefined) out.is_journal = !!patch.isJournal;
   if (patch.text !== undefined) out.text = patch.text;
   if (patch.important !== undefined) out.important = patch.important;
   if (patch.date !== undefined) out.date = patch.date;
@@ -838,6 +849,25 @@ export const projectToDb = (p) => ({
   notes: p.notes || null,        // empty string → null on write
   is_personal: p.isPersonal ?? false,
   completed_at: p.completedAt || null,
+});
+
+// ─── Project sections ────────────────────────────────────────────────────────
+// Ordered groups inside a project (course modules, phases). A to-do joins a
+// section via interactions.section_id; deleting a section sets that to null
+// (FK ON DELETE SET NULL) so its to-dos fall back to unsectioned. owner_id is
+// set DB-side (default auth.uid()) — never written here.
+export const projectSectionFromDb = (row) => ({
+  id: row.id,
+  projectId: row.project_id,
+  name: row.name || '',
+  position: row.position ?? 0,
+  createdAt: row.created_at,
+});
+
+export const projectSectionToDb = (s) => ({
+  project_id: s.projectId,
+  name: (s.name || '').trim(),
+  position: s.position ?? 0,
 });
 
 // ─── Files (stored documents / photos) ───────────────────────────────────────

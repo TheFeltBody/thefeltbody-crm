@@ -37,6 +37,7 @@ import {
   emailFromDb, emailToDb,
   settingFromDb,
   projectFromDb, projectToDb,
+  projectSectionFromDb, projectSectionToDb,
   fileFromDb, fileToDb,
   practiceLogFromDb,
   linkFromDb, linkToDb,
@@ -110,6 +111,7 @@ export async function loadAll() {
     practiceLogRows,
     linkRows,
     readingRows,
+    projectSectionRows,
   ] = await Promise.all([
     supabase.from('active_organisations').select('*').order('name').then(ok),
     // Ranged reads: these tables cross (or are near) PostgREST's 1000-row cap.
@@ -161,6 +163,10 @@ export async function loadAll() {
     // rather a missing table shouted.
     supabase.from('readings').select('*').is('deleted_at', null)
       .order('updated_at', { ascending: false }).then(ok).catch(() => []),
+    // Project sections (course modules / phases). Fault-tolerant for the same
+    // reason as readings: the modules can ship before the migration has run.
+    supabase.from('project_sections').select('*')
+      .order('position').then(ok).catch(() => []),
   ]);
 
   // Group person_roles by person_id -> array of role keys
@@ -221,6 +227,7 @@ export async function loadAll() {
     practiceLogs: practiceLogRows.map(practiceLogFromDb),
     links: linkRows.map(linkFromDb),
     readings: readingRows.map(readingFromDb),
+    projectSections: projectSectionRows.map(projectSectionFromDb),
   };
 }
 
@@ -763,6 +770,31 @@ export const projects = {
   // must not expose delete for non-empty projects (V1 has no delete UI at all;
   // this exists for completeness / console use).
   delete: (id) => supabase.from('projects').delete().eq('id', id).then(ok),
+};
+
+// ─── Project sections ────────────────────────────────────────────────────────
+// Hard delete — the FK on interactions.section_id is ON DELETE SET NULL, so a
+// deleted section's to-dos survive as unsectioned. reorder writes positions for
+// the full ordered list of ONE project's sections (small lists, N updates).
+export const projectSections = {
+  async create(s) {
+    const row = await supabase.from('project_sections').insert(projectSectionToDb(s))
+      .select().single().then(ok);
+    return projectSectionFromDb(row);
+  },
+  async rename(id, name) {
+    const row = await supabase.from('project_sections').update({ name: (name || '').trim() })
+      .eq('id', id).select().single().then(ok);
+    return projectSectionFromDb(row);
+  },
+  async reorder(orderedList) {
+    await Promise.all(orderedList.map((s, i) =>
+      supabase.from('project_sections').update({ position: i }).eq('id', s.id).then(ok)
+    ));
+  },
+  async delete(id) {
+    await supabase.from('project_sections').delete().eq('id', id).then(ok);
+  },
 };
 
 // ─── Packages ────────────────────────────────────────────────────────────────

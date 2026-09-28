@@ -2539,7 +2539,7 @@ export function RecentActivityView({ notes, people, classes, orgs, attendance, p
                       {cls.name} <span style={{color:C.muted,fontSize:11,fontWeight:400,marginLeft:4}}>· {fmt(cls.date)}</span>
                     </span>
                   ) : (
-                    <span style={{color:C.muted,fontSize:13,fontStyle:'italic'}}>{n.projectId && projectOf(n.projectId) ? 'Project to-do' : 'Unassigned'}</span>
+                    <span style={{color:C.muted,fontSize:13,fontStyle:'italic'}}>{n.projectId && projectOf(n.projectId) ? (n.isJournal ? 'Project journal' : 'Project to-do') : 'Unassigned'}</span>
                   )}
                   {counterparty && !person && (
                     <span style={{color:C.muted,fontSize:12}}>{counterparty}</span>
@@ -2889,7 +2889,8 @@ export function ProjectsView({ projects, notes, nav, onAddProject, onSetStatus, 
 
   // Open-todo count per project (todos = interactions with this project_id that
   // aren't completed). Project todos are notes carrying projectId.
-  const openCount = (pid) => notes.filter(n => n.projectId === pid && !n.completed).length;
+  // Journal entries share project_id but aren't to-dos — keep them out of the count.
+  const openCount = (pid) => notes.filter(n => n.projectId === pid && !n.isJournal && !n.completed).length;
 
   const save = async () => {
     const name = newName.trim();

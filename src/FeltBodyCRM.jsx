@@ -47,6 +47,9 @@ export default function FeltBodyCRM() {
   // Projects: top-level "your work" entity (distinct from contacts/orgs). Holds
   // project todos via interactions.project_id. status is 'active' | 'done'.
   const [projects, setProjects] = useState([]);
+  // Ordered sections inside projects (course modules, phases). A to-do joins a
+  // section via its sectionId; a project with no sections renders flat.
+  const [projectSections, setProjectSections] = useState([]);
   // User-defined org categories (Insurance, Banks, etc.) and contact roles, persisted alongside data.
   const [customOrgTypes, setCustomOrgTypes] = useState([]);
   const [customPersonRoles, setCustomPersonRoles] = useState([]);
@@ -139,6 +142,7 @@ export default function FeltBodyCRM() {
         setContactDates(all.contactDates || []);
         setSettings(all.settings || {});
         setProjects(all.projects || []);
+        setProjectSections(all.projectSections || []);
         setPackageTemplates(all.packageTemplates || []);
         setFiles(all.files || []);
         setPracticeLogs(all.practiceLogs || []);
@@ -869,12 +873,62 @@ export default function FeltBodyCRM() {
   const addProject = (p) => data.projects.create({ isPersonal: mode === 'personal', ...p })
     .then(saved => { setProjects(prev => [saved, ...prev]); return saved; })
     .catch(onError('Add project'));
+  // Merges the patch over the current row before writing. projectToDb writes
+  // every column, so a caller that sends only { name } used to reset the
+  // others to defaults — which silently moved a renamed personal project back
+  // to business (is_personal → false). Merging makes partial patches safe.
   const updateProject = (id, p) => {
     const prev = projects.find(x => x.id === id);
-    return data.projects.update(id, p, prev?.status || null)
+    const merged = prev ? { ...prev, ...p } : p;
+    return data.projects.update(id, merged, prev?.status || null)
       .then(saved => { setProjects(prevList => prevList.map(x => x.id === id ? saved : x)); return saved; })
       .catch(onError('Update project'));
   };
+  // Move a project between the personal and business record systems. It then
+  // drops out of the current mode's Projects list and appears in the other.
+  const setProjectPersonal = (id, isPersonal) => updateProject(id, { isPersonal: !!isPersonal });
+
+  // ── Project sections
+  // Create is server-confirmed (the new id is needed to file to-dos into it).
+  // Rename / reorder / delete / move-to-do are optimistic-local, fire-and-forget.
+  const addProjectSection = (projectId, name) => {
+    const siblings = projectSections.filter(s => s.projectId === projectId);
+    const position = siblings.reduce((m, s) => Math.max(m, s.position), -1) + 1;
+    return data.projectSections.create({ projectId, name, position })
+      .then(saved => { setProjectSections(prev => [...prev, saved]); return saved; })
+      .catch(onError('Add section'));
+  };
+  const renameProjectSection = (id, name) => {
+    const clean = (name || '').trim();
+    if (!clean) return;
+    setProjectSections(prev => prev.map(s => s.id === id ? { ...s, name: clean } : s));
+    data.projectSections.rename(id, clean).catch(onError('Rename section'));
+  };
+  const moveProjectSection = (id, dir) => {
+    const sec = projectSections.find(s => s.id === id);
+    if (!sec) return;
+    const list = projectSections.filter(s => s.projectId === sec.projectId)
+      .sort((a, b) => a.position - b.position);
+    const i = list.findIndex(s => s.id === id);
+    const j = i + dir;
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    const renumbered = list.map((s, k) => ({ ...s, position: k }));
+    const byId = Object.fromEntries(renumbered.map(s => [s.id, s]));
+    setProjectSections(prev => prev.map(s => byId[s.id] || s));
+    data.projectSections.reorder(renumbered).catch(onError('Reorder sections'));
+  };
+  const deleteProjectSection = (id) => {
+    // Mirror the FK's ON DELETE SET NULL locally: its to-dos become unsectioned.
+    setProjectSections(prev => prev.filter(s => s.id !== id));
+    setNotes(prev => prev.map(n => n.sectionId === id ? { ...n, sectionId: null } : n));
+    data.projectSections.delete(id).catch(onError('Delete section'));
+  };
+  const setNoteSection = (noteId, sectionId) => {
+    setNotes(prev => prev.map(n => n.id === noteId ? { ...n, sectionId: sectionId || null } : n));
+    data.notes.patch(noteId, { sectionId: sectionId || null }).catch(onError('Move to-do'));
+  };
+
   const setProjectStatus = (id, status) => {
     // Optimistic flip; reconcile from the server-confirmed row.
     setProjects(prev => prev.map(x => x.id === id
@@ -1578,6 +1632,15 @@ export default function FeltBodyCRM() {
       case 'project_detail': {
         const project = projects.find(p => p.id === view.projectId); if(!project) return <Empty text="Not found" />;
         return <ProjectDetail project={project} notes={notes} people={people} files={files} nav={nav} backInfo={backInfo}
+          sections={projectSections.filter(s => s.projectId === project.id)}
+          mode={mode}
+          onSwitchMode={(m) => { switchMode(m); nav('project_detail', { projectId: project.id }); }}
+          onSetPersonal={setProjectPersonal}
+          onAddSection={addProjectSection}
+          onRenameSection={renameProjectSection}
+          onMoveSection={moveProjectSection}
+          onDeleteSection={deleteProjectSection}
+          onSetNoteSection={setNoteSection}
           onUploadFile={uploadFile}
           onGetFileUrl={getFileUrl}
           onRemoveFile={removeFile}

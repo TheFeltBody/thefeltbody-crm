@@ -10,27 +10,34 @@ import { ClassLog } from "./views.jsx";
 const isImageFile = (f) => (f?.mimeType || '').startsWith('image/');
 
 export function ProjectDetail({ project, notes, people, files = [], nav, backInfo,
+  sections = [], mode = 'client', onSwitchMode, onSetPersonal,
+  onAddSection, onRenameSection, onMoveSection, onDeleteSection, onSetNoteSection,
   onAddTodo, onCompleteNote, onReopenNote, onDeleteNote, onUpdateActionDate, onUpdateNoteText, onSetStatus, onUpdateProject,
   onUploadFile, onGetFileUrl, onRemoveFile }) {
   const isMobile = useIsMobile();
   const [newTodo, setNewTodo] = useState('');
   const [newDate, setNewDate] = useState('');
+  // Section the next added to-do goes into ('' = unsectioned). Sticky between
+  // adds so a module's lessons can be typed in one after another.
+  const [newSection, setNewSection] = useState('');
   const [busy, setBusy] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
   const todoInputRef = useRef(null);
   // Name edit: local draft, save on blur/Enter if changed.
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(project.name || '');
-  useEffect(()=>{ setNameDraft(project.name || ''); setEditingName(false); }, [project.id]);
+  useEffect(()=>{ setNameDraft(project.name || ''); setEditingName(false); setNewSection(''); }, [project.id]);
   // Notes field: local draft, save on blur if changed.
   const [notesDraft, setNotesDraft] = useState(project.notes || '');
   useEffect(()=>{ setNotesDraft(project.notes || ''); }, [project.id]);
 
+  // Partial patches are safe: the parent merges them over the current row, so
+  // is_personal (and everything else) survives a rename or notes save.
   const saveName = () => {
     const name = nameDraft.trim();
     setEditingName(false);
     if (!name || name === project.name) { setNameDraft(project.name || ''); return; }
-    onUpdateProject(project.id, { name, status: project.status, notes: project.notes || '', completedAt: project.completedAt });
+    onUpdateProject(project.id, { name });
   };
 
   // Inline todo-text edit. State hoisted here (not inside todoRow) so the row
@@ -49,22 +56,71 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
 
   const personOf = (id) => people.find(p => p.id === id);
 
-  const todos = notes.filter(n => n.projectId === project.id);
-  const openTodos = todos.filter(t => !t.completed)
-    .sort((a,b) => (a.actionDate||'9999').localeCompare(b.actionDate||'9999'));
-  const doneTodos = todos.filter(t => t.completed)
-    .sort((a,b) => (b.completedAt||b.date||'').localeCompare(a.completedAt||a.date||''));
+  // Project interactions split two ways: to-dos, and journal entries (same
+  // table, is_journal=true). Everything to-do shaped below ignores the journal.
+  const projectRows = notes.filter(n => n.projectId === project.id);
+  const todos = projectRows.filter(n => !n.isJournal);
+  const journal = projectRows.filter(n => n.isJournal)
+    .sort((a,b) => (b.date||'').localeCompare(a.date||'') || (b.createdAt||'').localeCompare(a.createdAt||''));
+  const byDue = (a,b) => (a.actionDate||'9999').localeCompare(b.actionDate||'9999');
+  const byDoneDesc = (a,b) => (b.completedAt||b.date||'').localeCompare(a.completedAt||a.date||'');
+  const openTodos = todos.filter(t => !t.completed).sort(byDue);
+  const doneTodos = todos.filter(t => t.completed).sort(byDoneDesc);
 
-  // ─── To-do attachments ─────────────────────────────────────────────────────
-  // Project to-dos ARE interactions, so an image attaches via the existing
+  // ─── Sections ──────────────────────────────────────────────────────────────
+  // Ordered groups (course modules, phases). With none, the page renders flat
+  // exactly as before. A to-do pointing at a section that no longer exists is
+  // treated as unsectioned.
+  const sortedSections = useMemo(() => [...sections].sort((a,b) => a.position - b.position), [sections]);
+  const sectionIds = useMemo(() => new Set(sortedSections.map(s => s.id)), [sortedSections]);
+  const hasSections = sortedSections.length > 0;
+  const isUnsectioned = (t) => !(t.sectionId && sectionIds.has(t.sectionId));
+  const effectiveNewSection = sectionIds.has(newSection) ? newSection : '';
+
+  const [addingSection, setAddingSection] = useState(false);
+  const [sectionDraft, setSectionDraft] = useState('');
+  const [sectionBusy, setSectionBusy] = useState(false);
+  const [editingSectionId, setEditingSectionId] = useState(null);
+  const [sectionNameDraft, setSectionNameDraft] = useState('');
+  const [collapsedSections, setCollapsedSections] = useState(() => new Set());
+  const toggleSection = (id) => setCollapsedSections(prev => {
+    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
+  });
+  const saveNewSection = async () => {
+    const name = sectionDraft.trim();
+    if (!name || sectionBusy) return;
+    setSectionBusy(true);
+    try {
+      await onAddSection(project.id, name);
+      setSectionDraft('');   // stay open for rapid entry of several modules
+    } finally { setSectionBusy(false); }
+  };
+  const saveSectionName = () => {
+    const id = editingSectionId;
+    setEditingSectionId(null);
+    const cur = sortedSections.find(s => s.id === id);
+    if (id && sectionNameDraft.trim() && cur && sectionNameDraft.trim() !== cur.name) {
+      onRenameSection(id, sectionNameDraft);
+    }
+  };
+  // Header "+" on a section: point the add row at that section and focus it.
+  const addIntoSection = (sid) => {
+    setNewSection(sid);
+    setCollapsedSections(prev => { const n = new Set(prev); n.delete(sid); return n; });
+    setTimeout(() => todoInputRef.current?.focus(), 0);
+  };
+
+  // ─── Attachments (to-dos and journal entries) ──────────────────────────────
+  // Both are interactions, so a file attaches via the existing
   // files.interaction_id anchor — no schema change. State lives HERE, not in
-  // todoRow: it is re-created on every parent render, so any state it held
-  // would be dropped mid-upload.
+  // the row renderers: they are re-created on every parent render, so any state
+  // they held would be dropped mid-upload.
   //
   // One hidden <input type="file"> is shared by every row (N inputs would be
-  // remounted constantly); attachTargetRef carries which to-do the picker was
-  // opened for. It's a ref, not state, so the onChange handler can't read a
-  // stale value.
+  // remounted constantly); attachTargetRef carries which row the picker was
+  // opened for, and pickFile sets `accept` per call (images for to-dos, any
+  // file for journal entries). It's a ref, not state, so the onChange handler
+  // can't read a stale value.
   const [uploadErr, setUploadErr] = useState('');
   const [uploadingId, setUploadingId] = useState(null);
   const [urls, setUrls] = useState({});          // fileId -> signed / blob URL
@@ -75,28 +131,30 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
   // the minting effect would retry a failed file on every render.
   const urlAttempted = useRef(new Set());
 
-  // files rows anchored to any to-do in THIS project, grouped by to-do id.
+  // files rows anchored to any to-do or journal entry in THIS project, grouped
+  // by interaction id.
   const attachments = useMemo(() => {
-    const ids = new Set(todos.map(t => t.id));
-    const byTodo = {};
+    const ids = new Set(projectRows.map(t => t.id));
+    const byRow = {};
     for (const f of files) {
       if (f.interactionId && ids.has(f.interactionId)) {
-        (byTodo[f.interactionId] = byTodo[f.interactionId] || []).push(f);
+        (byRow[f.interactionId] = byRow[f.interactionId] || []).push(f);
       }
     }
-    return byTodo;
-  }, [files, todos]);
+    return byRow;
+  }, [files, notes, project.id]);
 
-  // Mint a viewing URL per attachment. The bucket is private, so thumbnails
-  // can't just point at a path — signedUrl gives a 1-hour https URL for
-  // supabase-store rows (a blob: URL for r2 ones). Sequential, best-effort:
-  // one failure leaves that thumbnail as a placeholder glyph, nothing more.
+  // Mint a viewing URL per IMAGE attachment (thumbnails). The bucket is
+  // private, so thumbnails can't just point at a path — signedUrl gives a
+  // 1-hour https URL for supabase-store rows (a blob: URL for r2 ones).
+  // Non-image files (PDFs etc.) mint lazily when opened. Sequential,
+  // best-effort: one failure leaves that thumbnail as a placeholder glyph.
   useEffect(() => {
     if (!onGetFileUrl) return;
     const wanted = [];
     for (const list of Object.values(attachments)) {
       for (const f of list) {
-        if (!urlAttempted.current.has(f.id)) { urlAttempted.current.add(f.id); wanted.push(f); }
+        if (isImageFile(f) && !urlAttempted.current.has(f.id)) { urlAttempted.current.add(f.id); wanted.push(f); }
       }
     }
     if (!wanted.length) return;
@@ -123,10 +181,11 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
     urlAttempted.current = new Set();
   }, [project.id]);
 
-  const pickImage = (todoId) => {
+  const pickFile = (rowId, accept) => {
     setUploadErr('');
-    attachTargetRef.current = todoId;
+    attachTargetRef.current = rowId;
     if (attachInputRef.current) {
+      attachInputRef.current.accept = accept || '';
       attachInputRef.current.value = '';   // so re-picking the same file fires
       attachInputRef.current.click();
     }
@@ -134,15 +193,15 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
 
   const onAttachChange = async (e) => {
     const file = e.target.files && e.target.files[0];
-    const todoId = attachTargetRef.current;
+    const rowId = attachTargetRef.current;
     e.target.value = '';
-    if (!file || !todoId || !onUploadFile) return;
-    setUploadingId(todoId);
+    if (!file || !rowId || !onUploadFile) return;
+    setUploadingId(rowId);
     setUploadErr('');
     try {
       // onUploadFile splices the saved row into the parent's files state, which
       // comes straight back down as the `files` prop — no local bookkeeping.
-      await onUploadFile(file, { interactionId: todoId }, '');
+      await onUploadFile(file, { interactionId: rowId }, '');
     } catch (err) {
       setUploadErr(err?.message || 'Upload failed.');
     } finally {
@@ -176,13 +235,13 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
     setLightbox(null);
     forgetUrl(f.id);
     try { await onRemoveFile(f); }
-    catch (err) { setUploadErr(err?.message || 'Could not remove that image.'); }
+    catch (err) { setUploadErr(err?.message || 'Could not remove that file.'); }
   };
 
-  // Deleting a to-do soft-deletes the interaction, which would leave its
-  // images anchored to a row nothing can reach — so we purge them first.
-  // Best-effort: a failed image removal must not block the to-do delete.
-  const deleteTodo = async (t) => {
+  // Deleting a to-do or journal entry soft-deletes the interaction, which would
+  // leave its files anchored to a row nothing can reach — so purge them first.
+  // Best-effort: a failed file removal must not block the delete.
+  const deleteRow = async (t) => {
     const attached = attachments[t.id] || [];
     for (const f of attached) {
       forgetUrl(f.id);
@@ -199,6 +258,7 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
     try {
       await onAddTodo({
         text, actionDate: newDate || null, projectId: project.id,
+        sectionId: effectiveNewSection || null,
         personId: null, kind: 'note', source: 'todo', date: today(), important: false,
       });
       setNewTodo(''); setNewDate('');
@@ -217,30 +277,104 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
 
   const saveNotes = () => {
     if (notesDraft === (project.notes || '')) return;
-    onUpdateProject(project.id, { name: project.name, status: project.status, notes: notesDraft, completedAt: project.completedAt });
+    onUpdateProject(project.id, { notes: notesDraft });
+  };
+
+  // ─── Journal ───────────────────────────────────────────────────────────────
+  // Dated reflections kept alongside the to-dos. Same interactions table,
+  // is_journal=true, source='todo' (satisfies the anchor constraint via
+  // project_id). Each entry can carry files (handouts, PDFs, photos).
+  const [journalDraft, setJournalDraft] = useState('');
+  const [journalDate, setJournalDate] = useState(today());
+  const [journalBusy, setJournalBusy] = useState(false);
+  const [editingJournalId, setEditingJournalId] = useState(null);
+  const [journalEditDraft, setJournalEditDraft] = useState('');
+  const addJournal = async () => {
+    const text = journalDraft.trim();
+    if (!text || journalBusy) return;
+    setJournalBusy(true);
+    try {
+      await onAddTodo({
+        text, projectId: project.id, isJournal: true,
+        personId: null, kind: 'note', source: 'todo', date: journalDate || today(), important: false,
+      });
+      setJournalDraft(''); setJournalDate(today());
+    } finally { setJournalBusy(false); }
+  };
+  const saveJournalEdit = () => {
+    const id = editingJournalId;
+    setEditingJournalId(null);
+    if (id && journalEditDraft.trim()) onUpdateNoteText(id, journalEditDraft);
   };
 
   // Copy open to-dos to clipboard as a bulleted list — project name as a heading,
-  // one "• " line per open item, due date appended inline when set. Brief
-  // "Copied" confirmation on the button via copied state.
+  // one "• " line per open item, due date appended inline when set. With
+  // sections, items are grouped under their section names. Brief "Copied"
+  // confirmation on the button via copied state.
   const [copied, setCopied] = useState(false);
   const copyOpenTodos = async () => {
-    const lines = openTodos.map(t =>
-      `• ${t.text}${t.actionDate ? ` (due ${t.actionDate})` : ''}`
-    );
-    const text = `${project.name}\n${lines.join('\n')}`;
+    const line = (t) => `• ${t.text}${t.actionDate ? ` (due ${t.actionDate})` : ''}`;
+    let body;
+    if (hasSections) {
+      const blocks = [];
+      const loose = openTodos.filter(isUnsectioned);
+      if (loose.length) blocks.push(loose.map(line).join('\n'));
+      sortedSections.forEach(s => {
+        const items = openTodos.filter(t => t.sectionId === s.id);
+        if (items.length) blocks.push(`${s.name}\n${items.map(line).join('\n')}`);
+      });
+      body = blocks.join('\n\n');
+    } else {
+      body = openTodos.map(line).join('\n');
+    }
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(`${project.name}\n${body}`);
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
     } catch { /* clipboard unavailable — no-op */ }
   };
 
   const isDone = project.status === 'done';
+  const projectIsPersonal = !!project.isPersonal;
+  const viewingPersonal = mode === 'personal';
+  const inOtherMode = projectIsPersonal !== viewingPersonal;
   const inputStyle = {
     background:C.card, border:`1px solid ${C.border}`, borderRadius:6,
     color:C.text, fontSize:14, padding:'8px 12px', fontFamily:"'Jost',sans-serif", outline:'none',
   };
+  const sectionLabelStyle = {color:C.muted, fontSize:11, fontWeight:700, letterSpacing:'1.5px', textTransform:'uppercase'};
+  const tinyBtn = {background:'none', border:`1px solid ${C.border}`, color:C.muted, cursor:'pointer', borderRadius:4,
+    fontSize:11, padding:'2px 7px', lineHeight:1.3, fontFamily:"'Jost',sans-serif"};
+
+  // Attachment strip for any row. NOT a component (see todoRow note below).
+  // Images render as tappable thumbnails; anything else falls back to a
+  // filename chip. Both open the same viewer.
+  const attachmentStrip = (rowId) => (attachments[rowId] || []).length > 0 && (
+    <div style={{display:'flex', gap:6, flexWrap:'wrap', marginTop:8}}>
+      {attachments[rowId].map(f => isImageFile(f) ? (
+        <div key={f.id} onClick={()=>openAttachment(f)} title={f.filename}
+          style={{
+            width:56, height:56, flexShrink:0, borderRadius:6, overflow:'hidden',
+            border:`1px solid ${C.border}`, background:C.surf, cursor:'pointer',
+            display:'flex', alignItems:'center', justifyContent:'center',
+          }}>
+          {urls[f.id]
+            ? <img src={urls[f.id]} alt={f.filename}
+                style={{width:'100%', height:'100%', objectFit:'cover', display:'block'}} />
+            : <span style={{color:C.muted, fontSize:15, opacity:0.7}}>🖼</span>}
+        </div>
+      ) : (
+        <span key={f.id} onClick={()=>openAttachment(f)} title={f.filename}
+          style={{
+            color:C.muted, fontSize:11, cursor:'pointer', border:`1px solid ${C.border}`,
+            borderRadius:10, padding:'2px 8px', maxWidth:200, overflow:'hidden',
+            textOverflow:'ellipsis', whiteSpace:'nowrap',
+          }}>
+          📎 {f.filename}
+        </span>
+      ))}
+    </div>
+  );
 
   // NOT a component — a plain function returning JSX, called as todoRow(t).
   // As a component it was re-created on every parent render, so React saw a new
@@ -317,59 +451,161 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
               </span>
             )}
             {!t.completed && onUploadFile && (
-              <span onClick={()=>uploadingId===t.id ? null : pickImage(t.id)}
+              <span onClick={()=>uploadingId===t.id ? null : pickFile(t.id, 'image/*')}
                 title="Attach an image"
                 style={{color:uploadingId===t.id?C.gold:C.muted, fontSize:11, cursor:uploadingId===t.id?'default':'pointer', opacity:uploadingId===t.id?1:0.65}}>
                 {uploadingId===t.id ? 'Uploading…' : '+ image'}
               </span>
             )}
+            {/* Move between sections. A native select keeps it thumb-friendly
+                on mobile; styled down to read as quiet meta text. */}
+            {hasSections && !t.completed && onSetNoteSection && (
+              <select value={isUnsectioned(t) ? '' : t.sectionId}
+                onChange={e=>onSetNoteSection(t.id, e.target.value || null)}
+                title="Move to section"
+                style={{background:'transparent', border:'none', color:C.muted, fontSize:11, opacity:0.75,
+                  cursor:'pointer', fontFamily:"'Jost',sans-serif", outline:'none', maxWidth:170, padding:0}}>
+                <option value="">▸ No section</option>
+                {sortedSections.map(s => <option key={s.id} value={s.id}>▸ {s.name}</option>)}
+              </select>
+            )}
           </div>
-
-          {/* Attachments. Images render as tappable thumbnails; anything else
-              falls back to a filename chip. Both open the same viewer. */}
-          {(attachments[t.id] || []).length > 0 && (
-            <div style={{display:'flex', gap:6, flexWrap:'wrap', marginTop:8}}>
-              {attachments[t.id].map(f => isImageFile(f) ? (
-                <div key={f.id} onClick={()=>openAttachment(f)} title={f.filename}
-                  style={{
-                    width:56, height:56, flexShrink:0, borderRadius:6, overflow:'hidden',
-                    border:`1px solid ${C.border}`, background:C.surf, cursor:'pointer',
-                    display:'flex', alignItems:'center', justifyContent:'center',
-                  }}>
-                  {urls[f.id]
-                    ? <img src={urls[f.id]} alt={f.filename}
-                        style={{width:'100%', height:'100%', objectFit:'cover', display:'block'}} />
-                    : <span style={{color:C.muted, fontSize:15, opacity:0.7}}>🖼</span>}
-                </div>
-              ) : (
-                <span key={f.id} onClick={()=>openAttachment(f)} title={f.filename}
-                  style={{
-                    color:C.muted, fontSize:11, cursor:'pointer', border:`1px solid ${C.border}`,
-                    borderRadius:10, padding:'2px 8px', maxWidth:200, overflow:'hidden',
-                    textOverflow:'ellipsis', whiteSpace:'nowrap',
-                  }}>
-                  📎 {f.filename}
-                </span>
-              ))}
-            </div>
-          )}
+          {attachmentStrip(t.id)}
         </div>
         <div style={{flexShrink:0}}>
           <ConfirmBtn idleLabel="✕" armedLabel="Delete" variant="danger" small
-            title="Delete to-do" onConfirm={()=>deleteTodo(t)} />
+            title="Delete to-do" onConfirm={()=>deleteRow(t)} />
         </div>
       </div>
     );
   };
+
+  // One section: header (collapse · name · progress · controls) then its
+  // to-dos — open first, then completed ones struck through, so a finished
+  // module still reads as a record of what it covered. Plain function, same
+  // reason as todoRow.
+  const sectionBlock = (s, idx) => {
+    const items = todos.filter(t => t.sectionId === s.id);
+    const open = items.filter(t => !t.completed).sort(byDue);
+    const done = items.filter(t => t.completed).sort(byDoneDesc);
+    const total = items.length;
+    const pct = total ? Math.round((done.length / total) * 100) : 0;
+    const collapsed = collapsedSections.has(s.id);
+    const complete = total > 0 && done.length === total;
+    return (
+      <div key={s.id} style={{marginTop:18}}>
+        <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:collapsed?0:10, minHeight:26}}>
+          <span onClick={()=>toggleSection(s.id)} title={collapsed?'Expand':'Collapse'}
+            style={{color:C.muted, fontSize:9, cursor:'pointer', width:12, flexShrink:0, userSelect:'none',
+              transition:'transform 0.18s', transform:collapsed?'rotate(-90deg)':'rotate(0deg)', display:'inline-flex'}}>▾</span>
+          {editingSectionId === s.id ? (
+            <input autoFocus value={sectionNameDraft}
+              onChange={e=>setSectionNameDraft(e.target.value)}
+              onBlur={saveSectionName}
+              onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); saveSectionName(); } if(e.key==='Escape') setEditingSectionId(null); }}
+              style={{...inputStyle, fontSize:13, padding:'3px 8px', flex:'1 1 160px', minWidth:0}} />
+          ) : (
+            <span onClick={()=>{ if(isDone) return; setEditingSectionId(s.id); setSectionNameDraft(s.name); }}
+              title={isDone ? '' : 'Click to rename'}
+              style={{...sectionLabelStyle, color:complete?C.green:C.gold, cursor:isDone?'default':'text',
+                flex:'1 1 auto', minWidth:0, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
+              {complete ? '✓ ' : ''}{s.name}
+            </span>
+          )}
+          {total > 0 && (
+            <div style={{display:'flex', alignItems:'center', gap:6, flexShrink:0}}>
+              {!isMobile && (
+                <div style={{width:60, height:4, background:C.surf, borderRadius:2, overflow:'hidden'}}>
+                  <div style={{width:`${pct}%`, height:'100%', background:complete?C.green:C.gold}} />
+                </div>
+              )}
+              <span style={{color:C.muted, fontSize:11}}>{done.length}/{total}</span>
+            </div>
+          )}
+          {!isDone && (
+            <div style={{display:'flex', gap:4, alignItems:'center', flexShrink:0}}>
+              <button onClick={()=>addIntoSection(s.id)} title="Add a to-do to this section" style={{...tinyBtn, color:C.gold}}>+</button>
+              <button onClick={()=>onMoveSection(s.id, -1)} disabled={idx===0} title="Move up"
+                style={{...tinyBtn, opacity:idx===0?0.3:1, cursor:idx===0?'default':'pointer'}}>↑</button>
+              <button onClick={()=>onMoveSection(s.id, +1)} disabled={idx===sortedSections.length-1} title="Move down"
+                style={{...tinyBtn, opacity:idx===sortedSections.length-1?0.3:1, cursor:idx===sortedSections.length-1?'default':'pointer'}}>↓</button>
+              <ConfirmBtn idleLabel="✕" armedLabel="Delete section" variant="ghost" small
+                title="Delete section — its to-dos are kept and move to No section" onConfirm={()=>onDeleteSection(s.id)} />
+            </div>
+          )}
+        </div>
+        {!collapsed && (
+          total === 0 ? (
+            <div style={{color:C.muted, fontSize:12.5, fontStyle:'italic', padding:'2px 20px'}}>Nothing in this section yet.</div>
+          ) : (
+            <div style={{display:'flex', flexDirection:'column', gap:8}}>
+              {open.map(t => todoRow(t))}
+              {done.map(t => todoRow(t))}
+            </div>
+          )
+        )}
+      </div>
+    );
+  };
+
+  // Journal entry. Plain function, same reason as todoRow.
+  const journalRow = (j) => (
+    <div key={j.id} style={{background:C.card, border:`1px solid ${C.border}`, borderLeft:`3px solid ${C.gold}66`, borderRadius:'0 8px 8px 0', padding:'12px 14px'}}>
+      <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:6, flexWrap:'wrap'}}>
+        <span style={{color:C.gold, fontSize:11, fontWeight:600, letterSpacing:'0.4px'}}>{fmt(j.date)}</span>
+        {onUploadFile && (
+          <span onClick={()=>uploadingId===j.id ? null : pickFile(j.id, '')}
+            title="Attach a file (PDF, doc, image…)"
+            style={{color:uploadingId===j.id?C.gold:C.muted, fontSize:11, cursor:uploadingId===j.id?'default':'pointer', opacity:uploadingId===j.id?1:0.65}}>
+            {uploadingId===j.id ? 'Uploading…' : '+ file'}
+          </span>
+        )}
+        <div style={{marginLeft:'auto'}}>
+          <ConfirmBtn idleLabel="✕" armedLabel="Delete entry" variant="danger" small
+            title="Delete journal entry" onConfirm={()=>deleteRow(j)} />
+        </div>
+      </div>
+      {editingJournalId === j.id ? (
+        <div>
+          <textarea autoFocus value={journalEditDraft}
+            onChange={e=>setJournalEditDraft(e.target.value)}
+            onKeyDown={e=>{ if(e.key==='Enter' && (e.metaKey||e.ctrlKey)){ e.preventDefault(); saveJournalEdit(); } if(e.key==='Escape') setEditingJournalId(null); }}
+            rows={Math.min(14, Math.max(3, journalEditDraft.split('\n').length + 1))}
+            style={{...inputStyle, width:'100%', resize:'vertical', lineHeight:1.6, fontSize:13.5, boxSizing:'border-box'}} />
+          <div style={{display:'flex', justifyContent:'flex-end', gap:8, marginTop:8}}>
+            <Btn variant="ghost" small onClick={()=>setEditingJournalId(null)}>Cancel</Btn>
+            <Btn small onClick={saveJournalEdit} disabled={!journalEditDraft.trim()}>Save</Btn>
+          </div>
+        </div>
+      ) : (
+        <div onClick={()=>{ setEditingJournalId(j.id); setJournalEditDraft(j.text || ''); }} title="Click to edit"
+          style={{color:C.text, fontSize:13.5, lineHeight:1.65, whiteSpace:'pre-wrap', wordBreak:'break-word', cursor:'text'}}>
+          {j.text}
+        </div>
+      )}
+      {attachmentStrip(j.id)}
+    </div>
+  );
+
+  const unsectionedOpen = openTodos.filter(isUnsectioned);
+  const unsectionedDone = doneTodos.filter(isUnsectioned);
+  const completedGroup = hasSections ? unsectionedDone : doneTodos;
+  const totalCount = todos.length;
+  const doneCount = doneTodos.length;
 
   return (
     <div style={{padding: isMobile ? '12px 12px 24px' : '24px 32px', maxWidth:760}}>
       <PageHead back={backInfo ? backInfo.label : 'Projects'} onBack={()=>nav('projects')} sticky
         subInfo={isDone ? 'completed' : `${openTodos.length} open`}
         action={
-          <div style={{display:'flex', gap:8, alignItems:'center'}}>
+          <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', justifyContent:'flex-end'}}>
             {openTodos.length > 0 && (
               <Btn variant="ghost" small onClick={copyOpenTodos}>{copied ? 'Copied ✓' : 'Copy'}</Btn>
+            )}
+            {onSetPersonal && (
+              <Btn variant="ghost" small onClick={()=>onSetPersonal(project.id, !projectIsPersonal)}>
+                {projectIsPersonal ? '⇄ Business' : '⇄ Personal'}
+              </Btn>
             )}
             {isDone
               ? <Btn variant="ghost" small onClick={()=>onSetStatus(project.id,'active')}>Reopen</Btn>
@@ -396,10 +632,36 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
         )}
       </PageHead>
 
+      {/* The project lives in the other record system — either it was just
+          moved, or it was reached via a link. Offer the hop across. */}
+      {inOtherMode && (
+        <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', background:C.surf, border:`1px solid ${C.border}`,
+          borderRadius:6, padding:'8px 12px', fontSize:12.5, color:C.muted, marginBottom:14}}>
+          <span>This project lives in <strong style={{color:C.text}}>{projectIsPersonal ? 'Personal' : 'Business'}</strong>, so it won't show in this mode's Projects list.</span>
+          {onSwitchMode && (
+            <span onClick={()=>onSwitchMode(projectIsPersonal ? 'personal' : 'client')}
+              style={{color:C.gold, cursor:'pointer', whiteSpace:'nowrap'}}>
+              Switch to {projectIsPersonal ? 'Personal' : 'Business'} →
+            </span>
+          )}
+        </div>
+      )}
+
       {uploadErr && (
         <div onClick={()=>setUploadErr('')} title="Dismiss"
           style={{background:'#2a1313', border:`1px solid ${C.red}44`, color:C.red, borderRadius:6, padding:'8px 12px', fontSize:12, marginBottom:14, cursor:'pointer'}}>
           {uploadErr}
+        </div>
+      )}
+
+      {/* Overall progress — only once the project is structured into sections,
+          so plain to-do lists look exactly as before. */}
+      {hasSections && totalCount > 0 && (
+        <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:18}}>
+          <div style={{flex:1, height:5, background:C.surf, borderRadius:3, overflow:'hidden'}}>
+            <div style={{width:`${Math.round((doneCount/totalCount)*100)}%`, height:'100%', background:doneCount===totalCount?C.green:C.gold, transition:'width 0.3s'}} />
+          </div>
+          <span style={{color:C.muted, fontSize:12, flexShrink:0}}>{doneCount} of {totalCount} done</span>
         </div>
       )}
 
@@ -409,10 +671,19 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
           <input value={newTodo} disabled={busy} ref={todoInputRef}
             onChange={e=>setNewTodo(e.target.value)}
             onKeyDown={e=>{ if(e.key==='Enter') addTodo(); }}
-            placeholder="Add a to-do…"
+            placeholder={effectiveNewSection ? `Add to ${sortedSections.find(s=>s.id===effectiveNewSection)?.name || 'section'}…` : 'Add a to-do…'}
             style={{...inputStyle, flex:'1 1 240px'}}
             onFocus={e=>e.currentTarget.style.borderColor=C.gold+'88'}
             onBlur={e=>e.currentTarget.style.borderColor=C.border} />
+          {hasSections && (
+            <select value={effectiveNewSection} disabled={busy}
+              onChange={e=>setNewSection(e.target.value)}
+              title="Section"
+              style={{...inputStyle, fontSize:13, width:'auto', maxWidth:200, cursor:'pointer'}}>
+              <option value="">No section</option>
+              {sortedSections.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          )}
           <input type="date" value={newDate} disabled={busy}
             onChange={e=>setNewDate(e.target.value)}
             style={{...inputStyle, fontSize:13, width:'auto'}} />
@@ -420,47 +691,112 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
         </div>
       )}
 
-      {/* Open todos */}
-      {openTodos.length === 0 && doneTodos.length === 0 ? (
-        <Empty text="No to-dos in this project yet." />
+      {/* To-dos: flat when there are no sections (unchanged), grouped when
+          there are. */}
+      {!hasSections ? (
+        openTodos.length === 0 && doneTodos.length === 0 ? (
+          <Empty text="No to-dos in this project yet." />
+        ) : (
+          <div style={{display:'flex', flexDirection:'column', gap:10}}>
+            {openTodos.map(t => todoRow(t))}
+            {openTodos.length === 0 && !isDone && (
+              <div style={{color:C.muted, fontSize:13, fontStyle:'italic', padding:'4px 2px'}}>All to-dos complete.</div>
+            )}
+          </div>
+        )
       ) : (
-        <div style={{display:'flex', flexDirection:'column', gap:10}}>
-          {openTodos.map(t => todoRow(t))}
-          {openTodos.length === 0 && !isDone && (
-            <div style={{color:C.muted, fontSize:13, fontStyle:'italic', padding:'4px 2px'}}>All to-dos complete.</div>
+        <>
+          {unsectionedOpen.length > 0 && (
+            <div>
+              <div style={{...sectionLabelStyle, marginBottom:10}}>No section</div>
+              <div style={{display:'flex', flexDirection:'column', gap:8}}>
+                {unsectionedOpen.map(t => todoRow(t))}
+              </div>
+            </div>
+          )}
+          {sortedSections.map((s, i) => sectionBlock(s, i))}
+        </>
+      )}
+
+      {/* Add a section */}
+      {!isDone && onAddSection && (
+        <div style={{marginTop:hasSections?18:14}}>
+          {addingSection ? (
+            <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
+              <input autoFocus value={sectionDraft} disabled={sectionBusy}
+                onChange={e=>setSectionDraft(e.target.value)}
+                onKeyDown={e=>{ if(e.key==='Enter') saveNewSection(); if(e.key==='Escape'){ setAddingSection(false); setSectionDraft(''); } }}
+                placeholder="Section name — e.g. Module 1: Foundations"
+                style={{...inputStyle, fontSize:13, flex:'1 1 220px'}} />
+              <Btn small onClick={saveNewSection} disabled={!sectionDraft.trim()||sectionBusy}>{sectionBusy?'Adding…':'Add section'}</Btn>
+              <Btn variant="ghost" small onClick={()=>{ setAddingSection(false); setSectionDraft(''); }}>Done</Btn>
+            </div>
+          ) : (
+            <span onClick={()=>setAddingSection(true)}
+              style={{color:C.muted, fontSize:12, cursor:'pointer', opacity:0.8}}
+              onMouseEnter={e=>e.currentTarget.style.color=C.gold}
+              onMouseLeave={e=>e.currentTarget.style.color=C.muted}>
+              + Add section{hasSections ? '' : ' (group to-dos into modules or phases)'}
+            </span>
           )}
         </div>
       )}
 
-      {/* Completed todos (collapsed) */}
-      {doneTodos.length > 0 && (
+      {/* Completed todos (collapsed). With sections, only unsectioned ones land
+          here — sectioned ones stay under their section. */}
+      {completedGroup.length > 0 && (
         <div style={{marginTop:22}}>
           <div onClick={()=>setShowCompleted(s=>!s)}
-            style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer', color:C.muted, fontSize:11, fontWeight:700, letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:12, userSelect:'none'}}>
+            style={{...sectionLabelStyle, display:'flex', alignItems:'center', gap:8, cursor:'pointer', marginBottom:12, userSelect:'none'}}>
             <span style={{fontSize:9, transition:'transform 0.18s', transform:showCompleted?'rotate(0deg)':'rotate(-90deg)', display:'inline-flex'}}>▾</span>
-            Completed · {doneTodos.length}
+            Completed{hasSections ? ' · no section' : ''} · {completedGroup.length}
           </div>
           {showCompleted && (
             <div style={{display:'flex', flexDirection:'column', gap:10}}>
-              {doneTodos.map(t => todoRow(t))}
+              {completedGroup.map(t => todoRow(t))}
             </div>
           )}
         </div>
       )}
 
+      {/* Journal — dated reflections, each able to carry files. */}
+      <div style={{marginTop:32}}>
+        <div style={{...sectionLabelStyle, marginBottom:10}}>Journal{journal.length ? ` · ${journal.length}` : ''}</div>
+        <div style={{background:C.surf, border:`1px solid ${C.border}`, borderRadius:8, padding:10, marginBottom:12}}>
+          <textarea value={journalDraft} disabled={journalBusy}
+            onChange={e=>setJournalDraft(e.target.value)}
+            onKeyDown={e=>{ if(e.key==='Enter' && (e.metaKey||e.ctrlKey)){ e.preventDefault(); addJournal(); } }}
+            rows={3} placeholder="What did you learn, notice or question?"
+            style={{...inputStyle, width:'100%', resize:'vertical', lineHeight:1.6, fontSize:13.5, boxSizing:'border-box'}} />
+          <div style={{display:'flex', gap:8, justifyContent:'flex-end', alignItems:'center', marginTop:8, flexWrap:'wrap'}}>
+            <input type="date" value={journalDate} disabled={journalBusy}
+              onChange={e=>setJournalDate(e.target.value)}
+              style={{...inputStyle, fontSize:12, padding:'5px 8px', width:'auto'}} />
+            <Btn small onClick={addJournal} disabled={!journalDraft.trim()||journalBusy}>{journalBusy?'Saving…':'Add entry'}</Btn>
+          </div>
+        </div>
+        {journal.length > 0 ? (
+          <div style={{display:'flex', flexDirection:'column', gap:10}}>
+            {journal.map(j => journalRow(j))}
+          </div>
+        ) : (
+          <div style={{color:C.muted, fontSize:12.5, fontStyle:'italic', padding:'2px 2px'}}>No entries yet.</div>
+        )}
+      </div>
+
       {/* Project notes */}
       <div style={{marginTop:28}}>
-        <div style={{color:C.muted, fontSize:11, fontWeight:700, letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:10}}>Notes</div>
+        <div style={{...sectionLabelStyle, marginBottom:10}}>Notes</div>
         <textarea value={notesDraft}
           onChange={e=>setNotesDraft(e.target.value)}
           onBlur={saveNotes}
           rows={5} placeholder="Anything worth keeping about this project…"
-          style={{...inputStyle, width:'100%', resize:'vertical', lineHeight:1.6}} />
+          style={{...inputStyle, width:'100%', resize:'vertical', lineHeight:1.6, boxSizing:'border-box'}} />
       </div>
 
-      {/* One picker for every row — see attachTargetRef above. accept="image/*"
-          gives camera + photo library on iOS, which is where most of these
-          will come from. */}
+      {/* One picker for every row — see attachTargetRef above. `accept` is set
+          per open by pickFile: image/* for to-dos (camera + photo library on
+          iOS), anything for journal entries. */}
       <input ref={attachInputRef} type="file" accept="image/*"
         onChange={onAttachChange} style={{display:'none'}} />
 
@@ -481,8 +817,8 @@ export function ProjectDetail({ project, notes, people, files = [], nav, backInf
             <span style={{color:C.muted, fontSize:11}}>
               {lightbox.sizeBytes ? `${(lightbox.sizeBytes/1048576).toFixed(1)} MB` : ''}
             </span>
-            <ConfirmBtn idleLabel="Remove" armedLabel="Delete image" variant="danger" small
-              title="Remove this image" onConfirm={()=>removeAttachment(lightbox)} />
+            <ConfirmBtn idleLabel="Remove" armedLabel="Delete file" variant="danger" small
+              title="Remove this file" onConfirm={()=>removeAttachment(lightbox)} />
           </div>
         </Modal>
       )}
