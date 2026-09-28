@@ -72,6 +72,19 @@ async function fetchAll(table, columns = '*', tweak = null) {
   return out;
 }
 
+// Row count only. A HEAD request: PostgREST returns the total in the
+// Content-Range header and NO rows in the body, so it costs a few hundred
+// bytes of egress however big the table gets. Used by the background poller
+// to ask "has anything been added or removed?" before paying for a full read.
+// `tweak` applies the same filters as the matching list() so the numbers agree.
+async function countRows(table, tweak = null) {
+  let q = supabase.from(table).select('id', { count: 'exact', head: true });
+  if (tweak) q = tweak(q);
+  const { count, error } = await q;
+  if (error) throw new Error(`Supabase: ${error.message}`);
+  return count ?? 0;
+}
+
 // ─── Initial bulk load ───────────────────────────────────────────────────────
 // One call after auth. Issues all queries in parallel; returns the eleven
 // arrays the JSX expects, plus the customOrgTypes and customPersonRoles arrays.
@@ -122,8 +135,12 @@ export async function loadAll() {
     supabase.from('series').select('*').order('start_date', { ascending: false }).then(ok),
     supabase.from('sessions').select('*').order('date', { ascending: false }).then(ok),
     supabase.from('attendance').select('*').then(ok),
-    supabase.from('interactions').select('*').is('deleted_at', null)
-      .order('date', { ascending: false }).then(ok),
+    // Ranged read: interactions holds every logged email, so it will cross
+    // PostgREST's 1000-row cap — a plain .select() would silently drop the
+    // oldest rows past it. Secondary order on id keeps page boundaries stable
+    // (date alone isn't unique, so rows could skip/duplicate across pages).
+    fetchAll('interactions', '*', q => q.is('deleted_at', null)
+      .order('date', { ascending: false }).order('id')),
     supabase.from('packages_with_usage').select('*').is('deleted_at', null)
       .order('date_purchased', { ascending: false }).then(ok),
     supabase.from('active_invoices').select('*')
@@ -496,6 +513,9 @@ export const classes = {
       .order('date', { ascending: false }).then(ok);
     return rows.map(classFromDb);
   },
+  // Row count (HEAD, no body). The poller compares this to local state and
+  // only calls list() when they differ.
+  count: () => countRows('sessions'),
 };
 
 // ─── Attendance ──────────────────────────────────────────────────────────────
@@ -545,6 +565,8 @@ export const attendance = {
     const rows = await supabase.from('attendance').select('*').then(ok);
     return rows.map(attendanceFromDb);
   },
+  // Row count (HEAD, no body). See classes.count.
+  count: () => countRows('attendance'),
 };
 
 // ─── Notes (DB: interactions) ────────────────────────────────────────────────
@@ -633,14 +655,31 @@ export const notes = {
   },
 
   // List all non-deleted interactions. Mirrors the read shape in loadAll().
-  // Used by the inbox poller (App component, ~60s interval) to surface new
-  // rows ingested by the inbound Worker without requiring a full page refresh.
-  // Cheap single query — one table, one filter, server-side ordering.
-  // Returns an array of UI-shape notes (camelCase).
+  // NO LONGER USED BY THE POLLER (BUILD-13): each call downloads every email
+  // including its full html_body, and at a 60s cadence that was ~1.5 GB/day of
+  // Supabase egress. The poller uses listSince() below. Kept for ad-hoc use;
+  // ranged so it isn't silently capped at 1000 rows.
   async list() {
-    const rows = await supabase.from('interactions').select('*')
+    const rows = await fetchAll('interactions', '*', q => q.is('deleted_at', null)
+      .order('date', { ascending: false }).order('id'));
+    return rows.map(noteFromDb);
+  },
+
+  // Incremental read for the background poller: only rows CREATED at or after
+  // `sinceIso` (an ISO timestamp). On a quiet tick this returns [] — a few
+  // bytes instead of the whole table. The caller passes a cursor slightly
+  // behind the newest created_at it has seen and dedupes by id, so a row whose
+  // insert committed a moment out of order can't slip through the gap.
+  //
+  // Scope: this catches NEW rows (the inbound log-worker, form submissions,
+  // Stripe, sends from the other machine). Edits and deletes made on another
+  // machine show up on the next page load, not live.
+  async listSince(sinceIso) {
+    let q = supabase.from('interactions').select('*')
       .is('deleted_at', null)
-      .order('date', { ascending: false }).then(ok);
+      .order('created_at', { ascending: true });
+    if (sinceIso) q = q.gte('created_at', sinceIso);
+    const rows = await q.then(ok);
     return rows.map(noteFromDb);
   },
 
@@ -833,6 +872,8 @@ export const packages = {
       .order('date_purchased', { ascending: false }).then(ok);
     return rows.map(packageFromDb);
   },
+  // Row count (HEAD, no body), same filter as list(). See classes.count.
+  count: () => countRows('packages_with_usage', q => q.is('deleted_at', null)),
 };
 
 // ─── Package templates ───────────────────────────────────────────────────────

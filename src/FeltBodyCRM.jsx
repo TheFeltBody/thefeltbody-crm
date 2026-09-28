@@ -9,14 +9,26 @@ import { BirthdaysView, ClassList, Dashboard, EmailTemplatesView, FormDetail, Fo
 import { ClassDetail, HouseholdModal, OrgDetail, PersonDetail, ProjectDetail } from "./components/details.jsx";
 import { CareHomeResourcesView, DocumentsView } from "./components/documents.jsx";
 
-// Cheap change guards for the background poller: only replace a state array
-// when its membership actually changed, so quiet ticks don't trigger re-renders
-// (or disturb in-flight local edits). Compares length, then the id set.
-const sameLen = (a, b) => a.length === b.length;
-const sameIds = (a, b) => {
-  const ids = new Set(a.map(x => x.id));
-  return b.every(x => ids.has(x.id));
-};
+// Background-poller helpers (BUILD-19, egress fix).
+//
+// The poller used to re-download the whole interactions table (every email,
+// full html_body included) plus sessions/attendance/packages every 60s. On the
+// Supabase free plan that was ~1.5 GB/day of egress from a single open tab.
+// It now asks two cheap questions instead:
+//   - interactions: "any rows created since the newest one I have?"
+//   - the other three: "has the row count changed?" (a HEAD request, no body)
+// and only downloads what actually changed.
+
+// Newest created_at in a list of notes, as epoch ms (null if none carry one).
+const newestCreatedMs = (list) => list.reduce((m, n) => {
+  const t = n.createdAt ? Date.parse(n.createdAt) : NaN;
+  return Number.isFinite(t) && (m === null || t > m) ? t : m;
+}, null);
+
+// The cursor is pulled back by this much before each incremental read, so a
+// row whose insert committed slightly out of order is still caught. Rows
+// already in state are deduped by id, so the overlap costs nothing visible.
+const POLL_OVERLAP_MS = 30_000;
 
 export default function FeltBodyCRM() {
   const [history, setHistory] = useState([{ name:'dashboard' }]);
@@ -116,6 +128,11 @@ export default function FeltBodyCRM() {
   const personRoles = useMemo(() => buildPersonRoles(customPersonRoles, builtinPersonRoles), [customPersonRoles, builtinPersonRoles]);
   const typesValue = useMemo(() => ({ orgTypes, personRoles }), [orgTypes, personRoles]);
 
+  // Poller bookkeeping, read inside the interval callback without re-creating
+  // the interval: notesCursorMs = newest interactions.created_at seen (epoch
+  // ms); counts = current local lengths of the count-checked arrays.
+  const pollStateRef = useRef({ notesCursorMs: null, counts: { classes: 0, attendance: 0, packages: 0 } });
+
   // Single bulk fetch on mount. Auth is guaranteed by the AuthGate wrapper.
   useEffect(() => {
     let cancelled = false;
@@ -129,6 +146,7 @@ export default function FeltBodyCRM() {
         setClasses(all.classes);
         setAttendance(all.attendance);
         setNotes(all.notes);
+        pollStateRef.current.notesCursorMs = newestCreatedMs(all.notes);
         setPackages(all.packages);
         setInvoices(all.invoices);
         setForms(all.forms);
@@ -166,12 +184,16 @@ export default function FeltBodyCRM() {
   // no indication anything happened).
   //
   // Design choices:
-  //   - Poll just the interactions table, not loadAll(). Cheaper (one query
-  //     vs 16) and zero risk of clobbering in-flight edits in other state
-  //     arrays. The Worker only writes here, so this is the only state that
-  //     can change without user action.
-  //   - 60s cadence. Picked to be "fast enough that BCC-to-log feels live"
-  //     and "slow enough that keep-alive / Supabase budget never feels it".
+  //   - Incremental, not full reads (BUILD-19). interactions: fetch only rows
+  //     created since the newest one already in state, and MERGE them in by
+  //     id. sessions/attendance/packages: a HEAD count per table; only when a
+  //     count differs from local state is that one table re-read in full. A
+  //     quiet tick now costs a few KB instead of the whole database — the old
+  //     full re-read was ~1.5 GB/day of Supabase egress with one tab open.
+  //     Trade-off: edits/deletes made on the OTHER machine appear on next page
+  //     load rather than live; new rows (emails, bookings, form submissions)
+  //     still appear within a minute.
+  //   - 60s cadence. Picked to be "fast enough that BCC-to-log feels live".
   //   - Visibility-gated: skip the poll when the tab is hidden (background
   //     tab, minimised window). Picks back up immediately on visibility
   //     change. Saves cycles, plays nicely with battery on laptops.
@@ -181,7 +203,7 @@ export default function FeltBodyCRM() {
   //     note right now; replacing the array under them would feel jumpy.
   //     They'll pick up changes when they close the modal anyway.
   //
-  // No-op if Supabase is unreachable: the data.notes.list() call throws,
+  // No-op if Supabase is unreachable: the data calls throw,
   // we swallow it (just log to console) and try again next tick. The user
   // doesn't see anything; the next successful poll catches up.
   const POLL_INTERVAL_MS = 60_000;
@@ -189,6 +211,12 @@ export default function FeltBodyCRM() {
   // without re-creating the interval every time the modal opens/closes.
   const modalOpenRef = useRef(false);
   useEffect(() => { modalOpenRef.current = !!modal; }, [modal]);
+  // Keep the poller's view of local row counts current (see pollStateRef).
+  useEffect(() => {
+    pollStateRef.current.counts = {
+      classes: classes.length, attendance: attendance.length, packages: packages.length,
+    };
+  }, [classes.length, attendance.length, packages.length]);
 
   // Recent Contacts tracker. When the user lands on a person_detail view,
   // push that personId to the front of the recents list (dedupe, cap 20).
@@ -213,26 +241,51 @@ export default function FeltBodyCRM() {
       if (document.visibilityState !== 'visible') return;
       if (modalOpenRef.current) return;
       try {
-        // The website pipeline (form worker, later Stripe) writes a real
-        // interaction row AND its booking side-effects: an attendance/register
-        // entry, and sometimes a packages row. Polling notes alone surfaced the
-        // Web Activity event but left the derived Recent Activity / register feed
-        // stale until a hard refresh. Pull all four together so deriveActivity()
-        // recomputes on the same cadence.
-        const [freshNotes, freshClasses, freshAttendance, freshPackages] =
-          await Promise.all([
-            data.notes.list(),
-            data.classes.list(),
-            data.attendance.list(),
-            data.packages.list(),
-          ]);
+        // The website pipeline (form worker, Stripe) writes a real interaction
+        // row AND its booking side-effects: an attendance/register entry, and
+        // sometimes a packages row. All four are checked on the same tick so
+        // deriveActivity() recomputes together.
+        const ps = pollStateRef.current;
+        const sinceIso = ps.notesCursorMs === null
+          ? null
+          : new Date(ps.notesCursorMs - POLL_OVERLAP_MS).toISOString();
+        const [freshNotes, nClasses, nAttendance, nPackages] = await Promise.all([
+          data.notes.listSince(sinceIso),
+          data.classes.count(),
+          data.attendance.count(),
+          data.packages.count(),
+        ]);
         if (cancelled) return;
-        setNotes(freshNotes);
-        // Only replace the other arrays when they've actually changed — avoids
-        // re-rendering (and any local edit churn) on every quiet tick.
-        setClasses(prev => sameLen(prev, freshClasses) && sameIds(prev, freshClasses) ? prev : freshClasses);
-        setAttendance(prev => sameLen(prev, freshAttendance) && sameIds(prev, freshAttendance) ? prev : freshAttendance);
-        setPackages(prev => sameLen(prev, freshPackages) && sameIds(prev, freshPackages) ? prev : freshPackages);
+
+        // New interactions: merge by id (the overlap window re-returns rows we
+        // already hold). Never replace the array, so in-flight local edits
+        // are untouched and a quiet tick doesn't re-render.
+        if (freshNotes.length) {
+          setNotes(prev => {
+            const known = new Set(prev.map(n => n.id));
+            const added = freshNotes.filter(n => !known.has(n.id));
+            return added.length ? [...added, ...prev] : prev;
+          });
+          const newest = newestCreatedMs(freshNotes);
+          if (newest !== null && (ps.notesCursorMs === null || newest > ps.notesCursorMs)) {
+            ps.notesCursorMs = newest;
+          }
+        }
+
+        // Count changed → something was added/removed server-side → re-read
+        // just that table. Matching counts cost nothing further.
+        const c = ps.counts;
+        const reads = [];
+        if (nClasses !== c.classes) {
+          reads.push(data.classes.list().then(rows => { if (!cancelled) setClasses(rows); }));
+        }
+        if (nAttendance !== c.attendance) {
+          reads.push(data.attendance.list().then(rows => { if (!cancelled) setAttendance(rows); }));
+        }
+        if (nPackages !== c.packages) {
+          reads.push(data.packages.list().then(rows => { if (!cancelled) setPackages(rows); }));
+        }
+        if (reads.length) await Promise.all(reads);
       } catch (e) {
         // Soft-fail: log and try again next tick. Worker rows will still
         // appear on the next successful poll, or on next manual refresh.
