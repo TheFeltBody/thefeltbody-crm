@@ -174,8 +174,13 @@ export async function loadAll() {
     fetchAll('person_roles', 'person_id, role_key'),
     fetchAll('people_emails', '*', q => q.order('created_at')),
     supabase.from('series').select('*').order('start_date', { ascending: false }).then(ok),
-    supabase.from('sessions').select('*').order('date', { ascending: false }).then(ok),
-    supabase.from('attendance').select('*').then(ok),
+    // Ranged reads (BUILD-15): attendance crossed 1000 rows, so the plain
+    // .select() was silently dropping register entries (a person "fell off"
+    // a register while the DB row still existed → duplicate error on re-add).
+    // Secondary order on id keeps page boundaries stable. Sessions paged too,
+    // as it grows in step with attendance.
+    fetchAll('sessions', '*', q => q.order('date', { ascending: false }).order('id')),
+    fetchAll('attendance', '*', q => q.order('id')),
     // Ranged read: interactions holds every logged email, so it will cross
     // PostgREST's 1000-row cap — a plain .select() would silently drop the
     // oldest rows past it. Secondary order on id keeps page boundaries stable
@@ -551,8 +556,8 @@ export const classes = {
   // booking poller (App component, ~60s interval) so register/derived activity
   // catches up after a website booking without a hard refresh.
   async list() {
-    const rows = await supabase.from('sessions').select('*')
-      .order('date', { ascending: false }).then(ok);
+    // Ranged read (BUILD-15) — must match loadAll().
+    const rows = await fetchAll('sessions', '*', q => q.order('date', { ascending: false }).order('id'));
     return rows.map(classFromDb);
   },
   // Row count (HEAD, no body). The poller compares this to local state and
@@ -604,7 +609,8 @@ export const attendance = {
   // List all attendance rows. Mirrors loadAll(). Used by the booking poller
   // so a website booking's register entry appears without a hard refresh.
   async list() {
-    const rows = await supabase.from('attendance').select('*').then(ok);
+    // Ranged read (BUILD-15) — must match loadAll(), else the poller re-drops rows.
+    const rows = await fetchAll('attendance', '*', q => q.order('id'));
     return rows.map(attendanceFromDb);
   },
   // Row count (HEAD, no body). See classes.count.
