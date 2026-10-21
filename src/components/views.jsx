@@ -114,7 +114,9 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
   const sectionForView =
     (view.name === 'org_list' || view.name === 'org_detail') ? 'orgs' :
     (view.name === 'people'   || view.name === 'person_detail') ? 'people' :
-    (view.name === 'week_view' || view.name === 'month_view' || view.name === 'fourweek_view') ? (mode === 'personal' ? 'diary' : 'sessions') :
+    // week_view is a top-level item now (BUILD-28), so it no longer opens a
+    // section; month/3-week still live under Sessions (client) / Diary (personal).
+    (view.name === 'month_view' || view.name === 'fourweek_view') ? (mode === 'personal' ? 'diary' : 'sessions') :
     (view.name === 'classes' || view.name === 'class_detail' || view.name === 'forms_list' || view.name === 'form_detail') ? 'sessions' :
     (view.name === 'invoices' || view.name === 'invoice_detail' || view.name === 'payments' || view.name === 'packages_all') ? 'finance' :
     null;
@@ -213,6 +215,10 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
       <div style={{flex:1,minHeight:0,overflowY:'auto'}}>
       <Item name="projects" label="Projects" icon="❖" count={activeProjects} isActive={view.name==='projects' || view.name==='project_detail'} />
       <Item name="dashboard" label="Dashboard" icon="◈" />
+      {/* Weekly calendar — promoted to the top level (BUILD-28) so it's one tap
+          away instead of hiding under Sessions / Diary. Same view in both modes;
+          WeekView greys the opposite calendar by `mode`. */}
+      <Item name="week_view" label="Calendar" icon="▦" />
       {!isPersonal && <Item name="inbox" label="Inbox" icon="✉" badge={inboxCount} />}
       {!isPersonal && <Item name="threads" label="Threads" icon="✦" badge={threadsUnread} />}
       {!isPersonal && <Item name="web_activity" label="Web Activity" icon="◇" badge={webUnread} />}
@@ -337,7 +343,6 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
       {!isPersonal && <SectionToggle label="Sessions" sectionKey="sessions" />}
       {!isPersonal && openSection==='sessions' && (
         <>
-          <Item name="week_view" label="Week View" icon="▦" indent />
           <Item name="month_view" label="Month View" icon="▥" indent />
           <Item name="fourweek_view" label="3-Week View" icon="▤" indent />
           <Item name="classes" label="All Classes" icon="≡" indent />
@@ -350,7 +355,6 @@ export function Sidebar({ view, nav, invoices, notes, projects=[], customOrgType
       {isPersonal && <SectionToggle label="Diary" sectionKey="diary" />}
       {isPersonal && openSection==='diary' && (
         <>
-          <Item name="week_view" label="Week View" icon="▦" indent />
           <Item name="month_view" label="Month View" icon="▥" indent />
           <Item name="fourweek_view" label="3-Week View" icon="▤" indent />
         </>
@@ -1792,6 +1796,151 @@ function SaveLinksModal({ candidates, personId, sourceThreadId, onSave, onClose 
 // their own single-message pseudo-thread (key `solo:<id>`). Reads the shared
 // `notes` array (kept fresh by the 60s poll) — no extra fetching.
 
+// ─── THREAD MESSAGE (hoisted, BUILD-28) ────────────────────────────────────
+// One email inside an open thread. Hoisted to module scope (was defined inside
+// ThreadsView) so its identity is stable across ThreadsView re-renders — the
+// inline version remounted on every parent state change, which reset the
+// HTML/Text toggle and would have reset collapse/expand too.
+//
+// collapsed:  true → render as a one-line title row (direction · name ·
+//             subject · date); clicking it calls onToggle to open it.
+// onToggle:   set only while "titles only" mode is on; makes the header of an
+//             expanded message clickable to fold it back down.
+// onForward:  opens the compose modal seeded with a quoted copy of this email.
+function ThreadMessage({ m, personById, nav, collapsed = false, onToggle = null, onForward = null }) {
+  const inbound = m.direction === 'inbound';
+  // HTML-view toggle, mirroring NoteCard. Default plaintext (m.text); offered
+  // only when the log-worker captured an HTML body for this message.
+  const [showHtml, setShowHtml] = useState(false);
+  // BUILD-27: the HTML body is no longer in bulk reads. hasHtml says one
+  // exists; useEmailHtml fetches it (cached) only once HTML view is chosen.
+  const hasHtml = !!(m.hasHtml || m.htmlBody);
+  const emailHtml = useEmailHtml(m, showHtml && !collapsed);
+  const person = personById[m.personId];
+  // Group outbound rows carry the full recipient line in raw_headers
+  // (to_list/cc_list, written by the forms-worker fan-out). Render that
+  // when present — "to Cara Cover, cc Max, reception@…" — instead of the
+  // single to_email, which is only this row's own recipient.
+  const rh = (!inbound && m.rawHeaders) || {};
+  const fmtAddrs = (arr) => (arr || []).map(a => a?.name || a?.email || '').filter(Boolean).join(', ');
+  const groupLine = (Array.isArray(rh.to_list) && rh.to_list.length)
+    ? `to ${fmtAddrs(rh.to_list)}${Array.isArray(rh.cc_list) && rh.cc_list.length ? ` · cc ${fmtAddrs(rh.cc_list)}` : ''}`
+    : null;
+  const counterparty = inbound ? (m.fromEmail || '') : (groupLine || m.toEmail || '');
+  const attachCount = Array.isArray(m.rawHeaders?.attachment_file_ids) ? m.rawHeaders.attachment_file_ids.length : 0;
+  const dirColor = inbound ? C.blue : C.gold;
+  const dirLabel = (
+    <span style={{ color: dirColor, fontSize: 10, fontWeight: 700, letterSpacing: '0.6px', textTransform: 'uppercase', flexShrink: 0 }}>
+      {inbound ? '↓ Received' : '↑ Sent'}
+    </span>
+  );
+  const fwdBtn = onForward && (
+    <button onClick={(e) => { e.stopPropagation(); onForward(m); }}
+      title="Forward this email to someone"
+      style={{ background: 'none', border: `1px solid ${C.border}`, color: C.muted, cursor: 'pointer',
+        borderRadius: 4, fontSize: 11, padding: '2px 8px', fontFamily: "'Jost',sans-serif", flexShrink: 0 }}
+      onMouseEnter={e => { e.currentTarget.style.color = C.gold; e.currentTarget.style.borderColor = C.gold + '88'; }}
+      onMouseLeave={e => { e.currentTarget.style.color = C.muted; e.currentTarget.style.borderColor = C.border; }}>
+      ↪ Forward
+    </button>
+  );
+
+  // ── Collapsed: one title line. Whole row opens the message. ──
+  if (collapsed) {
+    const title = m.subject || plainText(m.text).slice(0, 90) || '(no subject)';
+    return (
+      <div onClick={onToggle || undefined}
+        title="Show this email"
+        style={{
+          background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${dirColor}`,
+          borderRadius: '0 8px 8px 0', padding: '8px 14px', marginBottom: 6, cursor: onToggle ? 'pointer' : 'default',
+          display: 'flex', alignItems: 'center', gap: 10, minWidth: 0,
+        }}
+        onMouseEnter={e => { e.currentTarget.style.background = C.surf; }}
+        onMouseLeave={e => { e.currentTarget.style.background = C.card; }}>
+        <span style={{ color: C.muted, fontSize: 10, flexShrink: 0, transform: 'rotate(-90deg)', display: 'inline-block' }}>▾</span>
+        {dirLabel}
+        {person && <span style={{ color: C.text, fontSize: 12.5, fontWeight: 500, flexShrink: 0, maxWidth: 160, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{person.name}</span>}
+        <span style={{ color: C.muted, fontSize: 12.5, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {title}
+        </span>
+        {attachCount > 0 && <span title={`${attachCount} attachment${attachCount !== 1 ? 's' : ''}`} style={{ color: C.muted, fontSize: 11, flexShrink: 0 }}>📎{attachCount > 1 ? attachCount : ''}</span>}
+        <span style={{ color: C.muted, fontSize: 11, flexShrink: 0 }}>{fmt(m.date)}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      background: C.card,
+      border: `1px solid ${C.border}`,
+      borderLeft: `3px solid ${dirColor}`,
+      borderRadius: '0 8px 8px 0',
+      padding: '12px 16px',
+      marginBottom: 10,
+    }}>
+      <div onClick={onToggle || undefined}
+        title={onToggle ? 'Collapse to title' : undefined}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 7, flexWrap: 'wrap', cursor: onToggle ? 'pointer' : 'default' }}>
+        {onToggle && <span style={{ color: C.muted, fontSize: 10 }}>▾</span>}
+        {dirLabel}
+        {person && (
+          <span onClick={(e) => { e.stopPropagation(); nav('person_detail', { personId: person.id }); }}
+            style={{ color: C.text, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
+            onMouseEnter={e => e.currentTarget.style.color = C.gold}
+            onMouseLeave={e => e.currentTarget.style.color = C.text}>
+            {person.name}
+          </span>
+        )}
+        {counterparty && <span style={{ color: C.muted, fontSize: 12 }}>{counterparty}</span>}
+        <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          {fwdBtn}
+          <span style={{ color: C.muted, fontSize: 11 }}>{fmt(m.date)}</span>
+        </span>
+      </div>
+      {m.subject && (
+        <div style={{ color: C.gold, fontSize: 13, fontWeight: 500, marginBottom: 6, opacity: 0.9 }}>
+          {m.subject}
+        </div>
+      )}
+      {/* HTML/Text switch — shown only when an HTML body was captured. */}
+      {hasHtml && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 7 }}>
+          {['text', 'html'].map(mode => {
+            const active = (mode === 'html') === showHtml;
+            return (
+              <button key={mode} onClick={() => setShowHtml(mode === 'html')}
+                style={{ background: active ? C.surf : 'transparent', color: active ? C.text : C.muted,
+                  border: `1px solid ${active ? C.border : 'transparent'}`, borderRadius: 4, fontSize: 10,
+                  fontWeight: 600, letterSpacing: '0.4px', textTransform: 'uppercase', padding: '2px 8px',
+                  cursor: 'pointer', fontFamily: "'Jost',sans-serif" }}>
+                {mode === 'html' ? 'HTML' : 'Text'}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {/* HTML view: EmailHtmlFrame (primitives) — sandboxed iframe with the
+          same sandbox="" + CSP contract as before. Never use
+          dangerouslySetInnerHTML for email HTML. Same contract as NoteCard. */}
+      {hasHtml && showHtml ? (
+        <EmailHtmlFrame {...emailHtml} fallbackText={m.text} />
+      ) : (
+        m.text ? (
+          <RichText text={m.text} style={{ color: C.text, fontSize: 13.5, lineHeight: 1.65, opacity: 0.92, wordBreak: 'break-word' }} />
+        ) : (
+          <div style={{ color: C.text, fontSize: 13.5, lineHeight: 1.65, opacity: 0.92 }}>
+            <span style={{ fontStyle: 'italic', opacity: 0.6 }}>(no body)</span>
+          </div>
+        )
+      )}
+      {/* rawHeaders directly, NOT rh — rh is direction-gated above but
+          attachments render on inbound and outbound alike. */}
+      <AttachmentChips rh={m.rawHeaders} />
+    </div>
+  );
+}
+
 export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThreadKey, onSendEmail, onSetPrimaryEmail = null, emailTemplates=[], onSaveAsTemplate, onSaveLinks, onDeleteThread }) {
   const isMobile = useIsMobile();
   const [selectedKey, setSelectedKey] = useState(initialThreadKey || null);
@@ -1804,6 +1953,19 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
   // id → HTML body for messages in threads opened this session (BUILD-27).
   // Filled by the open-thread effect below; feeds link extraction.
   const [htmlById, setHtmlById] = useState({});
+  // List filter (BUILD-28): 'all' | 'unread'. Sticky across visits.
+  const [threadFilter, setThreadFilter] = useLocalStorage('felt.threads.filter', 'all');
+  // "Titles only" mode for the open thread (BUILD-28): every message folds to
+  // a one-line title; click one to open it. Sticky across visits. Per-message
+  // opens are tracked in expandedMsgIds and reset when a different thread opens.
+  const [collapseMsgs, setCollapseMsgs] = useLocalStorage('felt.threads.collapse', false);
+  const [expandedMsgIds, setExpandedMsgIds] = useState(() => new Set());
+  useEffect(() => { setExpandedMsgIds(new Set()); }, [selectedKey]);
+  const toggleMsg = (id) => setExpandedMsgIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   const personById = useMemo(() => {
     const m = {};
@@ -1925,6 +2087,45 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
     };
   };
 
+  // Forward one message (BUILD-28). Mirrors PersonDetail's startForward: a
+  // quoted, text-only copy addressed to nobody (forwardBlank), and NOT a reply —
+  // no threadId / inReplyTo, so the worker mints a fresh thread rather than
+  // grafting the forward onto this conversation. `person` is only there for
+  // template scoring; forwardBlank stops it being seeded as a recipient.
+  // Attachments aren't carried over (same as PersonDetail) — re-attach by hand.
+  const buildForward = (m) => {
+    const sender = personById[m.personId];
+    const fmtList = (arr) => (arr || []).map(a => a?.email ? (a.name ? `${a.name} <${a.email}>` : a.email) : '').filter(Boolean).join(', ');
+    const rh = m.rawHeaders || {};
+    const toLine = m.direction === 'outbound' && Array.isArray(rh.to_list) && rh.to_list.length
+      ? fmtList(rh.to_list) : (m.toEmail || '');
+    const ccLine = m.direction === 'outbound' && Array.isArray(rh.cc_list) && rh.cc_list.length
+      ? fmtList(rh.cc_list) : '';
+    const fromLine = m.fromEmail
+      ? (m.direction === 'inbound' && sender ? `${sender.name} <${m.fromEmail}>` : m.fromEmail)
+      : '';
+    const base = (m.subject || '').replace(/^\s*((re|fwd?):\s*)+/i, '').trim();
+    const hdr = [
+      '---------- Forwarded message ----------',
+      fromLine ? `From: ${fromLine}` : null,
+      m.date ? `Date: ${fmt(m.date)}` : null,
+      m.subject ? `Subject: ${m.subject}` : null,
+      toLine ? `To: ${toLine}` : null,
+      ccLine ? `Cc: ${ccLine}` : null,
+    ].filter(Boolean).join('\n');
+    return {
+      person: sender || null,
+      initialSubject: base ? `Fwd: ${base}` : 'Fwd:',
+      initialBody: `\n\n${hdr}\n\n${m.text || ''}`,
+      threadId: undefined,
+      inReplyTo: undefined,
+      forwardBlank: true,
+      // Distinct prefix from reply drafts (felt.threads.draft.*) and from
+      // PersonDetail's felt.compose.fwd.* — same source message, separate draft.
+      draftKey: `felt.threads.fwd.${m.id}`,
+    };
+  };
+
   const replyModal = replyTo && (
     <SendEmailModal
       person={replyTo.person}
@@ -1935,6 +2136,8 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
       onSend={onSendEmail}
       onClose={() => setReplyTo(null)}
       initialSubject={replyTo.initialSubject}
+      initialBody={replyTo.initialBody || ''}
+      forwardBlank={replyTo.forwardBlank || false}
       threadId={replyTo.threadId}
       inReplyTo={replyTo.inReplyTo}
       draftKey={replyTo.draftKey}
@@ -1964,14 +2167,20 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
   );
 
 
+  const unreadThreadCount = useMemo(() => threads.filter(t => t.unreadCount > 0).length, [threads]);
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return threads;
-    return threads.filter(t =>
+    // Unread filter. The OPEN thread always stays listed — opening it marks it
+    // read, and it shouldn't vanish from under you mid-read.
+    let list = threadFilter === 'unread'
+      ? threads.filter(t => t.unreadCount > 0 || t.key === selectedKey)
+      : threads;
+    if (!q) return list;
+    return list.filter(t =>
       t.subject.toLowerCase().includes(q) ||
       participantNames(t).toLowerCase().includes(q)
     );
-  }, [threads, search]);
+  }, [threads, search, threadFilter, selectedKey]);
 
   const selected = useMemo(
     () => threads.find(t => t.key === selectedKey) || null,
@@ -2044,101 +2253,14 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
     );
   };
 
-  // ─── MESSAGE (in expanded thread) ──────────────────────────────────────────
-  const Message = ({ m }) => {
-    const inbound = m.direction === 'inbound';
-    // HTML-view toggle, mirroring NoteCard. Default plaintext (m.text);
-    // offered only when the log-worker captured an HTML body for this
-    // message. Per-message state — Message is a real component rendered
-    // per row, so the hook is safe here (unlike an inline .map body).
-    const [showHtml, setShowHtml] = useState(false);
-    // BUILD-27: the HTML body is no longer in bulk reads. hasHtml says one
-    // exists; useEmailHtml fetches it (cached) only once HTML view is chosen.
-    const hasHtml = !!(m.hasHtml || m.htmlBody);
-    const emailHtml = useEmailHtml(m, showHtml);
-    const person = personById[m.personId];
-    // Group outbound rows carry the full recipient line in raw_headers
-    // (to_list/cc_list, written by the forms-worker fan-out). Render that
-    // when present — "to Cara Cover, cc Max, reception@…" — instead of the
-    // single to_email, which is only this row's own recipient.
-    const rh = (!inbound && m.rawHeaders) || {};
-    const fmtAddrs = (arr) => (arr || []).map(a => a?.name || a?.email || '').filter(Boolean).join(', ');
-    const groupLine = (Array.isArray(rh.to_list) && rh.to_list.length)
-      ? `to ${fmtAddrs(rh.to_list)}${Array.isArray(rh.cc_list) && rh.cc_list.length ? ` · cc ${fmtAddrs(rh.cc_list)}` : ''}`
-      : null;
-    const counterparty = inbound ? (m.fromEmail || '') : (groupLine || m.toEmail || '');
-    return (
-      <div style={{
-        background: C.card,
-        border: `1px solid ${C.border}`,
-        borderLeft: `3px solid ${inbound ? C.blue : C.gold}`,
-        borderRadius: '0 8px 8px 0',
-        padding: '12px 16px',
-        marginBottom: 10,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 7, flexWrap: 'wrap' }}>
-          <span style={{
-            color: inbound ? C.blue : C.gold, fontSize: 10, fontWeight: 700,
-            letterSpacing: '0.6px', textTransform: 'uppercase',
-          }}>
-            {inbound ? '↓ Received' : '↑ Sent'}
-          </span>
-          {person && (
-            <span onClick={() => nav('person_detail', { personId: person.id })}
-              style={{ color: C.text, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
-              onMouseEnter={e => e.currentTarget.style.color = C.gold}
-              onMouseLeave={e => e.currentTarget.style.color = C.text}>
-              {person.name}
-            </span>
-          )}
-          {counterparty && <span style={{ color: C.muted, fontSize: 12 }}>{counterparty}</span>}
-          <span style={{ marginLeft: 'auto', color: C.muted, fontSize: 11 }}>{fmt(m.date)}</span>
-        </div>
-        {m.subject && (
-          <div style={{ color: C.gold, fontSize: 13, fontWeight: 500, marginBottom: 6, opacity: 0.9 }}>
-            {m.subject}
-          </div>
-        )}
-        {/* HTML/Text switch — shown only when an HTML body was captured. */}
-        {hasHtml && (
-          <div style={{ display: 'flex', gap: 6, marginBottom: 7 }}>
-            {['text', 'html'].map(mode => {
-              const active = (mode === 'html') === showHtml;
-              return (
-                <button key={mode} onClick={() => setShowHtml(mode === 'html')}
-                  style={{ background: active ? C.surf : 'transparent', color: active ? C.text : C.muted,
-                    border: `1px solid ${active ? C.border : 'transparent'}`, borderRadius: 4, fontSize: 10,
-                    fontWeight: 600, letterSpacing: '0.4px', textTransform: 'uppercase', padding: '2px 8px',
-                    cursor: 'pointer', fontFamily: "'Jost',sans-serif" }}>
-                  {mode === 'html' ? 'HTML' : 'Text'}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {/* HTML view: EmailHtmlFrame (primitives) — sandboxed iframe with the
-            same sandbox="" + CSP contract as before. Never use
-            dangerouslySetInnerHTML for email HTML. Same contract as NoteCard. */}
-        {hasHtml && showHtml ? (
-          <EmailHtmlFrame {...emailHtml} fallbackText={m.text} />
-        ) : (
-          m.text ? (
-            <RichText text={m.text} style={{ color: C.text, fontSize: 13.5, lineHeight: 1.65, opacity: 0.92, wordBreak: 'break-word' }} />
-          ) : (
-            <div style={{ color: C.text, fontSize: 13.5, lineHeight: 1.65, opacity: 0.92 }}>
-              <span style={{ fontStyle: 'italic', opacity: 0.6 }}>(no body)</span>
-            </div>
-          )
-        )}
-        {/* rawHeaders directly, NOT rh — rh is direction-gated above but
-            attachments render on inbound and outbound alike. */}
-        <AttachmentChips rh={m.rawHeaders} />
-      </div>
-    );
-  };
-
   // ─── EXPANDED THREAD PANEL ──────────────────────────────────────────────────
-  const ThreadPanel = ({ t, onBack }) => {
+  // Called as a plain function (renderThreadPanel(t, onBack)), not mounted as
+  // <ThreadPanel/> (BUILD-28): an inline component gets a new identity on every
+  // ThreadsView render, which remounted the whole panel — resetting scroll and
+  // every message's state whenever anything changed (e.g. opening one title in
+  // "titles only" mode jumped back to the top). It holds no hooks, so this is a
+  // straight swap.
+  const renderThreadPanel = (t, onBack) => {
     const names = participantNames(t);
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -2165,6 +2287,13 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
                 <Btn small variant="secondary" onClick={() => setSaveLinksFor(t)}>
                   🔗 Save link{linkCount !== 1 ? 's' : ''}{linkCount > 0 ? ` (${linkCount})` : ''}
                 </Btn>
+                {t.displayCount > 1 && (
+                  <Btn small variant="ghost"
+                    onClick={() => { setCollapseMsgs(v => !v); setExpandedMsgIds(new Set()); }}
+                    title={collapseMsgs ? 'Show every email in full' : 'Fold every email down to its title line'}>
+                    {collapseMsgs ? '▦ Show full emails' : '☰ Titles only'}
+                  </Btn>
+                )}
                 <ConfirmBtn
                   variant="ghost"
                   idleLabel="Delete thread"
@@ -2212,9 +2341,18 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
               .map(m => String(m.direction === 'outbound' ? m.toEmail : m.fromEmail || '').trim().toLowerCase())
               .filter(Boolean));
             const isGroup = (t.personIds.size + rawAddrs.size) > 1;
+            // Titles-only mode applies to threads of 2+ emails; a lone email
+            // is always shown in full (folding it would just hide it).
+            const collapsible = collapseMsgs && display.length > 1;
+            const msgProps = (m) => ({
+              m, personById, nav,
+              collapsed: collapsible && !expandedMsgIds.has(m.id),
+              onToggle: collapsible ? () => toggleMsg(m.id) : null,
+              onForward: (msg) => { const f = buildForward(msg); setReplyTo(f); },
+            });
             return (
               <>
-                {newest && <Message key={newest.id} m={newest} />}
+                {newest && <ThreadMessage key={newest.id} {...msgProps(newest)} />}
                 <div style={{ display: 'flex', justifyContent: 'flex-start', gap: 8, marginTop: 4, marginBottom: 12 }}>
                   <Btn small onClick={() => { const r = buildReply(t); if (r) setReplyTo(r); }}>
                     ↩ Reply
@@ -2225,7 +2363,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
                     </Btn>
                   )}
                 </div>
-                {older.map(m => <Message key={m.id} m={m} />)}
+                {older.map(m => <ThreadMessage key={m.id} {...msgProps(m)} />)}
               </>
             );
           })()}
@@ -2248,14 +2386,36 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
     />
   );
 
+  // All / Unread chips (BUILD-28). Unread = threads with at least one unread
+  // INBOUND message — same rule as the sidebar badge.
+  const filterChip = (key, label, count) => {
+    const on = threadFilter === key;
+    return (
+      <button key={key} onClick={() => setThreadFilter(key)}
+        style={{ background: on ? C.gold + '22' : 'transparent', border: `1px solid ${on ? C.gold : C.border}`,
+          color: on ? C.gold : C.muted, cursor: 'pointer', borderRadius: 14, fontSize: 11.5, fontWeight: on ? 600 : 400,
+          padding: '4px 12px', fontFamily: "'Jost',sans-serif", letterSpacing: '0.3px' }}>
+        {label}{count != null ? ` · ${count}` : ''}
+      </button>
+    );
+  };
+  const filterBar = (
+    <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+      {filterChip('all', 'All', threads.length)}
+      {filterChip('unread', 'Unread', unreadThreadCount)}
+    </div>
+  );
+
   const listEl = (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <div style={{ padding: isMobile ? '0 0 12px' : '0 4px 12px', flexShrink: 0 }}>{searchBar}</div>
+      <div style={{ padding: isMobile ? '0 0 12px' : '0 4px 12px', flexShrink: 0 }}>{searchBar}{filterBar}</div>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {filtered.length === 0 ? (
           <Empty text={threads.length === 0
             ? 'No threads yet. Emails to and from your contacts will appear here once they start flowing in.'
-            : 'No threads match your search.'} />
+            : (threadFilter === 'unread' && !search.trim())
+              ? 'No unread threads. You’re all caught up.'
+              : 'No threads match your search.'} />
         ) : (
           <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
             {filtered.map(t => <ThreadRow key={t.key} t={t} active={t.key === selectedKey} />)}
@@ -2272,7 +2432,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
         {!selected && <PageHead subInfo={`${threads.length} thread${threads.length !== 1 ? 's' : ''}`}>Threads</PageHead>}
         <div style={{ flex: 1, minHeight: 0 }}>
           {selected
-            ? <ThreadPanel t={selected} onBack={() => setSelectedKey(null)} />
+            ? renderThreadPanel(selected, () => setSelectedKey(null))
             : listEl}
         </div>
         {replyModal}
@@ -2294,7 +2454,7 @@ export function ThreadsView({ notes, people, nav, onMarkThreadRead, initialThrea
         <div style={{ minHeight: 0 }}>{listEl}</div>
         <div style={{ minHeight: 0, borderLeft: `1px solid ${C.border}`, paddingLeft: 24 }}>
           {selected
-            ? <ThreadPanel t={selected} />
+            ? renderThreadPanel(selected, null)
             : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 13, fontStyle: 'italic', opacity: 0.7 }}>
                 Select a thread to read it
               </div>}

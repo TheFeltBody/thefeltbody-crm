@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { C, CARE_HOME_STAGES, INTERACTION_KINDS, INV_STATUS, ORG_META, PAYMENT_STATUS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, RELATIONSHIP_KEYS, RELATIONSHIP_LABELS } from "../lib/constants.js";
-import { addDays, deriveReplyAllRecipients, birthdayInfo, classKindKey, contactDateInfo, fmt, fmtDayMonth, fmtMoney, fmtTime, isCountlessPkg, packagePerSessionValue, packageRemaining, primaryRole, startOfWeek, today, useIsMobile, useLocalStorage, useTypes } from "../lib/helpers.jsx";
+import { addDays, deriveReplyAllRecipients, birthdayInfo, classKindKey, contactDateInfo, fmt, fmtDayMonth, fmtMoney, fmtTime, isCountlessPkg, packagePerSessionValue, packageRemaining, plainText, primaryRole, startOfWeek, today, useIsMobile, useLocalStorage, useTypes } from "../lib/helpers.jsx";
 import { Avatar, Btn, ConfirmBtn, Empty, FI, KindBadge, MobileTabBar, Modal, NoteCard, OrgBadge, PageHead, RoleBadge, Row, SourceTag, Tabs } from "./primitives.jsx";
 import { AddPersonForm, NoteForm, SendEmailModal } from "./forms.jsx";
 import { ClassLog } from "./views.jsx";
@@ -1659,6 +1659,45 @@ export function HouseholdModal({ person, household, roster, allPeople, household
 // parent re-renders. Defining it inside ContactDatesCard gave it a new
 // identity on every keystroke (setD → re-render → new fn → remount), which
 // blew away focus mid-type — the documented nested-component remount bug.
+// ─── COLLAPSED EMAIL ROW (Comms tab, BUILD-22) ───────────────────────────────
+// One-line title for an email card while "Email titles only" is on: direction ·
+// subject (or a snippet) · attachment count · date. Clicking opens the full
+// NoteCard in place. Carries data-note-id so the highlightNoteId scroll-to still
+// finds it. Module scope on purpose — an inline component would remount on every
+// PersonDetail render.
+function CollapsedEmailRow({ note, onOpen, highlight }) {
+  const inbound = note.direction === 'inbound';
+  const dirColor = inbound ? C.blue : C.gold;
+  const title = note.subject || plainText(note.text).slice(0, 100) || '(no subject)';
+  const attachCount = Array.isArray(note.rawHeaders?.attachment_file_ids) ? note.rawHeaders.attachment_file_ids.length : 0;
+  const pendingAction = note.actionDate && !note.completed;
+  return (
+    <div data-note-id={note.id} onClick={onOpen} title="Show this email"
+      style={{
+        display:'flex', alignItems:'center', gap:10, minWidth:0,
+        background: note.important ? C.goldBg : C.card,
+        borderLeft: `3px solid ${note.important ? C.gold : C.border}`,
+        borderRadius:'0 6px 6px 0', padding:'7px 14px', marginBottom:6, cursor:'pointer',
+        boxShadow: highlight ? `0 0 0 2px ${C.gold}` : 'none',
+        transition:'box-shadow 0.4s ease, background 0.15s', scrollMarginTop:90,
+      }}
+      onMouseEnter={e=>{ e.currentTarget.style.background = C.surf; }}
+      onMouseLeave={e=>{ e.currentTarget.style.background = note.important ? C.goldBg : C.card; }}>
+      <span style={{color:C.muted,fontSize:10,flexShrink:0,transform:'rotate(-90deg)',display:'inline-block'}}>▾</span>
+      <span style={{color:dirColor,fontSize:9,fontWeight:700,letterSpacing:'0.6px',textTransform:'uppercase',flexShrink:0}}>
+        {inbound ? '↓ Received' : '↑ Sent'}
+      </span>
+      <span style={{color:C.text,fontSize:13,flex:1,minWidth:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+        {title}
+      </span>
+      {note.important && <span title="Important" style={{color:C.gold,fontSize:11,flexShrink:0}}>⚑</span>}
+      {pendingAction && <span title={`Action by ${fmt(note.actionDate)}`} style={{fontSize:11,flexShrink:0}}>🗓</span>}
+      {attachCount > 0 && <span title={`${attachCount} attachment${attachCount!==1?'s':''}`} style={{color:C.muted,fontSize:11,flexShrink:0}}>📎{attachCount>1?attachCount:''}</span>}
+      <span style={{color:C.muted,fontSize:11,flexShrink:0}}>{fmt(note.date)}</span>
+    </div>
+  );
+}
+
 function DateForm({ d, setD, onSave, onCancel, saveLabel }) {
   const canSave = d.label.trim() && d.date;
   return (
@@ -2059,6 +2098,17 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
   const [tab, setTab] = useLocalStorage('felt.personDetail.tab', 'notes');
   const [flashId, setFlashId] = useState(null);
   const [filterKind, setFilterKind] = useState('all');
+  // "Email titles only" (BUILD-22): emails on the Comms tab fold to one-line
+  // titles; click one to open it. Sticky per-device. openEmailIds tracks the
+  // ones opened while folded, reset when moving to a different contact. A
+  // highlighted note (arriving via highlightNoteId) is opened automatically.
+  const [collapseEmails, setCollapseEmails] = useLocalStorage('felt.personDetail.collapseEmails', false);
+  const [openEmailIds, setOpenEmailIds] = useState(()=>new Set());
+  useEffect(() => { setOpenEmailIds(new Set()); }, [person.id]);
+  useEffect(() => {
+    if (highlightNoteId) setOpenEmailIds(s => { const n = new Set(s); n.add(highlightNoteId); return n; });
+  }, [highlightNoteId]);
+  const toggleEmailOpen = (id) => setOpenEmailIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   // Which booking rows are expanded to show their session note(s) inline.
   const [bookingNotesOpen, setBookingNotesOpen] = useState(()=>new Set());
   // Bookings tab quick-filter: all | past | future. `today` counts as future
@@ -2117,6 +2167,25 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
     : effectiveFilter==='diary' ? diaryNotes
     : commsNotes.filter(n => (n.kind||'note')===effectiveFilter);
   const impNotes = visibleNotes.filter(n=>n.important), regNotes = visibleNotes.filter(n=>!n.important);
+  // One comms entry. Emails fold to a title row while "Email titles only" is on
+  // (unless opened); an opened one gets a small fold-back link above its card.
+  // Everything else renders as the usual NoteCard.
+  const renderComm = (n) => {
+    const card = <NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} onReply={n.kind==='email'?startReply:undefined} onReplyAll={canReplyAll(n)?startReplyAll:undefined} onForward={n.kind==='email'?startForward:undefined} onOpenThread={canOpenThread(n)?openThread:undefined} highlight={flashId===n.id} />;
+    if (!collapseEmails || n.kind !== 'email') return card;
+    if (!openEmailIds.has(n.id)) {
+      return <CollapsedEmailRow key={n.id} note={n} highlight={flashId===n.id} onOpen={() => toggleEmailOpen(n.id)} />;
+    }
+    return (
+      <div key={n.id}>
+        <button onClick={() => toggleEmailOpen(n.id)} title="Fold back to the title"
+          style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:11,padding:'0 0 3px 2px',fontFamily:"'Jost',sans-serif",letterSpacing:'0.3px'}}>
+          ▾ Collapse
+        </button>
+        {card}
+      </div>
+    );
+  };
 
   // ── Household derivation. A contact may belong to MULTIPLE households (the
   // junction table supports it). myMemberships = all this person's junction rows;
@@ -2592,6 +2661,22 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
                     );
                   });
                 })()}
+                {/* Email titles only (BUILD-22) — shown when the current list has emails. */}
+                {visibleNotes.some(n => n.kind === 'email') && (
+                  <button onClick={() => { setCollapseEmails(v => !v); setOpenEmailIds(new Set()); }}
+                    title={collapseEmails ? 'Show every email in full' : 'Fold emails down to their subject line'}
+                    style={{
+                      background: collapseEmails ? C.gold+'22' : 'transparent',
+                      color: collapseEmails ? C.gold : C.muted,
+                      border: `1px solid ${collapseEmails ? C.gold+'88' : C.border}`,
+                      borderRadius:4, fontSize:11, fontWeight:500, letterSpacing:'0.3px',
+                      padding:'4px 10px', cursor:'pointer', fontFamily:"'Jost',sans-serif",
+                      display:'inline-flex', alignItems:'center', gap:5,
+                    }}>
+                    <span style={{fontSize:11,lineHeight:1}}>☰</span>
+                    <span data-chip-label>{collapseEmails ? 'Titles on' : 'Email titles'}</span>
+                  </button>
+                )}
               </div>
               {/* "+ Log ▾" dropdown — click to open menu, click an item to open
                   the form for that kind. Closes on outside-click or Escape (see
@@ -2647,8 +2732,8 @@ export function PersonDetail({ person, org, pNotes, pClasses, attendance, packag
               )}
             </div>
             {addKind&&<NoteForm personId={person.id} classId={null} kind={addKind} onSave={n=>{onAddNote(n);setAddKind(null);}} onCancel={()=>setAddKind(null)} />}
-            {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} onReply={n.kind==='email'?startReply:undefined} onReplyAll={canReplyAll(n)?startReplyAll:undefined} onForward={n.kind==='email'?startForward:undefined} onOpenThread={canOpenThread(n)?openThread:undefined} highlight={flashId===n.id} />)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
-            {regNotes.map(n=><NoteCard key={n.id} note={n} onToggleImportant={onToggleImportant} onClearAction={onClearAction} onReopenNote={onReopenNote} onUpdateActionDate={onUpdateActionDate} onDelete={onDeleteNote} onAddToCalendar={onAddToCalendar} onClick={onEditNote?()=>onEditNote(n):undefined} onReply={n.kind==='email'?startReply:undefined} onReplyAll={canReplyAll(n)?startReplyAll:undefined} onForward={n.kind==='email'?startForward:undefined} onOpenThread={canOpenThread(n)?openThread:undefined} highlight={flashId===n.id} />)}
+            {impNotes.length>0&&<><div style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:'1px',marginBottom:8,marginTop:4}}>⚑ IMPORTANT</div>{impNotes.map(renderComm)}{regNotes.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:'18px 0',opacity:0.4}} />}</>}
+            {regNotes.map(renderComm)}
             {visibleNotes.length===0&&!addKind&&<Empty text={effectiveFilter==='all' ? 'No comms yet' : effectiveFilter==='diary' ? 'No diary entries' : `No ${INTERACTION_KINDS[effectiveFilter].label.toLowerCase()}s logged yet`} />}
           </>}
           {tab==='packages'&&<>
