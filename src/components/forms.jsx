@@ -451,6 +451,9 @@ export function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, de
         bookingInfo: ''
       });
   const s = k => v => setF(x=>({...x,[k]:v}));
+  // Duration is held as the raw input string while editing (so it can be
+  // cleared and retyped); it must be a whole number ≥ 1 to save.
+  const durationValid = parseInt(f.duration) >= 1;
   const isNew = !existing;
   // Smart default for paymentModel based on selected org
   const effectiveModel = f.paymentModel || (f.orgId ? 'org' : ((f.name||'').toLowerCase().includes('private') ? 'private' : 'per_person'));
@@ -514,7 +517,7 @@ export function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, de
         <FI label="TIME (optional)" value={f.time} onChange={s('time')} type="time" half />
       </div>
       <div style={{display:'flex',gap:12}}>
-        <FI label="DURATION (mins)" value={f.duration} onChange={v=>s('duration')(parseInt(v)||60)} type="number" half />
+        <FI label="DURATION (mins)" value={f.duration} onChange={s('duration')} type="number" half />
         <FI label="LOCATION" value={f.location} onChange={s('location')} half />
       </div>
       <div style={{display:'flex',gap:12}}>
@@ -603,7 +606,7 @@ export function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, de
       )}
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn onClick={()=>{if(f.name.trim()){onSave({...f,paymentModel:effectiveModel,recurrence:bookingFor?'one_off':f.recurrence,paymentChoice:buildPaymentChoice()});onClose();}}}>{existing?'Save':(bookingFor?'Create & Book':'Add Class')}</Btn>
+        <Btn disabled={!durationValid} onClick={()=>{if(f.name.trim() && durationValid){onSave({...f,duration:parseInt(f.duration),paymentModel:effectiveModel,recurrence:bookingFor?'one_off':f.recurrence,paymentChoice:buildPaymentChoice()});onClose();}}}>{existing?'Save':(bookingFor?'Create & Book':'Add Class')}</Btn>
       </div>
     </Modal>
   );
@@ -614,6 +617,8 @@ export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onExtend, s
   const [f, setF] = useState({...cls, time: cls.time || '', duration: cls.duration || 60});
   const [extendCount, setExtendCount] = useState('');
   const s = k => v => setF(x=>({...x,[k]:v}));
+  const durationValid = parseInt(f.duration) >= 1;
+  const saveF = () => ({...f, duration: parseInt(f.duration)});
   return (
     <Modal title="Edit Recurring Class" onClose={onClose} wide>
       <div style={{background:C.goldBg,border:`1px solid ${C.gold}44`,borderRadius:6,padding:'10px 14px',marginBottom:18,color:C.gold,fontSize:13}}>
@@ -625,7 +630,7 @@ export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onExtend, s
         <FI label="TIME (optional)" value={f.time} onChange={s('time')} type="time" half />
       </div>
       <div style={{display:'flex',gap:12}}>
-        <FI label="DURATION (mins)" value={f.duration} onChange={v=>s('duration')(parseInt(v)||60)} type="number" half />
+        <FI label="DURATION (mins)" value={f.duration} onChange={s('duration')} type="number" half />
         <FI label="LOCATION" value={f.location} onChange={s('location')} half />
       </div>
       <div style={{display:'flex',gap:12}}>
@@ -669,8 +674,8 @@ export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onExtend, s
       )}
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:4}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn variant="secondary" onClick={()=>{onSaveFuture(f);onClose();}}>Update this & future</Btn>
-        <Btn onClick={()=>{onSaveThis(f);onClose();}}>Update this class only</Btn>
+        <Btn variant="secondary" disabled={!durationValid} onClick={()=>{if(!durationValid) return; onSaveFuture(saveF());onClose();}}>Update this & future</Btn>
+        <Btn disabled={!durationValid} onClick={()=>{if(!durationValid) return; onSaveThis(saveF());onClose();}}>Update this class only</Btn>
       </div>
     </Modal>
   );
@@ -1602,7 +1607,7 @@ export function CreateInvoiceForm({ onSave, onClose, orgs, classes, invoices, ex
     }));
     setToImport([]);
   };
-  const addLineItem = () => setF(x=>({...x,lineItems:[...x.lineItems,{id:uid(),description:'',qty:1,rate:orgClasses[0]?.rate||40,total:0,classIds:[]}]}));
+  const addLineItem = () => setF(x=>({...x,lineItems:[...x.lineItems,{id:uid(),description:'',qty:1,rate:orgClasses[0]?.rate??40,total:0,classIds:[]}]}));
   const updateLI = (id,k,v) => setF(x=>({...x,lineItems:x.lineItems.map(li=>li.id===id?{...li,[k]:v,total:k==='qty'?(parseFloat(v)||0)*(li.rate||0):k==='rate'?(li.qty||1)*(parseFloat(v)||0):li.total}:li)}));
   const removeLI = id => setF(x=>({...x,lineItems:x.lineItems.filter(li=>li.id!==id)}));
   const total = f.lineItems.reduce((s,li)=>s+(li.qty||1)*(li.rate||0),0);
@@ -1623,8 +1628,10 @@ const importClasses = (clsIds) => {
       id: uid(),
       description: `${parts.join(' · ')} — ${c.name}`,
       qty: 1,
-      rate: c.rate || 40,
-      total: c.rate || 40,
+      // ?? not || — a class rate of 0 (e.g. covered by another teacher) is a
+      // real value and must reach the invoice as £0, not fall back to £40.
+      rate: c.rate ?? 40,
+      total: c.rate ?? 40,
       classIds: [c.id],
     };
   });
@@ -2174,6 +2181,9 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
     const v = parseInt(f.duration) || (f.durationUnit === 'hours' ? 1 : 60);
     return f.durationUnit === 'hours' ? v * 60 : v;
   };
+  // The input holds the raw string while editing so it can be cleared and
+  // retyped (e.g. delete "60", type "30"). Saving needs a whole number ≥ 1.
+  const durationValid = parseInt(f.duration) >= 1;
   // Add whole days to a YYYY-MM-DD string without timezone drift (string math,
   // same reasoning as the month-nav fix — never round-trip through Date/UTC).
   const addDaysStr = (iso, n) => {
@@ -2201,6 +2211,7 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
   };
 
   const save = async () => {
+    if (!durationValid) return;
     // Title is the calendar label and is required. Body is the optional longer
     // note shown on hover / in this form. (When promoting a note to the calendar
     // the note text seeds the body, so title may start empty — hence we validate
@@ -2307,7 +2318,7 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
   // create path. We take current form values so unsaved title/time edits carry
   // across, but never touch the source row.
   const copyTo = (calKey) => {
-    if (!onCopy) return;
+    if (!onCopy || !durationValid) return;
     const title = f.title.trim();
     const text = f.text.trim();
     if(!title && !text) return;
@@ -2428,8 +2439,8 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
         <div style={{color:C.muted,fontSize:10,letterSpacing:'0.5px',marginBottom:6}}>DURATION</div>
         <div style={{display:'flex',gap:8,alignItems:'stretch'}}>
           <input type="number" min="1" value={f.duration}
-            onChange={e=>s('duration')(parseInt(e.target.value)||1)}
-            style={{flex:1,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,
+            onChange={e=>s('duration')(e.target.value)}
+            style={{flex:1,background:C.card,border:`1px solid ${durationValid ? C.border : C.red}`,borderRadius:6,
               color:C.text,fontSize:14,padding:'9px 12px',fontFamily:"'Jost',sans-serif"}} />
           <div style={{display:'flex',gap:0,borderRadius:6,overflow:'hidden',border:`1px solid ${C.border}`}}>
             {[{v:'mins',l:'min'},{v:'hours',l:'hr'}].map(u=>{
@@ -2673,7 +2684,7 @@ export function DiaryModal({ people, projects=[], selfPersonId, existing=null, p
         </div>
         <div style={{display:'flex',gap:8}}>
           <Btn variant="ghost" onClick={onClose} disabled={attBusy}>Cancel</Btn>
-          <Btn onClick={save} disabled={attBusy || attTooBig.length > 0}>
+          <Btn onClick={save} disabled={attBusy || attTooBig.length > 0 || !durationValid}>
             {attBusy ? 'Uploading…' : (isEdit ? 'Save changes' : 'Add entry')}
           </Btn>
         </div>
