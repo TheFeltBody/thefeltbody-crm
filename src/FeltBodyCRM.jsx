@@ -1023,13 +1023,18 @@ export default function FeltBodyCRM() {
   // canonical shapes so the UI stays in sync with the DB. Server-confirmed,
   // not optimistic — assignment is rare enough that the slight latency is
   // fine, and rolling back two coupled writes if one fails is messy.
-  const assignNoteToPerson = async (noteId, personId, addEmailIfNew) => {
+  // BUILD-20: accepts one id OR an array of ids — the Inbox groups every
+  // unlinked email from the same sender and assigns them in one go
+  // (data.notes.assignManyToPerson: one bulk update, address learned once).
+  const assignNoteToPerson = async (noteIdOrIds, personId, addEmailIfNew) => {
     try {
+      const ids = Array.isArray(noteIdOrIds) ? noteIdOrIds : [noteIdOrIds];
       const myAddresses = settings.my_addresses || [];
-      const { note, addedEmail } = await data.notes.assignToPerson(
-        noteId, personId, { addEmailIfNew, myAddresses });
-      // Reconcile the note (now has personId set).
-      setNotes(p => p.map(n => n.id === noteId ? note : n));
+      const { notes: saved, addedEmail } = await data.notes.assignManyToPerson(
+        ids, personId, { addEmailIfNew, myAddresses });
+      // Reconcile every assigned note (now has personId set).
+      const byId = new Map(saved.map(n => [n.id, n]));
+      setNotes(p => p.map(n => byId.get(n.id) || n));
       // If an email was added, splice it into the target person's emails array.
       if (addedEmail) {
         setPeople(p => p.map(person =>
@@ -1498,7 +1503,11 @@ export default function FeltBodyCRM() {
         // our own), so assignment runs with addEmailIfNew=false — whatever the
         // user left in the form's email list is what gets saved. Modal closes
         // synchronously; async work continues, same as add_person_to_register.
-        const inboxNote = notes.find(n => n.id === modal.noteId);
+        // noteIds (BUILD-20): the clicked email plus any grouped siblings from
+        // the same sender. The first id is the clicked one — it drives the
+        // pre-staged address. Falls back to the legacy single noteId.
+        const inboxIds = modal.noteIds || (modal.noteId ? [modal.noteId] : []);
+        const inboxNote = notes.find(n => n.id === inboxIds[0]);
         if (!inboxNote) return null;
         const cand = String((inboxNote.direction === 'outbound' ? inboxNote.toEmail : inboxNote.fromEmail) || '').trim();
         const mine = (settings.my_addresses || []).map(a => String(a).trim().toLowerCase());
@@ -1513,7 +1522,7 @@ export default function FeltBodyCRM() {
             try {
               const savedPerson = await data.people.create(p);
               setPeople(prev => [...prev, savedPerson]);
-              await assignNoteToPerson(modal.noteId, savedPerson.id, false);
+              await assignNoteToPerson(inboxIds, savedPerson.id, false);
             } catch (e) { onError('Add new contact from inbox')(e); }
           }}
           onClose={close} />;
@@ -1662,7 +1671,7 @@ export default function FeltBodyCRM() {
         attendance={attendance} classes={classes}
         onAssign={assignNoteToPerson}
         onDiscard={deleteNote}
-        onCreateContact={(noteId, name)=>setModal({type:'add_person_from_inbox', noteId, name})} />;
+        onCreateContact={(noteIds, name)=>setModal({type:'add_person_from_inbox', noteIds, name})} />;
       case 'comms_log': return <RecentActivityView notes={notes} people={people} classes={classes} orgs={orgs} attendance={attendance} packages={packages} projects={projects} nav={nav} />;
       case 'package_templates': return <PackageTemplatesView templates={packageTemplates} nav={nav}
         onAdd={()=>setModal({type:'add_template'})}

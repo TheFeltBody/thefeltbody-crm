@@ -1177,6 +1177,29 @@ export function InboxView({ notes, people, attendance, classes, onAssign, onDisc
     return s.length > 140 ? s.slice(0, 140) + '…' : s;
   };
 
+  // Sender grouping (BUILD-29). The "other party" address, normalised —
+  // sender for inbound, recipient for outbound (same rule as the row's
+  // counterparty and the data layer's address-learning step). Rows sharing
+  // it are assigned together from the picker in one action.
+  const cpKey = (n) => String(
+    (n.direction === 'outbound' ? (n.toEmail || n.fromEmail) : (n.fromEmail || n.toEmail)) || ''
+  ).trim().toLowerCase();
+  const countByCp = useMemo(() => {
+    const m = new Map();
+    unlinked.forEach(n => { const k = cpKey(n); if (k) m.set(k, (m.get(k) || 0) + 1); });
+    return m;
+  }, [unlinked]);
+  // Other unlinked rows from the same sender as the row being assigned.
+  const siblings = useMemo(() => {
+    if (!pickerFor) return [];
+    const k = cpKey(pickerFor);
+    if (!k) return [];
+    return unlinked.filter(n => n.id !== pickerFor.id && cpKey(n) === k);
+  }, [pickerFor, unlinked]);
+  // Ids to act on: the clicked row first (it drives the address), then siblings.
+  const idsFor = (includeSiblings) =>
+    [pickerFor.id, ...(includeSiblings ? siblings.map(s => s.id) : [])];
+
   return (
     <div style={{padding: isMobile ? '12px 12px 24px' : '24px 32px',maxWidth:920}}>
       <PageHead subInfo={unlinked.length === 0 ? 'all clear' : `${unlinked.length} unlinked`}>Inbox</PageHead>
@@ -1221,6 +1244,12 @@ export function InboxView({ notes, people, attendance, classes, onAssign, onDisc
                   {counterparty && (
                     <span style={{color:C.text,fontSize:13,fontWeight:500}}>{counterparty}</span>
                   )}
+                  {(countByCp.get(cpKey(n)) || 0) > 1 && (
+                    <span title="Unlinked emails from this sender — assigning one offers to assign them all"
+                      style={{color:C.gold,fontSize:10.5,border:`1px solid ${C.gold}55`,borderRadius:10,padding:'1px 7px',letterSpacing:'0.3px'}}>
+                      {countByCp.get(cpKey(n))} from this sender
+                    </span>
+                  )}
                   <span style={{marginLeft:'auto',color:C.muted,fontSize:11}}>{fmt(n.date)}</span>
                 </div>
 
@@ -1262,20 +1291,21 @@ export function InboxView({ notes, people, attendance, classes, onAssign, onDisc
       {pickerFor && (
         <AssignToPersonModal
           note={pickerFor}
+          siblings={siblings}
           people={people}
           attendance={attendance}
           classes={classes}
           onClose={() => setPickerFor(null)}
-          onAssign={(personId, addEmailIfNew) => {
-            onAssign(pickerFor.id, personId, addEmailIfNew);
+          onAssign={(personId, addEmailIfNew, includeSiblings) => {
+            onAssign(idsFor(includeSiblings), personId, addEmailIfNew);
             setPickerFor(null);
           }}
-          // "+ Add new contact": hand the note id + a starting name up to the
-          // parent, which opens AddPersonForm and assigns the note on save.
-          onAddNew={onCreateContact ? (name) => {
-            const noteId = pickerFor.id;
+          // "+ Add new contact": hand the note ids + a starting name up to the
+          // parent, which opens AddPersonForm and assigns the notes on save.
+          onAddNew={onCreateContact ? (name, includeSiblings) => {
+            const noteIds = idsFor(includeSiblings);
             setPickerFor(null);
-            onCreateContact(noteId, name);
+            onCreateContact(noteIds, name);
           } : undefined}
         />
       )}
@@ -1293,9 +1323,13 @@ export function InboxView({ notes, people, attendance, classes, onAssign, onDisc
 // when the sender isn't in the CRM yet, create them from here. Passes the
 // typed search text, falling back to the sender's display name from the
 // email headers, so the new-contact form starts pre-filled.
-export function AssignToPersonModal({ note, people, attendance, classes, onClose, onAssign, onAddNew }) {
+// siblings (BUILD-29): other unlinked rows from the same sender. When present,
+// an "also assign the N other emails" box (default on) folds them into the
+// same action — for both Assign and + Add new contact.
+export function AssignToPersonModal({ note, siblings = [], people, attendance, classes, onClose, onAssign, onAddNew }) {
   const [selected, setSelected] = useState(null);
   const [addEmail, setAddEmail] = useState(true);
+  const [includeSiblings, setIncludeSiblings] = useState(true);
   // Mirror of SearchSelect's query, same as the register picker.
   const [query, setQuery] = useState('');
 
@@ -1336,6 +1370,19 @@ export function AssignToPersonModal({ note, people, attendance, classes, onClose
         )}
       </div>
 
+      {siblings.length > 0 && (
+        <label style={{display:'flex',alignItems:'center',gap:8,color:C.muted,fontSize:12,cursor:'pointer',userSelect:'none',
+          marginBottom:14,background:C.goldBg,border:`1px solid ${C.gold}44`,borderRadius:6,padding:'8px 12px'}}>
+          <input type="checkbox" checked={includeSiblings}
+            onChange={e => setIncludeSiblings(e.target.checked)}
+            style={{accentColor:C.gold}} />
+          <span>
+            Also assign the <span style={{color:C.text}}>{siblings.length} other email{siblings.length !== 1 ? 's' : ''}</span>
+            {candidateEmail ? <> from <span style={{color:C.gold}}>{candidateEmail}</span></> : ' from this sender'}
+          </span>
+        </label>
+      )}
+
       <SearchSelect people={available} onSelect={p => setSelected(p)}
         onQueryChange={setQuery}
         attendance={attendance} classes={classes} />
@@ -1363,15 +1410,15 @@ export function AssignToPersonModal({ note, people, attendance, classes, onClose
           <div style={{color:C.muted,fontSize:12}}>
             {query.trim() ? <>Can't find <span style={{color:C.text}}>{query.trim()}</span>?</> : "Not in your contacts yet?"}
           </div>
-          <Btn variant="ghost" small onClick={() => onAddNew(newName)}>+ Add new contact</Btn>
+          <Btn variant="ghost" small onClick={() => onAddNew(newName, includeSiblings)}>+ Add new contact</Btn>
         </div>
       )}
 
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:18}}>
         <Btn variant="ghost" small onClick={onClose}>Cancel</Btn>
         <Btn small disabled={!selected}
-          onClick={() => selected && onAssign(selected.id, addEmail)}>
-          Assign
+          onClick={() => selected && onAssign(selected.id, addEmail, includeSiblings)}>
+          {siblings.length > 0 && includeSiblings ? `Assign all ${siblings.length + 1}` : 'Assign'}
         </Btn>
       </div>
     </Modal>

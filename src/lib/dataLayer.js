@@ -799,24 +799,56 @@ export const notes = {
     const note = noteFromDb(updatedRow);
 
     if (!addEmailIfNew) return { note, addedEmail: null };
+    const addedEmail = await _learnAddressFromNote(note, personId, myAddresses);
+    return { note, addedEmail };
+  },
 
+  // Bulk variant (BUILD-16): assign SEVERAL unlinked interactions to one
+  // person in a single update — used when the Inbox groups every unlinked
+  // email from the same sender. The address-learning step runs ONCE, off the
+  // first returned row (all rows in a group share the counterparty address).
+  //
+  // Guarded with person_id IS NULL so a row assigned from the other machine
+  // in the meantime is left alone rather than silently re-pointed. Rows the
+  // guard skips simply don't come back; the caller only reconciles the rows
+  // it receives. Returns { notes, addedEmail }.
+  async assignManyToPerson(noteIds, personId, { addEmailIfNew = true, myAddresses = [] } = {}) {
+    const ids = [...new Set((noteIds || []).filter(Boolean))];
+    if (!ids.length) return { notes: [], addedEmail: null };
+    const rows = await supabase.from('interactions')
+      .update({ person_id: personId })
+      .in('id', ids).is('person_id', null)
+      .select().then(ok);
+    const notes = rows.map(noteFromDb);
+    if (!addEmailIfNew || !notes.length) return { notes, addedEmail: null };
+    // Prefer the row the user actually clicked (first id) as the address source.
+    const source = notes.find(n => n.id === ids[0]) || notes[0];
+    const addedEmail = await _learnAddressFromNote(source, personId, myAddresses);
+    return { notes, addedEmail };
+  },
+};
+
+// Step 2 of inbox assignment, shared by assignToPerson / assignManyToPerson:
+// if the note's counterparty address isn't already on the person, add it.
+// Returns the new email row (JSX shape) or null when nothing was added.
+async function _learnAddressFromNote(note, personId, myAddresses = []) {
     // Step 2: pick the relevant address based on direction.
     const candidate = note.direction === 'outbound'
       ? note.toEmail
       : note.fromEmail;  // inbound, or null direction (default to from)
-    if (!candidate) return { note, addedEmail: null };
+    if (!candidate) return null;
 
     // Normalise for comparison (lowercase, trim) but preserve original case
     // on write — email local-parts are technically case-sensitive per RFC,
     // even though virtually all real-world handlers treat them as not.
     const normalised = candidate.trim().toLowerCase();
-    if (!normalised) return { note, addedEmail: null };
+    if (!normalised) return null;
 
     // Skip if this is one of our own addresses (jesse@, info@, log@…).
     // Case-insensitive comparison; settings.my_addresses values are stored
     // lowercase by convention but we normalise both sides defensively.
     const myList = (myAddresses || []).map(a => String(a).trim().toLowerCase());
-    if (myList.includes(normalised)) return { note, addedEmail: null };
+    if (myList.includes(normalised)) return null;
 
     // Skip if this person already has this email (case-insensitive). We
     // fetch their current emails fresh rather than trusting whatever state
@@ -824,7 +856,7 @@ export const notes = {
     // fine, and it sidesteps a class of stale-state bugs.
     const existing = await _fetchEmailsForPerson(personId);
     if (existing.some(r => String(r.email || '').trim().toLowerCase() === normalised)) {
-      return { note, addedEmail: null };
+      return null;
     }
 
     // Add it. Provenance source='import' distinguishes an inbox-assigned
@@ -839,9 +871,8 @@ export const notes = {
       .insert(emailToDb({ personId, email: candidate.trim(), isPrimary: wantPrimary, source: 'import' }))
       .select().single().then(ok);
 
-    return { note, addedEmail: emailFromDb(emailRow) };
-  },
-};
+    return emailFromDb(emailRow);
+}
 
 // ─── Projects ────────────────────────────────────────────────────────────────
 // Top-level "your work" entity. owner_id is set DB-side (column default
