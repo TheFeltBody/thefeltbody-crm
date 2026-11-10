@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { C, CARE_HOME_STAGES, INTERACTION_KINDS, INV_STATUS, ORG_META, PAYMENT_STATUS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, RELATIONSHIP_KEYS, RELATIONSHIP_LABELS } from "../lib/constants.js";
-import { addDays, deriveReplyAllRecipients, birthdayInfo, classKindKey, contactDateInfo, fmt, fmtDayMonth, fmtMoney, fmtTime, isCountlessPkg, packagePerSessionValue, packageRemaining, plainText, primaryRole, startOfWeek, today, useIsMobile, useLocalStorage, useTypes } from "../lib/helpers.jsx";
+import { C, CARE_HOME_STAGES, INTERACTION_KINDS, INV_STATUS, KIND_META, ORG_META, PAYMENT_STATUS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, RELATIONSHIP_KEYS, RELATIONSHIP_LABELS } from "../lib/constants.js";
+import { addDays, deriveReplyAllRecipients, birthdayInfo, classKindKey, contactDateInfo, fmt, fmtDayMonth, fmtMoney, fmtTime, isCountlessPkg, packagePerSessionValue, packageRemaining, plainText, primaryRole, startOfWeek, today, useIsMobile, useLocalStorage, useTypes, workshopShareText } from "../lib/helpers.jsx";
 import { Avatar, Btn, ConfirmBtn, Empty, FI, KindBadge, MobileTabBar, Modal, NoteCard, OrgBadge, PageHead, RoleBadge, Row, SourceTag, Tabs } from "./primitives.jsx";
 import { AddPersonForm, NoteForm, SendEmailModal } from "./forms.jsx";
 import { ClassLog } from "./views.jsx";
@@ -3061,6 +3061,20 @@ export function ClassDetail({ cls, org, people, attendance, notes, series, forms
   const isOrgBilled = cls.paymentModel === 'org';
   const tracksPayment = cls.paymentModel === 'per_person' || cls.paymentModel === 'private';
   const canDelete = reg.length === 0 || cls.paymentModel === 'private';
+  const isWorkshop = cls.kind === 'workshop';
+  // Share: native share sheet on mobile (WhatsApp / text / email); clipboard
+  // copy on desktop, where the OS share sheet is more hindrance than help.
+  const [shareMsg, setShareMsg] = useState('');
+  const flashShare = (msg) => { setShareMsg(msg); setTimeout(() => setShareMsg(''), 1800); };
+  const shareWorkshop = async () => {
+    const text = workshopShareText(cls);
+    if (isMobile && typeof navigator !== 'undefined' && navigator.share) {
+      try { await navigator.share({ title: cls.name, text }); return; }
+      catch (e) { if (e && e.name === 'AbortError') return; /* else fall through to copy */ }
+    }
+    try { await navigator.clipboard.writeText(text); flashShare('Copied ✓'); }
+    catch { flashShare('Copy failed'); }
+  };
   // Private sessions are 1:1 by definition — if they need deleting, the attendance
   // row goes with them. Other class types still require an empty register so we
   // don't accidentally drop the attendance history of multiple people.
@@ -3090,6 +3104,7 @@ export function ClassDetail({ cls, org, people, attendance, notes, series, forms
     <div style={{padding: isMobile ? '12px 12px 24px' : '32px 36px',maxWidth:920}}>
       <PageHead back={backInfo?.label} onBack={backInfo?.onBack} action={<>
         <Btn variant="secondary" small onClick={()=>setShowMoney(v=>!v)} title={showMoney?'Hide payment info':'Show payment info'}>{showMoney?'Hide £':'Show £'}</Btn>
+        {isWorkshop && <Btn variant="secondary" small={isMobile} onClick={shareWorkshop} title="Share workshop details">{shareMsg || (isMobile ? 'Share' : 'Copy details')}</Btn>}
         <Btn variant="secondary" small={isMobile} onClick={onEdit}>Edit</Btn>
       </>}>{cls.name}</PageHead>
       <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
@@ -3102,6 +3117,14 @@ export function ClassDetail({ cls, org, people, attendance, notes, series, forms
         {ser&&<div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:6,padding:'7px 14px',color:C.muted,fontSize:13}}>↻ {RECURRENCE[ser.recurrence]} series</div>}
         {showMoney && cls.rate>0 && <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'7px 14px',color:C.gold,fontSize:13}}>{fmtMoney(cls.rate)}{isOrgBilled?'/session':' drop-in'}</div>}
       </div>
+
+      {isWorkshop && (cls.publicBlurb || cls.bookingUrl || cls.priceLabel) && (
+        <div style={{background:C.card,border:`1px solid ${KIND_META.workshop.color}44`,borderLeft:`3px solid ${KIND_META.workshop.color}`,borderRadius:6,padding:'12px 16px',marginBottom:20}}>
+          {cls.priceLabel && <div style={{color:KIND_META.workshop.color,fontSize:13,marginBottom:cls.publicBlurb||cls.bookingUrl?8:0}}>{cls.priceLabel}</div>}
+          {cls.publicBlurb && <div style={{color:C.text,fontSize:13,lineHeight:1.55,whiteSpace:'pre-wrap',marginBottom:cls.bookingUrl?8:0}}>{cls.publicBlurb}</div>}
+          {cls.bookingUrl && <a href={cls.bookingUrl} target="_blank" rel="noopener noreferrer" style={{color:C.blue,fontSize:12,wordBreak:'break-all'}}>Booking link ↗</a>}
+        </div>
+      )}
 
       {showMoney && paymentSummary && (paymentSummary.paid + paymentSummary.viaPackage + paymentSummary.unpaid > 0) && (
         <div style={{display:'flex',gap:8,marginBottom:24,flexWrap:'wrap',alignItems:'center'}}>

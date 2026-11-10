@@ -131,6 +131,12 @@ export const KIND_META = {
   org_class:       { label:'Class (org)',     color:'#c9a84c', bg:'#1b2213' },
   class:           { label:'Class',           color:'#c9a84c', bg:'#1b2213' },
   private_session: { label:'Private Session', color:'#a07fd4', bg:'#1a1428' },
+  workshop:        { label:'Workshop',        color:'#d98a5f', bg:'#2a1a12' },
+};
+// Session kind (sessions.kind / series.kind). 'retreat' reserved for later.
+export const SESSION_KINDS = {
+  class:    { label:'Class' },
+  workshop: { label:'Workshop' },
 };
 export const PAYMENT_STATUS = {
   unpaid:  { label:'Unpaid',  color:'#c97070', bg:'#2a1313', icon:'!' },

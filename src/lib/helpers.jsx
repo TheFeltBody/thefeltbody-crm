@@ -217,6 +217,7 @@ export const today = () => new Date().toISOString().slice(0,10);
 export const primaryRole = p => (p.roles && p.roles[0]) || 'other';
 export const classKindKey = (cls, org) => {
   if(cls.paymentModel === 'private') return 'private_session';
+  if(cls.kind === 'workshop') return 'workshop';
   if(cls.paymentModel === 'org') {
     if(org?.type === 'care_home') return 'care_class';
     if(org?.type === 'gym') return 'gym_class';
@@ -903,7 +904,38 @@ export const generateSeriesClasses = (series, count=12) => {
     publicBlurb: series.publicBlurb || '',
     joinUrl: series.joinUrl || '',
     bookingInfo: series.bookingInfo || '',
+    kind: series.kind || 'class',
+    bookingUrl: series.bookingUrl || '',
+    priceLabel: series.priceLabel || '',
   }));
+};
+
+// Plain-text block for sharing a workshop (WhatsApp / text / email).
+// e.g. "Handstands\nSaturday 14 November, 2–5pm\nBay Yoga, Berkhamsted\n\n<blurb>\n\nBook here: <url>"
+// End time is derived from start + duration. Only non-empty parts are included.
+export const workshopShareText = (cls) => {
+  const d = cls.date ? new Date(cls.date + 'T12:00:00') : null;
+  const dateLbl = d && !isNaN(d) ? d.toLocaleDateString('en-GB', { weekday:'long', day:'numeric', month:'long' }) : '';
+  let timeLbl = '';
+  if (cls.time) {
+    const [h, m] = String(cls.time).split(':').map(Number);
+    const start = h * 60 + (m || 0);
+    const end = start + (parseInt(cls.duration) || 60);
+    const ampm = mins => (Math.floor(mins / 60) % 24) >= 12 ? 'pm' : 'am';
+    const clock = mins => {
+      const hh = Math.floor(mins / 60) % 24, mm = mins % 60;
+      return `${((hh + 11) % 12) + 1}${mm ? ':' + String(mm).padStart(2, '0') : ''}`;
+    };
+    timeLbl = ampm(start) === ampm(end)
+      ? `${clock(start)}–${clock(end)}${ampm(end)}`
+      : `${clock(start)}${ampm(start)}–${clock(end)}${ampm(end)}`;
+  }
+  const when = [dateLbl, timeLbl].filter(Boolean).join(', ');
+  const head = [cls.name, when, cls.location, cls.priceLabel].map(x => (x || '').trim()).filter(Boolean).join('\n');
+  const blocks = [head];
+  if ((cls.publicBlurb || '').trim()) blocks.push(cls.publicBlurb.trim());
+  if ((cls.bookingUrl || '').trim()) blocks.push(`Book here: ${cls.bookingUrl.trim()}`);
+  return blocks.filter(Boolean).join('\n\n');
 };
 
 // ─── Email templates ─────────────────────────────────────────────────────────

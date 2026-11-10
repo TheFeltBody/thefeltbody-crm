@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { C, CARE_HOME_STAGES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, calKeys, INTERACTION_KINDS, PAYMENT_MODELS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, SOURCES, TYPE_ICONS, TYPE_PALETTE } from "../lib/constants.js";
+import { C, CARE_HOME_STAGES, DIARY_CALENDARS, DIARY_CALENDAR_KEYS, calKeys, INTERACTION_KINDS, KIND_META, PAYMENT_MODELS, SESSION_KINDS, PAY_VIA, PERSON_ROLES, PKG_COMPATIBILITY, PKG_TYPES, RECURRENCE, SOURCES, TYPE_ICONS, TYPE_PALETTE } from "../lib/constants.js";
 import { addDays, addMonths, BIRTHDAY_NO_YEAR, classKindKey, currentHourTime, fillTemplate, fmt, fmtMoney, isCountlessPkg, makeBirthdayNoYear, nextInvoiceNumber, packageRemaining, parseBirthday, primaryRole, scoreTemplates, today, uid, useTypes } from "../lib/helpers.jsx";
 import { Avatar, Btn, FI, KindBadge, Modal, RoleBadge, SearchSelect } from "./primitives.jsx";
 import { files as filesApi } from "../lib/dataLayer.js";
@@ -448,7 +448,10 @@ export function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, de
         capacity: '',
         publicBlurb: '',
         joinUrl: '',
-        bookingInfo: ''
+        bookingInfo: '',
+        kind: 'class',
+        bookingUrl: '',
+        priceLabel: ''
       });
   const s = k => v => setF(x=>({...x,[k]:v}));
   // Duration is held as the raw input string while editing (so it can be
@@ -511,7 +514,10 @@ export function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, de
           {bookingFor.name} will be added to the register automatically.
         </div>
       )}
-      <FI label="CLASS NAME" value={f.name} onChange={s('name')} />
+      {!bookingFor && (
+        <FI label="TYPE" value={f.kind||'class'} onChange={s('kind')} opts={Object.entries(SESSION_KINDS).map(([v,m])=>({v,l:m.label}))} />
+      )}
+      <FI label={(f.kind||'class')==='workshop' ? 'WORKSHOP NAME' : 'CLASS NAME'} value={f.name} onChange={s('name')} />
       <div style={{display:'flex',gap:12}}>
         <FI label="DATE" value={f.date} onChange={s('date')} type="date" half />
         <FI label="TIME (optional)" value={f.time} onChange={s('time')} type="time" half />
@@ -580,6 +586,19 @@ export function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, de
       {isNew && !bookingFor && f.recurrence!=='one_off' && (
         <FI label="HOW MANY SESSIONS TO GENERATE" value={f.repeatCount} onChange={v=>s('repeatCount')(parseInt(v)||12)} type="number" />
       )}
+      {(f.kind||'class') === 'workshop' && (
+        <div style={{marginTop:8,marginBottom:14,padding:'14px 16px',border:`1px solid ${KIND_META.workshop.color}55`,borderRadius:6,background:C.surf}}>
+          <div style={{color:KIND_META.workshop.color,fontSize:11,letterSpacing:'0.5px',marginBottom:10}}>WORKSHOP DETAILS (used by the Share button)</div>
+          <FI label="DESCRIPTION" value={f.publicBlurb ?? ''} onChange={s('publicBlurb')} rows={4} />
+          <div style={{display:'flex',gap:12}}>
+            <FI label="PRICE (as shown, e.g. £45)" value={f.priceLabel ?? ''} onChange={s('priceLabel')} half />
+            <FI label="BOOKING LINK (optional)" value={f.bookingUrl ?? ''} onChange={s('bookingUrl')} placeholder="https://…" half />
+          </div>
+          <div style={{color:C.muted,fontSize:11,marginTop:-4}}>
+            Leave the booking link blank if people book on thefeltbody.com via “Publish to website” below.
+          </div>
+        </div>
+      )}
       {!bookingFor && effectiveModel === 'per_person' && (
         <div style={{marginTop:8,marginBottom:14,padding:'14px 16px',border:`1px solid ${C.border}`,borderRadius:6,background:C.surf}}>
           <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',color:f.isBookable?C.gold:C.text,fontSize:14}}>
@@ -589,7 +608,7 @@ export function AddClassForm({ existing, onSave, onClose, orgs, defaultOrgId, de
           {f.isBookable && (
             <div style={{marginTop:14}}>
               <FI label="CAPACITY PER CLASS (blank = uncapped)" value={f.capacity} onChange={s('capacity')} type="number" />
-              <FI label="WEBSITE DESCRIPTION (optional)" value={f.publicBlurb} onChange={s('publicBlurb')} />
+              {(f.kind||'class') !== 'workshop' && <FI label="WEBSITE DESCRIPTION (optional)" value={f.publicBlurb} onChange={s('publicBlurb')} />}
               <FI label="JOINING LINK (Zoom / Meet / map — optional)" value={f.joinUrl ?? ''} onChange={s('joinUrl')} placeholder="https://…" />
               <FI label="JOINING NOTES (optional)" value={f.bookingInfo ?? ''} onChange={s('bookingInfo')} />
               <div style={{color:C.muted,fontSize:11,marginTop:2}}>
@@ -624,7 +643,8 @@ export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onExtend, s
       <div style={{background:C.goldBg,border:`1px solid ${C.gold}44`,borderRadius:6,padding:'10px 14px',marginBottom:18,color:C.gold,fontSize:13}}>
         This class is part of a recurring series. Save just this one, or update this and all future classes in the series.
       </div>
-      <FI label="CLASS NAME" value={f.name} onChange={s('name')} />
+      <FI label="TYPE" value={f.kind||'class'} onChange={s('kind')} opts={Object.entries(SESSION_KINDS).map(([v,m])=>({v,l:m.label}))} />
+      <FI label={(f.kind||'class')==='workshop' ? 'WORKSHOP NAME' : 'CLASS NAME'} value={f.name} onChange={s('name')} />
       <div style={{display:'flex',gap:12}}>
         <FI label="DATE" value={f.date} onChange={s('date')} type="date" half />
         <FI label="TIME (optional)" value={f.time} onChange={s('time')} type="time" half />
@@ -638,6 +658,19 @@ export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onExtend, s
         <FI label="RATE (£)" value={f.rate||''} onChange={s('rate')} type="number" half />
       </div>
       <FI label="PAYMENT MODEL" value={f.paymentModel||'per_person'} onChange={s('paymentModel')} opts={Object.entries(PAYMENT_MODELS).map(([v,m])=>({v,l:m.label}))} />
+      {(f.kind||'class') === 'workshop' && (
+        <div style={{marginTop:8,marginBottom:14,padding:'14px 16px',border:`1px solid ${KIND_META.workshop.color}55`,borderRadius:6,background:C.surf}}>
+          <div style={{color:KIND_META.workshop.color,fontSize:11,letterSpacing:'0.5px',marginBottom:10}}>WORKSHOP DETAILS (used by the Share button)</div>
+          <FI label="DESCRIPTION" value={f.publicBlurb ?? ''} onChange={s('publicBlurb')} rows={4} />
+          <div style={{display:'flex',gap:12}}>
+            <FI label="PRICE (as shown, e.g. £45)" value={f.priceLabel ?? ''} onChange={s('priceLabel')} half />
+            <FI label="BOOKING LINK (optional)" value={f.bookingUrl ?? ''} onChange={s('bookingUrl')} placeholder="https://…" half />
+          </div>
+          <div style={{color:C.muted,fontSize:11,marginTop:-4}}>
+            Leave the booking link blank if people book on thefeltbody.com via “Publish to website” below.
+          </div>
+        </div>
+      )}
       {(f.paymentModel||'per_person') === 'per_person' && (
         <div style={{marginTop:8,marginBottom:14,padding:'14px 16px',border:`1px solid ${C.border}`,borderRadius:6,background:C.surf}}>
           <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',color:f.isBookable?C.gold:C.text,fontSize:14}}>
@@ -647,7 +680,7 @@ export function EditSeriesClassForm({ cls, onSaveThis, onSaveFuture, onExtend, s
           {f.isBookable && (
             <div style={{marginTop:14}}>
               <FI label="CAPACITY PER CLASS (blank = uncapped)" value={f.capacity ?? ''} onChange={s('capacity')} type="number" />
-              <FI label="WEBSITE DESCRIPTION (optional)" value={f.publicBlurb ?? ''} onChange={s('publicBlurb')} />
+              {(f.kind||'class') !== 'workshop' && <FI label="WEBSITE DESCRIPTION (optional)" value={f.publicBlurb ?? ''} onChange={s('publicBlurb')} />}
               <FI label="JOINING LINK (Zoom / Meet / map — optional)" value={f.joinUrl ?? ''} onChange={s('joinUrl')} placeholder="https://…" />
               <FI label="JOINING NOTES (optional)" value={f.bookingInfo ?? ''} onChange={s('bookingInfo')} />
               <div style={{color:C.muted,fontSize:11,marginTop:2}}>

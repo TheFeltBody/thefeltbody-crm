@@ -531,6 +531,9 @@ export const classes = {
     if (patch.publicBlurb !== undefined) propagatePatch.public_blurb = patch.publicBlurb || null;
     if (patch.joinUrl !== undefined) propagatePatch.join_url = patch.joinUrl ? String(patch.joinUrl).trim() || null : null;
     if (patch.bookingInfo !== undefined) propagatePatch.booking_info = patch.bookingInfo ? String(patch.bookingInfo).trim() || null : null;
+    if (patch.kind !== undefined) propagatePatch.kind = patch.kind || 'class';
+    if (patch.bookingUrl !== undefined) propagatePatch.booking_url = patch.bookingUrl ? String(patch.bookingUrl).trim() || null : null;
+    if (patch.priceLabel !== undefined) propagatePatch.price_label = patch.priceLabel ? String(patch.priceLabel).trim() || null : null;
 
     // Guard: if a caller passes an empty or fully-undefined patch, Supabase would
     // run a no-op update across every future row in the series. Bail early.

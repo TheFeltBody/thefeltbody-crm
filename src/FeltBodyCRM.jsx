@@ -1141,6 +1141,7 @@ export default function FeltBodyCRM() {
           duration, rate: parseFloat(f.rate) || 0, paymentModel,
           isBookable: f.isBookable ?? false, capacity: f.capacity, publicBlurb: f.publicBlurb || '',
           joinUrl: f.joinUrl || '', bookingInfo: f.bookingInfo || '',
+          kind: f.kind || 'class', bookingUrl: f.bookingUrl || '', priceLabel: f.priceLabel || '',
         });
         setSeries(p => [...p, seriesRow]);
         const instances = generateSeriesClasses(seriesRow, parseInt(f.repeatCount) || 12);
@@ -1153,6 +1154,7 @@ export default function FeltBodyCRM() {
           rate: parseFloat(f.rate) || 0, paymentModel,
           isBookable: f.isBookable ?? false, capacity: f.capacity, publicBlurb: f.publicBlurb || '',
           joinUrl: f.joinUrl || '', bookingInfo: f.bookingInfo || '',
+          kind: f.kind || 'class', bookingUrl: f.bookingUrl || '', priceLabel: f.priceLabel || '',
         });
         setClasses(p => [...p, created]);
       }
@@ -1180,6 +1182,9 @@ export default function FeltBodyCRM() {
           publicBlurb: updated.publicBlurb || '',
           joinUrl: updated.joinUrl || '',
           bookingInfo: updated.bookingInfo || '',
+          kind: updated.kind || 'class',
+          bookingUrl: updated.bookingUrl || '',
+          priceLabel: updated.priceLabel || '',
         };
         const updatedRows = await data.classes.updateFutureInSeries(cls.seriesId, cls.date, patch);
         // Merge the patched fields back into local state for affected rows
@@ -1199,6 +1204,9 @@ export default function FeltBodyCRM() {
           publicBlurb: updated.publicBlurb || '',
           joinUrl: updated.joinUrl || '',
           bookingInfo: updated.bookingInfo || '',
+          kind: updated.kind || 'class',
+          bookingUrl: updated.bookingUrl || '',
+          priceLabel: updated.priceLabel || '',
         };
         const savedSeries = await data.series.update(cls.seriesId, seriesPatch);
         setSeries(p => p.map(s => s.id === cls.seriesId ? savedSeries : s));

@@ -172,6 +172,11 @@ export const seriesFromDb = (row) => ({
   publicBlurb: row.public_blurb || '',
   joinUrl: row.join_url || '',
   bookingInfo: row.booking_info || '',
+  // Workshop fields (kind + external booking link + public price text). Live on
+  // the series row too so a future workshop series inherits them.
+  kind: row.kind || 'class',
+  bookingUrl: row.booking_url || '',
+  priceLabel: row.price_label || '',
 });
 
 export const seriesToDb = (s) => ({
@@ -190,6 +195,9 @@ export const seriesToDb = (s) => ({
   public_blurb: s.publicBlurb ? String(s.publicBlurb).trim() || null : null,
   join_url: s.joinUrl ? String(s.joinUrl).trim() || null : null,
   booking_info: s.bookingInfo ? String(s.bookingInfo).trim() || null : null,
+  kind: s.kind || 'class',
+  booking_url: s.bookingUrl ? String(s.bookingUrl).trim() || null : null,
+  price_label: s.priceLabel ? String(s.priceLabel).trim() || null : null,
 });
 
 // ─── Sessions (UI: "classes") ────────────────────────────────────────────────
@@ -219,6 +227,9 @@ export const classFromDb = (row) => ({
   publicBlurb: row.public_blurb || '',
   joinUrl: row.join_url || '',
   bookingInfo: row.booking_info || '',
+  kind: row.kind || 'class',
+  bookingUrl: row.booking_url || '',
+  priceLabel: row.price_label || '',
 });
 
 export const classToDb = (c) => ({
@@ -241,6 +252,9 @@ export const classToDb = (c) => ({
   public_blurb: c.publicBlurb ? String(c.publicBlurb).trim() || null : null,
   join_url: c.joinUrl ? String(c.joinUrl).trim() || null : null,
   booking_info: c.bookingInfo ? String(c.bookingInfo).trim() || null : null,
+  kind: c.kind || 'class',
+  booking_url: c.bookingUrl ? String(c.bookingUrl).trim() || null : null,
+  price_label: c.priceLabel ? String(c.priceLabel).trim() || null : null,
 });
 
 // Partial-patch mapper: only translates keys that are actually present in `patch`.
@@ -273,6 +287,9 @@ export const classPatchToDb = (patch) => {
   if (patch.publicBlurb !== undefined) out.public_blurb = patch.publicBlurb || null;
   if (patch.joinUrl !== undefined) out.join_url = patch.joinUrl ? String(patch.joinUrl).trim() || null : null;
   if (patch.bookingInfo !== undefined) out.booking_info = patch.bookingInfo ? String(patch.bookingInfo).trim() || null : null;
+  if (patch.kind !== undefined) out.kind = patch.kind || 'class';
+  if (patch.bookingUrl !== undefined) out.booking_url = patch.bookingUrl ? String(patch.bookingUrl).trim() || null : null;
+  if (patch.priceLabel !== undefined) out.price_label = patch.priceLabel ? String(patch.priceLabel).trim() || null : null;
   return out;
 };
 
